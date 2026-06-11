@@ -1007,6 +1007,8 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/custom_drawable_layer_impl.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/custom_drawable_layer_impl.hpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/custom_drawable_layer.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/debug_cube_layer_host.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/debug_cube_layer_host.hpp
 )
 
 # Harfbuzz text shaping
