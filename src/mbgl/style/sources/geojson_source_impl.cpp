@@ -19,6 +19,7 @@
 #endif
 
 #include <cmath>
+#include <mutex>
 
 namespace mbgl {
 namespace style {
@@ -26,12 +27,18 @@ namespace style {
 class GeoJSONVTData final : public GeoJSONData {
     void getTile(const CanonicalTileID& id, const std::function<void(TileFeatures)>& fn, bool runSynchronously) final {
         assert(fn);
+        // GeoJSONVT::getTile generates tiles lazily (mutating its internal
+        // cache), so synchronous render-thread reads (model layer) and the
+        // worker-scheduled reads must serialize on the same lock — otherwise
+        // splitTile recursion races and corrupts the tile map.
         if (runSynchronously) {
+            const std::lock_guard<std::mutex> lock(*mutex);
             fn(this->impl->getTile(id.z, id.x, id.y).features);
         } else {
             sequencedScheduler->scheduleAndReplyValue(
                 util::SimpleIdentity::Empty,
-                [id, geoJSONVT_impl = this->impl]() -> TileFeatures {
+                [id, geoJSONVT_impl = this->impl, vtMutex = this->mutex]() -> TileFeatures {
+                    const std::lock_guard<std::mutex> lock(*vtMutex);
                     return geoJSONVT_impl->getTile(id.z, id.x, id.y).features;
                 },
                 fn);
@@ -53,7 +60,8 @@ class GeoJSONVTData final : public GeoJSONData {
         assert(sequencedScheduler);
     }
 
-    std::shared_ptr<mapbox::geojsonvt::GeoJSONVT> impl; // Accessed on worker thread.
+    std::shared_ptr<mapbox::geojsonvt::GeoJSONVT> impl; // Guarded by mutex.
+    std::shared_ptr<std::mutex> mutex = std::make_shared<std::mutex>();
     std::shared_ptr<Scheduler> sequencedScheduler;
 };
 
