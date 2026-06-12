@@ -110,11 +110,16 @@ BakedModel loadGlbMesh(const std::string& path) {
     // per-face lambert factor baked into the part color gives the flat-shaded
     // look of the source renders instead of fully-unlit flatness.
     std::map<std::pair<const cgltf_material*, int>, std::vector<RawTri>> byMaterial;
-    // Matches the style-spec default light (azimuthal 210°, polar 30°) so
-    // models and fill-extrusions shade from the same direction. World axes:
-    // x east, y south, z up; direction points toward the light.
-    constexpr float kSun[3] = {-0.25f, 0.433f, 0.866f};
-    constexpr float kAmbient = 0.62f;
+    // Matches HataHub's style light (azimuthal 210°, polar 45°, intensity
+    // 0.35) so models and fill-extrusions shade from the same direction.
+    // World axes: x east, y south, z up; direction points toward the light.
+    // Ambient floor mirrors the extrusion shader's anti-light wall floor
+    // (1 − intensity = 0.65). Caveat: the style light is viewport-anchored
+    // while this shading is baked in map space — under camera rotation the
+    // two drift apart; per-frame relighting would need vertex normals on the
+    // GPU (future shader work).
+    constexpr float kSun[3] = {-0.3536f, 0.6124f, 0.7071f};
+    constexpr float kAmbient = 0.65f;
     float minX = std::numeric_limits<float>::max(), maxX = std::numeric_limits<float>::lowest();
     float minY = minX, maxY = maxX, minZ = minX, maxZ = maxX;
 
