@@ -90,10 +90,14 @@ void writePPM(const char* path, const uint8_t* rgba) {
     std::fclose(f);
 }
 
-void writeRGBA(const char* path, const uint8_t* rgba) {
+void writeRGBA(const char* path, const uint8_t* rgba, bool flipRows) {
     FILE* f = std::fopen(path, "wb");
-    for (int32_t row = H - 1; row >= 0; --row) {
-        std::fwrite(rgba + row * W * 4, 1, W * 4, f);
+    if (flipRows) {
+        for (int32_t row = H - 1; row >= 0; --row) {
+            std::fwrite(rgba + row * W * 4, 1, W * 4, f);
+        }
+    } else {
+        std::fwrite(rgba, 1, W * H * 4, f);
     }
     std::fclose(f);
 }
@@ -194,7 +198,17 @@ int main(int argc, char** argv) {
                          mc.proj[8], mc.proj[9], mc.proj[10], mc.proj[11],
                          mc.proj[12], mc.proj[13], mc.proj[14], mc.proj[15]);
             const math::mat4 anchor = math::mat4::translation(math::double3{mc.centerX, mc.centerY, 0.0});
-            camera->setCustomProjection(P * anchor, 0.1, 100000.0);
+            // The map's world→clip transform has a negative determinant (its
+            // projected world is left-handed), which flips screen winding —
+            // Filament would cull front faces (it compensates mirrored model
+            // transforms but not custom projections). Pre-multiply a clip-space
+            // y-flip to restore right-handedness; the resulting upside-down
+            // framebuffer cancels against the GL-style bottom-up readback.
+            const math::mat4 clipFlipY(math::double4{1, 0, 0, 0},
+                                       math::double4{0, -1, 0, 0},
+                                       math::double4{0, 0, 1, 0},
+                                       math::double4{0, 0, 0, 1});
+            camera->setCustomProjection(clipFlipY * P * anchor, 0.1, 100000.0);
 
             // Model: glTF +Y-up meters → map frame (+z up, x/y world pixels, z meters).
             // sizeMeters tall, standing on the ground at the anchor.
@@ -246,7 +260,9 @@ int main(int argc, char** argv) {
     }
 
     if (outPath) {
-        writeRGBA(outPath, pixels.data());
+        // map-cam renders are already y-flipped by the clip-space flip, which
+        // cancels the GL-style bottom-up readback — no row flip needed.
+        writeRGBA(outPath, pixels.data(), /*flipRows=*/!mapCamPath);
         std::printf("done=%d wrote %s (raw RGBA %ux%u, top-down)\n", done, outPath, W, H);
     } else {
         const char* path = glbPath ? "/tmp/harness-duck.ppm" : "/tmp/harness-clear.ppm";
