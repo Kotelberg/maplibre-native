@@ -1136,27 +1136,41 @@ endif()
 # Optional Filament-backed model layer rendering (fork extension).
 # Consumes the pinned prebuilt Filament release; macOS arm64 only for now.
 option(MLN_WITH_FILAMENT_MODELS "Render model layers with Filament (prebuilt dist)" OFF)
-set(MLN_FILAMENT_DIST "$ENV{HOME}/Work/filament-dist/v1.71.6/filament" CACHE PATH "Filament prebuilt dist")
 
 if(MLN_WITH_FILAMENT_MODELS)
     target_compile_definitions(mbgl-core PRIVATE MLN_WITH_FILAMENT_MODELS=1)
-    target_include_directories(mbgl-core SYSTEM PRIVATE ${MLN_FILAMENT_DIST}/include)
 
     set(MLN_FILAMENT_LIBS
-        gltfio_core uberarchive uberzlib filament backend bluegl bluevk filabridge filaflat
+        gltfio_core uberarchive uberzlib filament backend filabridge filaflat
         filament-iblprefilter ibl image ktxreader basis_transcoder dracodec meshoptimizer
         mikktspace geometry filameshio shaders smol-v stb utils zstd abseil perfetto
     )
+
+    if(ANDROID)
+        set(MLN_FILAMENT_DIST "$ENV{HOME}/Work/filament-dist/v1.71.6-android/filament"
+            CACHE PATH "Filament prebuilt dist (android-native)")
+        set(_mln_filament_libdir ${MLN_FILAMENT_DIST}/lib/${ANDROID_ABI})
+        list(APPEND MLN_FILAMENT_LIBS bluevk)
+    else()
+        set(MLN_FILAMENT_DIST "$ENV{HOME}/Work/filament-dist/v1.71.6/filament"
+            CACHE PATH "Filament prebuilt dist (mac)")
+        set(_mln_filament_libdir ${MLN_FILAMENT_DIST}/lib/arm64)
+        list(APPEND MLN_FILAMENT_LIBS bluegl bluevk)
+    endif()
+
+    target_include_directories(mbgl-core SYSTEM PRIVATE ${MLN_FILAMENT_DIST}/include)
     foreach(L ${MLN_FILAMENT_LIBS})
-        target_link_libraries(mbgl-core PUBLIC ${MLN_FILAMENT_DIST}/lib/arm64/lib${L}.a)
+        target_link_libraries(mbgl-core PUBLIC ${_mln_filament_libdir}/lib${L}.a)
     endforeach()
 
-    target_link_libraries(mbgl-core PUBLIC
-        "-framework CoreVideo"
-        "-framework MetalKit"
-        "-framework QuartzCore"
-        "-framework Cocoa"
-    )
+    if(APPLE)
+        target_link_libraries(mbgl-core PUBLIC
+            "-framework CoreVideo"
+            "-framework MetalKit"
+            "-framework QuartzCore"
+            "-framework Cocoa"
+        )
+    endif()
 endif()
 
 target_link_libraries(

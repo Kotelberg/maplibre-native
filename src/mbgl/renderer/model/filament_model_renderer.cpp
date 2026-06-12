@@ -67,7 +67,11 @@ struct FilamentModelRenderer::Backend {
 
     bool initialize() {
         if (engine) return true;
+#if defined(__APPLE__)
         engine = fl::Engine::create(fl::backend::Backend::METAL);
+#else
+        engine = fl::Engine::create(fl::backend::Backend::OPENGL);
+#endif
         if (!engine) return false;
         renderer = engine->createRenderer();
         scene = engine->createScene();

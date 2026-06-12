@@ -77,7 +77,7 @@ android {
             dimension = "renderer"
             externalNativeBuild {
                 cmake {
-                    arguments("-DMLN_WITH_OPENGL=ON")
+                    arguments("-DMLN_WITH_OPENGL=ON", "-DMLN_WITH_FILAMENT_MODELS=ON")
                 }
             }
         }
