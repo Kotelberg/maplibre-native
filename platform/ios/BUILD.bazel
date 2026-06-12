@@ -141,6 +141,15 @@ apple_xcframework(
     name = "MapLibre.dynamic",
     bundle_id = "com.maplibre.mapbox",
     bundle_name = "MapLibre",
+    # Xcode 26.5 Metal.tbd does not export these constants that the vendored
+    # metal-cpp references in its global initializers; resolve them dynamically
+    # at load time instead of failing the link.
+    linkopts = [
+        "-U",
+        "_MTLTensorDomain",
+        "-U",
+        "_MTLIOErrorDomain",
+    ],
     data = glob([
         "resources/*.lproj/**",
         "resources/*.xcassets/**",

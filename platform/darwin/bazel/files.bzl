@@ -66,6 +66,7 @@ MLN_DARWIN_OBJC_HEADERS = [
     "src/MLNCoordinateFormatter.h",
     "src/MLNCustomStyleLayer.h",
     "src/MLNCustomDrawableStyleLayer.h",
+    "src/MLNModelStyleLayer.h",
     "src/MLNDefaultStyle.h",
     "src/MLNDisplayUtils.h",
     "src/MLNDistanceFormatter.h",
@@ -234,6 +235,8 @@ MLN_DARWIN_PUBLIC_OBJCPP_SOURCE = [
 MLN_DARWIN_PUBLIC_OBJCPP_CUSTOM_DRAWABLE_SOURCE = [
     "src/MLNCustomDrawableStyleLayer_Private.h",
     "src/MLNCustomDrawableStyleLayer.mm",
+    "src/MLNModelStyleLayer_Private.h",
+    "src/MLNModelStyleLayer.mm",
 ]
 MLN_DARWIN_PUBLIC_OBJC_SOURCE = [
     "src/MLNAttributedExpression.m",

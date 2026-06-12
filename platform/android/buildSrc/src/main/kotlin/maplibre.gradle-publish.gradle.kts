@@ -27,7 +27,10 @@ androidLibrary.publishing {
 afterEvaluate {
     mavenPublishing {
         publishToMavenCentral(true)
-        signAllPublications()
+        // hatahub fork: local AAR publishing has no signing keys
+        if (project.findProperty("hatahub.skipSigning") != "true") {
+            signAllPublications()
+        }
     }
 }
 

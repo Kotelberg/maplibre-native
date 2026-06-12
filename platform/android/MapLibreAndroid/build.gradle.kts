@@ -61,6 +61,11 @@ android {
     defaultConfig {
         compileSdk = 34
         minSdk = 23
+        // hatahub fork: arm64-only keeps the AAR build tractable locally; all
+        // QA devices and EAS builds are arm64.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
         buildConfigField("String", "GIT_REVISION_SHORT", "\"${getGitRevision()}\"")
         buildConfigField("String", "GIT_REVISION", "\"${getGitRevision(false)}\"")
         buildConfigField(
