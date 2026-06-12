@@ -44,7 +44,7 @@ private:
     const void* lastImpl = nullptr;
     const void* lastData = nullptr;
     std::size_t lastFeatureCount = 0;
-    CanonicalTileID lastTile{0, 0, 0};
+    std::uint64_t lastPlacementKey = 0;
     std::uint64_t lastCameraKey = 0;
 
     std::vector<util::SimpleIdentity> drawableIds;

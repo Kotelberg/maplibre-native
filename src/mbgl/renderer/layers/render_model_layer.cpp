@@ -12,8 +12,10 @@
 #include <mbgl/util/mat4.hpp>
 #include <mbgl/util/math.hpp>
 #include <mbgl/util/projection.hpp>
+#include <mbgl/util/tile_cover.hpp>
 
 #include <cmath>
+#include <unordered_set>
 
 namespace mbgl {
 
@@ -83,23 +85,56 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         return;
     }
 
-    // Fetch the tile containing the camera center at the current integer zoom:
-    // z0 int16 tile coordinates quantize to ~5 km cells, far too coarse for
-    // placement. M3a limitation: features outside the center tile (+buffer)
-    // are not placed — the real tile lifecycle lands in M5.
+    // M5 tile lifecycle: read features from every tile in the viewport cover
+    // at the current integer zoom (z0 int16 tile coordinates quantize to
+    // ~5 km cells, far too coarse for placement). Tile buffers repeat
+    // features near borders, so placements deduplicate on the quantized
+    // world-fraction anchor.
     const auto z = static_cast<uint8_t>(std::clamp(static_cast<int>(state.getZoom()), 0, 18));
     const double tiles = static_cast<double>(1u << z);
-    const double worldSizeNow = Projection::worldSize(state.getScale());
-    const Point<double> centerPx = Projection::project(state.getLatLng(), state.getScale());
-    const auto tx = static_cast<uint32_t>(
-        std::clamp(std::floor(centerPx.x / worldSizeNow * tiles), 0.0, tiles - 1));
-    const auto ty = static_cast<uint32_t>(
-        std::clamp(std::floor(centerPx.y / worldSizeNow * tiles), 0.0, tiles - 1));
-    const CanonicalTileID tileId{z, tx, ty};
 
-    GeoJSONData::TileFeatures features;
-    data->getTile(tileId, [&](GeoJSONData::TileFeatures f) { features = std::move(f); },
-                  /*runSynchronously=*/true);
+    auto cover = util::tileCover(util::TileCoverParameters{.transformState = state}, z, Range<uint8_t>{z, z});
+    // Backstop against degenerate covers (extreme pitch at low zoom).
+    constexpr std::size_t kMaxCoverTiles = 64;
+    if (cover.size() > kMaxCoverTiles) {
+        cover.erase(cover.begin() + kMaxCoverTiles, cover.end());
+    }
+
+    struct PlacedFeature {
+        mapbox::feature::feature<std::int16_t> feature;
+        double fx;
+        double fy;
+    };
+    std::vector<PlacedFeature> features;
+    std::unordered_set<std::uint64_t> seenAnchors;
+    std::uint64_t placementKey = 0;
+    for (const auto& coverTile : cover) {
+        const auto& canonical = coverTile.canonical;
+        GeoJSONData::TileFeatures tileFeatures;
+        data->getTile(canonical, [&](GeoJSONData::TileFeatures f) { tileFeatures = std::move(f); },
+                      /*runSynchronously=*/true);
+        for (auto& feature : tileFeatures) {
+            const auto* point = feature.geometry.match(
+                [](const mapbox::geometry::point<int16_t>& p) -> const mapbox::geometry::point<int16_t>* {
+                    return &p;
+                },
+                [](const auto&) -> const mapbox::geometry::point<int16_t>* { return nullptr; });
+            if (!point) {
+                continue;
+            }
+            // Tile coords in EXTENT units → mercator world fraction (zoom-free).
+            const double fx = (canonical.x + static_cast<double>(point->x) / util::EXTENT) / tiles;
+            const double fy = (canonical.y + static_cast<double>(point->y) / util::EXTENT) / tiles;
+            const auto qx = static_cast<std::uint64_t>(std::llround(fx * 4294967296.0)) & 0xFFFFFFFFull;
+            const auto qy = static_cast<std::uint64_t>(std::llround(fy * 4294967296.0)) & 0xFFFFFFFFull;
+            const std::uint64_t anchorKey = (qx << 32) | qy;
+            if (!seenAnchors.insert(anchorKey).second) {
+                continue;
+            }
+            placementKey ^= anchorKey * 0x9E3779B97F4A7C15ull;
+            features.push_back(PlacedFeature{std::move(feature), fx, fy});
+        }
+    }
 
     const auto& layerImplRef = impl(baseImpl);
 
@@ -115,10 +150,10 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         cameraKey |= 1; // distinguish "camera tracked" from the initial 0
     }
 
-    // Rebuild drawables only when the style impl, source data, tile, or
-    // (for Filament content) camera changed.
+    // Rebuild drawables only when the style impl, source data, placements,
+    // or (for Filament content) camera changed.
     const bool changed = lastImpl != baseImpl.get() || lastData != data.get() ||
-                         lastFeatureCount != features.size() || !(lastTile == tileId) ||
+                         lastFeatureCount != features.size() || lastPlacementKey != placementKey ||
                          lastCameraKey != cameraKey;
     if (!changed) {
         return;
@@ -126,7 +161,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     lastImpl = baseImpl.get();
     lastData = data.get();
     lastFeatureCount = features.size();
-    lastTile = tileId;
+    lastPlacementKey = placementKey;
     lastCameraKey = cameraKey;
 
     CustomDrawableLayerHost::Interface interface(
@@ -156,17 +191,10 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     std::vector<model::ModelInstanceSpec> filamentSpecs;
 #endif
 
-    for (const auto& feature : features) {
-        const auto* point = feature.geometry.match(
-            [](const mapbox::geometry::point<int16_t>& p) -> const mapbox::geometry::point<int16_t>* { return &p; },
-            [](const auto&) -> const mapbox::geometry::point<int16_t>* { return nullptr; });
-        if (!point) {
-            continue;
-        }
-
-        // Tile coords in EXTENT units → mercator world fraction (zoom-free).
-        const double fx = (tileId.x + static_cast<double>(point->x) / util::EXTENT) / tiles;
-        const double fy = (tileId.y + static_cast<double>(point->y) / util::EXTENT) / tiles;
+    for (const auto& placed : features) {
+        const auto& feature = placed.feature;
+        const double fx = placed.fx;
+        const double fy = placed.fy;
         const double lat = latitudeFromMercatorFraction(fy);
 
         const GeoJSONTileFeature tileFeature(feature);
