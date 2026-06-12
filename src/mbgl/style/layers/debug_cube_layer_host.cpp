@@ -113,7 +113,10 @@ void DebugCubeLayerHost::update(Interface& interface) {
 
             mat4 m = matrix::identity4();
             matrix::translate(m, m, center.x, center.y, 0.0);
-            matrix::scale(m, m, s, s, s);
+            // The map projection expects x/y in world pixels but z in METERS:
+            // Camera::getWorldToCamera post-multiplies the z column by
+            // pixelsPerMeter (src/mbgl/util/camera.cpp).
+            matrix::scale(m, m, s, s, size);
             matrix::multiply(currentOptions.matrix, params.transformParams.nearClippedProjMatrix, m);
         });
 

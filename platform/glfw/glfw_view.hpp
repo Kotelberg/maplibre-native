@@ -115,6 +115,7 @@ private:
     void popAnnotation();
 
     void toggleCustomDrawableStyle();
+    void toggleDebugCubeLayer();
     void makeSnapshot(bool withOverlay = false);
 
     mbgl::AnnotationIDs annotationIDs;

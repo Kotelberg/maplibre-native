@@ -31,6 +31,8 @@
 
 #if !defined(MBGL_LAYER_CUSTOM_DISABLE_ALL)
 #include "example_custom_drawable_style_layer.hpp"
+
+#include <mbgl/style/layers/debug_cube_layer_host.hpp>
 #endif
 
 #ifdef _MSC_VER
@@ -468,6 +470,9 @@ void GLFWView::onKey(GLFWwindow *window, int key, int /*scancode*/, int action, 
                 break;
             case GLFW_KEY_V:
                 view->toggleCustomDrawableStyle();
+                break;
+            case GLFW_KEY_F2:
+                view->toggleDebugCubeLayer();
                 break;
             case GLFW_KEY_B:
                 view->map->enableRenderingStatsView(!view->map->isRenderingStatsViewEnabled());
@@ -950,6 +955,21 @@ void GLFWView::toggleCustomDrawableStyle() {
         style.removeLayer(identifier);
     }
 
+#endif
+}
+
+void GLFWView::toggleDebugCubeLayer() {
+#if !defined(MBGL_LAYER_CUSTOM_DISABLE_ALL)
+    auto& style = map->getStyle();
+
+    const std::string identifier = "debug-cube";
+    if (!style.getLayer(identifier)) {
+        style.addLayer(std::make_unique<mbgl::style::CustomDrawableLayer>(
+            identifier,
+            std::make_unique<mbgl::style::DebugCubeLayerHost>(mbgl::LatLng{50.4501, 30.5234}, 50.0)));
+    } else {
+        style.removeLayer(identifier);
+    }
 #endif
 }
 
