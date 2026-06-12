@@ -189,6 +189,13 @@ int main(int argc, char* argv[]) {
             layer->setModelRotation(style::PropertyExpression<float>(dsl::number(dsl::get("bearing"))));
             layer->setModelScale(style::PropertyExpression<float>(dsl::number(dsl::get("size"))));
             layer->setModelOpacity(0.9f);
+            // M3b: register a GLB asset and select it. The MLN_MODEL_GLB env
+            // var points at a local GLB; features whose model-id resolves use
+            // Filament, others keep the placeholder cube.
+            if (const char* glb = getenv("MLN_MODEL_GLB")) {
+                layer->setModelAssets({{"demo", glb}});
+                layer->setModelId(std::string("demo"));
+            }
             map.getStyle().addLayer(std::move(layer));
         };
     }

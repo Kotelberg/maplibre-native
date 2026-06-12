@@ -101,9 +101,25 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     data->getTile(tileId, [&](GeoJSONData::TileFeatures f) { features = std::move(f); },
                   /*runSynchronously=*/true);
 
-    // Rebuild drawables only when the style impl, source data, or tile changed.
+    const auto& layerImplRef = impl(baseImpl);
+
+    // Camera key matters once Filament-rendered models exist (the offscreen
+    // image bakes the camera); quantized to avoid re-render churn.
+    std::uint64_t cameraKey = 0;
+    if (!layerImplRef.modelAssets.empty()) {
+        const auto q = [](double v) {
+            return static_cast<std::uint64_t>(static_cast<std::int64_t>(v * 256.0)) & 0xFFFF;
+        };
+        cameraKey = (q(state.getZoom()) << 48) ^ (q(state.getBearing()) << 32) ^ (q(state.getPitch()) << 16) ^
+                    q(state.getLatLng().latitude() * 64) ^ (q(state.getLatLng().longitude() * 64) << 8);
+        cameraKey |= 1; // distinguish "camera tracked" from the initial 0
+    }
+
+    // Rebuild drawables only when the style impl, source data, tile, or
+    // (for Filament content) camera changed.
     const bool changed = lastImpl != baseImpl.get() || lastData != data.get() ||
-                         lastFeatureCount != features.size() || !(lastTile == tileId);
+                         lastFeatureCount != features.size() || !(lastTile == tileId) ||
+                         lastCameraKey != cameraKey;
     if (!changed) {
         return;
     }
@@ -111,6 +127,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     lastData = data.get();
     lastFeatureCount = features.size();
     lastTile = tileId;
+    lastCameraKey = cameraKey;
 
     CustomDrawableLayerHost::Interface interface(
         *this, layerGroup, shaders, context, state, updateParameters, renderTree, changes);
@@ -124,13 +141,17 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         return;
     }
 
-    const auto& layerImpl = impl(baseImpl);
+    const auto& layerImpl = layerImplRef;
 
     // Shared cube mesh + face-color texture across all instances.
     const auto sharedVertices = std::make_shared<model::CubeVertexVector>();
     const auto sharedIndices = std::make_shared<model::CubeIndexVector>();
     model::buildPlaceholderCube(*sharedVertices, *sharedIndices);
     const auto texture = model::createFaceColorTexture(context);
+
+#if MLN_WITH_FILAMENT_MODELS
+    std::vector<model::ModelInstanceSpec> filamentSpecs;
+#endif
 
     for (const auto& feature : features) {
         const auto* point = feature.geometry.match(
@@ -151,8 +172,19 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         const float opacity = layerImpl.modelOpacity.isUndefined()
                                   ? 1.0f
                                   : (layerImpl.modelOpacity.isConstant() ? layerImpl.modelOpacity.asConstant() : 1.0f);
-        // model-id is parsed/evaluated to prove the seam; placeholder cubes ignore it.
-        (void)evaluateFor(layerImpl.modelId, tileFeature, std::string{});
+        const std::string modelId = evaluateFor(layerImpl.modelId, tileFeature, std::string{});
+
+#if MLN_WITH_FILAMENT_MODELS
+        // Features whose model-id resolves to a registered asset render via
+        // Filament; everything else falls back to the placeholder cube.
+        if (!modelId.empty() && layerImpl.modelAssets.count(modelId)) {
+            filamentSpecs.push_back(model::ModelInstanceSpec{
+                modelId, fx, fy, lat, sizeMeters, rotationDeg, opacity});
+            continue;
+        }
+#else
+        (void)modelId;
+#endif
 
         CustomDrawableLayerHost::Interface::GeometryOptions options;
         options.texture = texture;
@@ -177,6 +209,61 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
 
         drawableIds.push_back(interface.addGeometry(sharedVertices, sharedIndices, /*is3D=*/true));
     }
+
+#if MLN_WITH_FILAMENT_MODELS
+    if (!filamentSpecs.empty()) {
+        if (!filamentRenderer) {
+            filamentRenderer = std::make_unique<model::FilamentModelRenderer>();
+        }
+        filamentRenderer->setAssets(layerImpl.modelAssets);
+
+        const auto viewport = state.getSize();
+        mat4 proj;
+        // Same construction as PaintParameters::nearClippedProjMatrix
+        state.getProjMatrix(proj, static_cast<uint16_t>(0.1 * state.getCameraToCenterDistance()));
+        const Point<double> anchorPx = Projection::project(state.getLatLng(), state.getScale());
+
+        if (auto image = filamentRenderer->render(filamentSpecs,
+                                                  proj,
+                                                  anchorPx.x,
+                                                  anchorPx.y,
+                                                  Projection::worldSize(state.getScale()),
+                                                  state.getZoom(),
+                                                  viewport.width,
+                                                  viewport.height)) {
+            // Fullscreen NDC quad textured with the Filament output. Identity
+            // matrix in the tweaker → vertex positions pass through as clip
+            // coords. Image rows are top-down; NDC +y is up → v flipped.
+            auto overlayTexture = context.createTexture2D();
+            overlayTexture->setSamplerConfiguration({.filter = gfx::TextureFilterType::Linear,
+                                                     .wrapU = gfx::TextureWrapType::Clamp,
+                                                     .wrapV = gfx::TextureWrapType::Clamp});
+            overlayTexture->setImage(std::move(image));
+
+            using Vertex = CustomDrawableLayerHost::Interface::GeometryVertex;
+            auto quadVertices = std::make_shared<gfx::VertexVector<Vertex>>();
+            auto quadIndices = std::make_shared<gfx::IndexVector<gfx::Triangles>>();
+            quadVertices->emplace_back(Vertex{.position = {-1, -1, 0}, .texcoords = {0, 1}});
+            quadVertices->emplace_back(Vertex{.position = {1, -1, 0}, .texcoords = {1, 1}});
+            quadVertices->emplace_back(Vertex{.position = {1, 1, 0}, .texcoords = {1, 0}});
+            quadVertices->emplace_back(Vertex{.position = {-1, 1, 0}, .texcoords = {0, 0}});
+            quadIndices->emplace_back(0, 1, 2);
+            quadIndices->emplace_back(0, 2, 3);
+
+            CustomDrawableLayerHost::Interface::GeometryOptions overlayOptions;
+            overlayOptions.texture = std::move(overlayTexture);
+
+            interface.setGeometryOptions(overlayOptions);
+            interface.setGeometryTweakerCallback(
+                [](gfx::Drawable&,
+                   const PaintParameters&,
+                   CustomDrawableLayerHost::Interface::GeometryOptions& current) {
+                    current.matrix = matrix::identity4();
+                });
+            drawableIds.push_back(interface.addGeometry(quadVertices, quadIndices, /*is3D=*/false));
+        }
+    }
+#endif
 
     interface.finish();
 }

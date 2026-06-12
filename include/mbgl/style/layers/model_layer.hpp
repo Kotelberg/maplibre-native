@@ -3,6 +3,7 @@
 #include <mbgl/style/layer.hpp>
 #include <mbgl/style/property_value.hpp>
 
+#include <map>
 #include <string>
 
 namespace mbgl {
@@ -38,6 +39,10 @@ public:
     static PropertyValue<float> getDefaultModelOpacity();
     const PropertyValue<float>& getModelOpacity() const;
     void setModelOpacity(const PropertyValue<float>&);
+
+    // Model assets (registry-lite): model id → local GLB file path
+    const std::map<std::string, std::string>& getModelAssets() const;
+    void setModelAssets(std::map<std::string, std::string>);
 
     // Private implementation
     class Impl;

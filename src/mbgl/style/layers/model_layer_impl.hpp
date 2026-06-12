@@ -5,6 +5,9 @@
 #include <mbgl/style/layers/model_layer.hpp>
 #include <mbgl/style/property_value.hpp>
 
+#include <map>
+#include <string>
+
 namespace mbgl {
 namespace style {
 
@@ -19,6 +22,10 @@ public:
     PropertyValue<float> modelScale;
     PropertyValue<float> modelRotation;
     PropertyValue<float> modelOpacity;
+
+    /// Registry-lite (M3b): model id → local GLB file path. A style-wide
+    /// registry (style.addModel) is planned for the RN bindings milestone.
+    std::map<std::string, std::string> modelAssets;
 
     DECLARE_LAYER_TYPE_INFO;
 };

@@ -1012,6 +1012,8 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/src/mbgl/layermanager/model_layer_factory.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/layers/render_model_layer.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/layers/render_model_layer.hpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/filament_model_renderer.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/filament_model_renderer.hpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/placeholder_mesh.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/placeholder_mesh.hpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/model_layer.cpp
@@ -1129,6 +1131,32 @@ include(${PROJECT_SOURCE_DIR}/vendor/filesystem.cmake)
 
 if(MLN_USE_RUST)
 include(${PROJECT_SOURCE_DIR}/rustutils/rustutils.cmake)
+endif()
+
+# Optional Filament-backed model layer rendering (fork extension).
+# Consumes the pinned prebuilt Filament release; macOS arm64 only for now.
+option(MLN_WITH_FILAMENT_MODELS "Render model layers with Filament (prebuilt dist)" OFF)
+set(MLN_FILAMENT_DIST "$ENV{HOME}/Work/filament-dist/v1.71.6/filament" CACHE PATH "Filament prebuilt dist")
+
+if(MLN_WITH_FILAMENT_MODELS)
+    target_compile_definitions(mbgl-core PRIVATE MLN_WITH_FILAMENT_MODELS=1)
+    target_include_directories(mbgl-core SYSTEM PRIVATE ${MLN_FILAMENT_DIST}/include)
+
+    set(MLN_FILAMENT_LIBS
+        gltfio_core uberarchive uberzlib filament backend bluegl bluevk filabridge filaflat
+        filament-iblprefilter ibl image ktxreader basis_transcoder dracodec meshoptimizer
+        mikktspace geometry filameshio shaders smol-v stb utils zstd abseil perfetto
+    )
+    foreach(L ${MLN_FILAMENT_LIBS})
+        target_link_libraries(mbgl-core PUBLIC ${MLN_FILAMENT_DIST}/lib/arm64/lib${L}.a)
+    endforeach()
+
+    target_link_libraries(mbgl-core PUBLIC
+        "-framework CoreVideo"
+        "-framework MetalKit"
+        "-framework QuartzCore"
+        "-framework Cocoa"
+    )
 endif()
 
 target_link_libraries(

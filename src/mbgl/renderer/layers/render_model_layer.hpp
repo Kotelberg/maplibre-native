@@ -5,7 +5,13 @@
 #include <mbgl/tile/tile_id.hpp>
 #include <mbgl/util/identity.hpp>
 
+#include <cstdint>
+#include <memory>
 #include <vector>
+
+#if MLN_WITH_FILAMENT_MODELS
+#include <mbgl/renderer/model/filament_model_renderer.hpp>
+#endif
 
 namespace mbgl {
 
@@ -37,8 +43,13 @@ private:
     const void* lastData = nullptr;
     std::size_t lastFeatureCount = 0;
     CanonicalTileID lastTile{0, 0, 0};
+    std::uint64_t lastCameraKey = 0;
 
     std::vector<util::SimpleIdentity> drawableIds;
+
+#if MLN_WITH_FILAMENT_MODELS
+    std::unique_ptr<model::FilamentModelRenderer> filamentRenderer;
+#endif
 };
 
 } // namespace mbgl

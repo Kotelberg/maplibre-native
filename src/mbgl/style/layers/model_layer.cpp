@@ -122,6 +122,20 @@ void ModelLayer::setModelOpacity(const PropertyValue<float>& value) {
     observer->onLayerChanged(*this);
 }
 
+// Model assets (registry-lite)
+
+const std::map<std::string, std::string>& ModelLayer::getModelAssets() const {
+    return impl().modelAssets;
+}
+
+void ModelLayer::setModelAssets(std::map<std::string, std::string> assets) {
+    if (assets == getModelAssets()) return;
+    auto impl_ = mutableImpl();
+    impl_->modelAssets = std::move(assets);
+    baseImpl = std::move(impl_);
+    observer->onLayerChanged(*this);
+}
+
 using namespace conversion;
 
 std::optional<Error> ModelLayer::setPropertyInternal(const std::string& name, const Convertible& value) {
