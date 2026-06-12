@@ -976,6 +976,14 @@ MLN_DRAWABLES_SOURCE = [
     "src/mbgl/renderer/layers/render_custom_drawable_layer.hpp",
     "src/mbgl/style/layers/debug_cube_layer_host.cpp",
     "src/mbgl/style/layers/debug_cube_layer_host.hpp",
+    "src/mbgl/layermanager/model_layer_factory.cpp",
+    "src/mbgl/renderer/layers/render_model_layer.cpp",
+    "src/mbgl/renderer/layers/render_model_layer.hpp",
+    "src/mbgl/renderer/model/placeholder_mesh.cpp",
+    "src/mbgl/renderer/model/placeholder_mesh.hpp",
+    "src/mbgl/style/layers/model_layer.cpp",
+    "src/mbgl/style/layers/model_layer_impl.cpp",
+    "src/mbgl/style/layers/model_layer_impl.hpp",
 ]
 
 MLN_DRAWABLES_HEADERS = [

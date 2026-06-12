@@ -10,6 +10,7 @@
 #include <mbgl/layermanager/hillshade_layer_factory.hpp>
 #include <mbgl/layermanager/line_layer_factory.hpp>
 #include <mbgl/layermanager/location_indicator_layer_factory.hpp>
+#include <mbgl/layermanager/model_layer_factory.hpp>
 #include <mbgl/layermanager/raster_layer_factory.hpp>
 #include <mbgl/layermanager/symbol_layer_factory.hpp>
 #include <mbgl/util/logging.hpp>
@@ -86,6 +87,7 @@ LayerManagerDefault::LayerManagerDefault() {
 #endif
 #if !defined(MBGL_LAYER_LOCATION_INDICATOR_DISABLE_ALL)
     addLayerType(std::make_unique<LocationIndicatorLayerFactory>());
+    addLayerType(std::make_unique<ModelLayerFactory>());
 #endif
 #if !defined(MLN_LAYER_CUSTOM_DRAWABLE_DISABLE_ALL)
     addLayerType(std::make_unique<CustomDrawableLayerFactory>());
