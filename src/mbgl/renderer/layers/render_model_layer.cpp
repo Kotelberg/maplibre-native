@@ -149,6 +149,9 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     model::buildPlaceholderCube(*sharedVertices, *sharedIndices);
     const auto texture = model::createFaceColorTexture(context);
 
+    // GPU textures for baked-mesh parts, shared across features this rebuild
+    std::map<const PremultipliedImage*, gfx::Texture2DPtr> partTextures;
+
 #if MLN_WITH_FILAMENT_MODELS
     std::vector<model::ModelInstanceSpec> filamentSpecs;
 #endif
@@ -174,17 +177,65 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                                   : (layerImpl.modelOpacity.isConstant() ? layerImpl.modelOpacity.asConstant() : 1.0f);
         const std::string modelId = evaluateFor(layerImpl.modelId, tileFeature, std::string{});
 
-#if MLN_WITH_FILAMENT_MODELS
-        // Features whose model-id resolves to a registered asset render via
-        // Filament; everything else falls back to the placeholder cube.
         if (!modelId.empty() && layerImpl.modelAssets.count(modelId)) {
+            // Static-mesh path (default): GLB baked into map geometry — same
+            // tweaker-matrix mechanics as the cube, so placement is rigid
+            // under all camera motion and depth is per-pixel correct.
+            auto cacheIt = meshCache.find(modelId);
+            if (cacheIt == meshCache.end()) {
+                cacheIt = meshCache.emplace(modelId, model::loadGlbMesh(layerImpl.modelAssets.at(modelId))).first;
+            }
+            const auto& baked = cacheIt->second;
+            if (baked.valid) {
+                for (const auto& part : baked.parts) {
+                    CustomDrawableLayerHost::Interface::GeometryOptions partOptions;
+                    if (part.texture) {
+                        if (!partTextures.count(part.texture.get())) {
+                            auto tex = context.createTexture2D();
+                            tex->setSamplerConfiguration({.filter = gfx::TextureFilterType::Linear,
+                                                          .wrapU = gfx::TextureWrapType::Repeat,
+                                                          .wrapV = gfx::TextureWrapType::Repeat,
+                                                          .mipmapped = true});
+                            tex->setImage(part.texture);
+                            partTextures[part.texture.get()] = std::move(tex);
+                        }
+                        partOptions.texture = partTextures[part.texture.get()];
+                        partOptions.color.a = opacity;
+                    } else {
+                        partOptions.color = part.color;
+                        partOptions.color.a *= opacity;
+                    }
+
+                    interface.setGeometryOptions(partOptions);
+                    interface.setGeometryTweakerCallback(
+                        [fx, fy, lat, sizeMeters, rotationDeg](
+                            gfx::Drawable&,
+                            const PaintParameters& params,
+                            CustomDrawableLayerHost::Interface::GeometryOptions& current) {
+                            const double worldSize = Projection::worldSize(params.state.getScale());
+                            const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(
+                                lat, params.state.getZoom());
+                            const double s = sizeMeters / metersPerPixel;
+
+                            mat4 m = matrix::identity4();
+                            matrix::translate(m, m, fx * worldSize, fy * worldSize, 0.0);
+                            matrix::rotate_z(m, m, util::deg2rad(rotationDeg));
+                            matrix::scale(m, m, s, s, sizeMeters);
+                            matrix::multiply(
+                                current.matrix, params.transformParams.nearClippedProjMatrix, m);
+                        });
+                    drawableIds.push_back(interface.addGeometry(part.vertices, part.indices, /*is3D=*/true));
+                }
+                continue;
+            }
+#if MLN_WITH_FILAMENT_MODELS
+            // Fallback: Filament billboard composite (PBR lighting, but the
+            // image is camera-baked — wobbles under interaction).
             filamentSpecs.push_back(model::ModelInstanceSpec{
                 modelId, fx, fy, lat, sizeMeters, rotationDeg, opacity});
             continue;
-        }
-#else
-        (void)modelId;
 #endif
+        }
 
         CustomDrawableLayerHost::Interface::GeometryOptions options;
         options.texture = texture;

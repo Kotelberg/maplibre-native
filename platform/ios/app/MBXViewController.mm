@@ -20,6 +20,7 @@
 
 #import "DebugCubeStyleLayer.h"
 #import "ExampleCustomDrawableStyleLayer.h"
+#import "ModelDemoStyleLayer.h"
 
 #import <objc/runtime.h>
 #import "MBXFrameTimeGraphView.h"
@@ -2938,6 +2939,39 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
       self.mapView.styleURL = qaStyle;
     } else if (![self.mapView.style layerWithIdentifier:@"debug-cube"]) {
       [self addCustomDrawableLayer];
+    }
+  }
+
+  // M6 QA hook: `simctl launch ... --model-glb <path>` adds the experimental
+  // model layer with 3 demo points around Kyiv (Filament-rendered GLB).
+  NSArray<NSString *> *args = NSProcessInfo.processInfo.arguments;
+  NSUInteger glbIdx = [args indexOfObject:@"--model-glb"];
+  if (glbIdx != NSNotFound && glbIdx + 1 < args.count) {
+    NSURL *qaStyle = [NSURL URLWithString:@"https://map.hatahub.com.ua/style/light.json"];
+    if (![self.mapView.styleURL isEqual:qaStyle]) {
+      self.mapView.styleURL = qaStyle;
+    } else if (![self.mapView.style layerWithIdentifier:@"m6-models"]) {
+      NSString *geojson = @"{\"type\":\"FeatureCollection\",\"features\":["
+                           "{\"type\":\"Feature\",\"properties\":{\"bearing\":35,\"size\":60},"
+                           "\"geometry\":{\"type\":\"Point\",\"coordinates\":[30.58452,50.45702]}}]}";
+      NSData *data = [geojson dataUsingEncoding:NSUTF8StringEncoding];
+      MLNShape *shape = [MLNShape shapeWithData:data encoding:NSUTF8StringEncoding error:nil];
+      MLNShapeSource *source = [[MLNShapeSource alloc] initWithIdentifier:@"m6-points"
+                                                                    shape:shape
+                                                                  options:nil];
+      [self.mapView.style addSource:source];
+      ModelDemoStyleLayer *modelLayer =
+          [[ModelDemoStyleLayer alloc] initWithIdentifier:@"m6-models"
+                                                 sourceID:@"m6-points"
+                                                  glbPath:args[glbIdx + 1]];
+      [self.mapView.style addLayer:modelLayer];
+
+      MLNMapCamera *camera =
+          [MLNMapCamera cameraLookingAtCenterCoordinate:CLLocationCoordinate2DMake(50.45702, 30.58452)
+                                         acrossDistance:2200
+                                                  pitch:55
+                                                heading:20];
+      [self.mapView flyToCamera:camera withDuration:1 completionHandler:nil];
     }
   }
 }

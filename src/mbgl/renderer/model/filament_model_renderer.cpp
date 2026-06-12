@@ -99,11 +99,21 @@ struct FilamentModelRenderer::Backend {
         utils::Entity sun = utils::EntityManager::get().create();
         fl::LightManager::Builder(fl::LightManager::Type::DIRECTIONAL)
             .color({0.98f, 0.92f, 0.89f})
-            .intensity(110000.0f)
-            .direction(fl::math::float3{0.4f, 0.3f, -0.85f})
+            .intensity(120000.0f)
+            .direction(fl::math::float3{-0.45f, -0.35f, -0.8f})
             .castShadows(false)
             .build(*engine, sun);
         scene->addEntity(sun);
+
+        // Soft fill from the opposite side so back facades aren't pitch black
+        utils::Entity fill = utils::EntityManager::get().create();
+        fl::LightManager::Builder(fl::LightManager::Type::DIRECTIONAL)
+            .color({0.9f, 0.93f, 1.0f})
+            .intensity(40000.0f)
+            .direction(fl::math::float3{0.5f, 0.4f, -0.6f})
+            .castShadows(false)
+            .build(*engine, fill);
+        scene->addEntity(fill);
         return true;
     }
 

@@ -1014,6 +1014,8 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/layers/render_model_layer.hpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/filament_model_renderer.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/filament_model_renderer.hpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/glb_mesh_loader.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/glb_mesh_loader.hpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/placeholder_mesh.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/placeholder_mesh.hpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/model_layer.cpp

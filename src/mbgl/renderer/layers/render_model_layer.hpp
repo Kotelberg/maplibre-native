@@ -1,11 +1,13 @@
 #pragma once
 
+#include <mbgl/renderer/model/glb_mesh_loader.hpp>
 #include <mbgl/renderer/render_layer.hpp>
 #include <mbgl/style/layers/model_layer_impl.hpp>
 #include <mbgl/tile/tile_id.hpp>
 #include <mbgl/util/identity.hpp>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -46,6 +48,10 @@ private:
     std::uint64_t lastCameraKey = 0;
 
     std::vector<util::SimpleIdentity> drawableIds;
+
+    // Static-mesh path: GLBs baked into map geometry (rock-solid under camera
+    // motion, true per-pixel depth, unlit). Cached per model id.
+    std::map<std::string, model::BakedModel> meshCache;
 
 #if MLN_WITH_FILAMENT_MODELS
     std::unique_ptr<model::FilamentModelRenderer> filamentRenderer;
