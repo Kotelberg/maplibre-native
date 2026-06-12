@@ -32,6 +32,13 @@ target_link_libraries(
     PRIVATE mbgl-vendor-args mbgl-compiler-options mbgl-core
 )
 
+# For mbgl/style/layers/debug_cube_layer_host.hpp (--debug-cube flag), which
+# pulls core-internal headers like mbgl/map/transform_state.hpp
+target_include_directories(
+    mbgl-render
+    PRIVATE ${PROJECT_SOURCE_DIR}/src
+)
+
 if(WIN32)
     find_package(libuv REQUIRED)
 

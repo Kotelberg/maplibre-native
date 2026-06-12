@@ -7,6 +7,11 @@
 #include <mbgl/gfx/headless_frontend.hpp>
 #include <mbgl/style/style.hpp>
 
+#if !defined(MBGL_LAYER_CUSTOM_DISABLE_ALL)
+#include <mbgl/style/layers/custom_drawable_layer.hpp>
+#include <mbgl/style/layers/debug_cube_layer_host.hpp>
+#endif
+
 #include <args.hxx>
 
 #include <cstdlib>
@@ -26,6 +31,8 @@ int main(int argc, char* argv[]) {
         argumentParser, "file", "Directory to which asset:// URLs will resolve", {'a', "assets"});
 
     args::Flag debugFlag(argumentParser, "debug", "Debug mode", {"debug"});
+    args::Flag debugCubeFlag(
+        argumentParser, "debug-cube", "Add the M1 debug cube layer at the camera center (placement/depth check)", {"debug-cube"});
 
     args::ValueFlag<double> pixelRatioValue(argumentParser, "number", "Image scale factor", {'r', "ratio"});
 
@@ -104,10 +111,19 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    class RenderObserver : public MapObserver {
+    public:
+        std::function<void()> styleLoaded;
+        void onDidFinishLoadingStyle() final {
+            if (styleLoaded) styleLoaded();
+        }
+    };
+    RenderObserver observer;
+
     HeadlessFrontend frontend({width, height}, static_cast<float>(pixelRatio));
     Map map(
         frontend,
-        MapObserver::nullObserver(),
+        observer,
         MapOptions().withMapMode(mapMode).withSize(frontend.getSize()).withPixelRatio(static_cast<float>(pixelRatio)),
         ResourceOptions()
             .withCachePath(cache_file)
@@ -118,6 +134,17 @@ int main(int argc, char* argv[]) {
     if (style.find("://") == std::string::npos) {
         style = std::string("file://") + style;
     }
+
+#if !defined(MBGL_LAYER_CUSTOM_DISABLE_ALL)
+    if (debugCubeFlag) {
+        observer.styleLoaded = [&map, lat, lon] {
+            if (!map.getStyle().getLayer("debug-cube")) {
+                map.getStyle().addLayer(std::make_unique<style::CustomDrawableLayer>(
+                    "debug-cube", std::make_unique<style::DebugCubeLayerHost>(LatLng{lat, lon}, 50.0)));
+            }
+        };
+    }
+#endif
 
     map.getStyle().loadURL(style);
     std::vector<double> bounds = args::get(boundsValue);
