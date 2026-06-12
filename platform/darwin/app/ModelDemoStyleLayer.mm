@@ -27,6 +27,9 @@
   layer->setModelScale(mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("size"))));
   layer->setModelFootprint(
       mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("footprint"))));
+  // Models appear only at the 3D viewing zooms (matches HataHub's auto-pitch
+  // + fill-extrusion threshold).
+  layer->setMinZoom(15.0f);
   return self = [super initWithPendingLayer:std::move(layer)];
 }
 

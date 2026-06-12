@@ -201,6 +201,9 @@ int main(int argc, char* argv[]) {
             layer->setModelFootprint(
                 style::PropertyExpression<float>(dsl::number(dsl::get("footprint"))));
             layer->setModelOpacity(0.9f);
+            // Models appear only at the 3D viewing zooms (matches HataHub's
+            // auto-pitch + fill-extrusion threshold).
+            layer->setMinZoom(15.0f);
             // M3b: register a GLB asset and select it. The MLN_MODEL_GLB env
             // var points at a local GLB; features whose model-id resolves use
             // Filament, others keep the placeholder cube.

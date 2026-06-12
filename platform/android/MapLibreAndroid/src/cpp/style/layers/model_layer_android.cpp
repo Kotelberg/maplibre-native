@@ -23,6 +23,9 @@ std::unique_ptr<mbgl::style::ModelLayer> makeDemoLayer(jni::JNIEnv& env,
     layer->setModelScale(mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("size"))));
     // (missing property → expression error → evaluateFor's default 1.0)
     layer->setModelFootprint(mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("footprint"))));
+    // Models appear only at the 3D viewing zooms (matches HataHub's auto-pitch
+    // + fill-extrusion threshold).
+    layer->setMinZoom(15.0f);
     return layer;
 }
 
