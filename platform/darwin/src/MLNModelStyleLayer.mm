@@ -24,6 +24,11 @@
   layer->setModelScale(mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("size"))));
   layer->setModelFootprint(
       mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("footprint"))));
+  // Default: the rendered asset comes from each feature's `model-id` property,
+  // so one layer renders heterogeneous models. Setting `modelID` pins a single
+  // asset; setting it back to nil restores the per-feature behavior.
+  layer->setModelId(mbgl::style::PropertyExpression<std::string>(
+      dsl::toString(dsl::get("model-id"))));
   return self = [super initWithPendingLayer:std::move(layer)];
 }
 
@@ -48,11 +53,14 @@
 }
 
 - (void)setModelID:(NSString *)modelID {
+  namespace dsl = mbgl::style::expression::dsl;
   if (modelID) {
     self.rawModelLayer->setModelId(
         mbgl::style::PropertyValue<std::string>(std::string(modelID.UTF8String)));
   } else {
-    self.rawModelLayer->setModelId(mbgl::style::PropertyValue<std::string>());
+    // nil restores the per-feature default (feature property `model-id`).
+    self.rawModelLayer->setModelId(mbgl::style::PropertyExpression<std::string>(
+        dsl::toString(dsl::get("model-id"))));
   }
 }
 

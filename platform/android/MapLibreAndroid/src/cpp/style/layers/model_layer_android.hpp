@@ -8,9 +8,11 @@
 namespace mbgl {
 namespace android {
 
-// JNI peer for the experimental `model` style layer (M6). The convenience
-// constructor registers a single GLB under id "demo" and wires data-driven
-// model-rotation/model-scale from feature properties bearing/size.
+// JNI peer for the experimental `model` style layer (M6). The constructor
+// registers GLB assets (parallel id/path arrays) and wires data-driven
+// model-rotation/model-scale/model-footprint from feature properties
+// bearing/size/footprint. A null modelID renders each feature's `model-id`
+// property; a non-null one pins a single asset.
 class ModelLayerAndroid : public Layer {
 public:
     using SuperTag = Layer;
@@ -18,7 +20,12 @@ public:
 
     static void registerNative(jni::JNIEnv&);
 
-    ModelLayerAndroid(jni::JNIEnv&, const jni::String&, const jni::String&, const jni::String&);
+    ModelLayerAndroid(jni::JNIEnv&,
+                      const jni::String&,
+                      const jni::String&,
+                      const jni::Array<jni::String>&,
+                      const jni::Array<jni::String>&,
+                      const jni::String&);
     ModelLayerAndroid(mbgl::style::ModelLayer&);
     ModelLayerAndroid(std::unique_ptr<mbgl::style::ModelLayer>);
     ~ModelLayerAndroid();

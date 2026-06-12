@@ -10,15 +10,33 @@ namespace android {
 
 namespace {
 
-std::unique_ptr<mbgl::style::ModelLayer> makeDemoLayer(jni::JNIEnv& env,
-                                                       const jni::String& layerId,
-                                                       const jni::String& sourceId,
-                                                       const jni::String& glbPath) {
+std::unique_ptr<mbgl::style::ModelLayer> makeLayer(jni::JNIEnv& env,
+                                                   const jni::String& layerId,
+                                                   const jni::String& sourceId,
+                                                   const jni::Array<jni::String>& assetIds,
+                                                   const jni::Array<jni::String>& assetPaths,
+                                                   const jni::String& modelID) {
     namespace dsl = mbgl::style::expression::dsl;
     auto layer = std::make_unique<mbgl::style::ModelLayer>(jni::Make<std::string>(env, layerId),
                                                            jni::Make<std::string>(env, sourceId));
-    layer->setModelAssets({{"demo", jni::Make<std::string>(env, glbPath)}});
-    layer->setModelId(std::string("demo"));
+
+    std::map<std::string, std::string> assets;
+    const std::size_t count = std::min(assetIds.Length(env), assetPaths.Length(env));
+    for (std::size_t i = 0; i < count; ++i) {
+        assets.emplace(jni::Make<std::string>(env, assetIds.Get(env, i)),
+                       jni::Make<std::string>(env, assetPaths.Get(env, i)));
+    }
+    layer->setModelAssets(std::move(assets));
+
+    if (modelID) {
+        // Pin a single asset for all features.
+        layer->setModelId(jni::Make<std::string>(env, modelID));
+    } else {
+        // Per-feature: each feature's `model-id` property selects the asset.
+        layer->setModelId(
+            mbgl::style::PropertyExpression<std::string>(dsl::toString(dsl::get("model-id"))));
+    }
+
     layer->setModelRotation(mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("bearing"))));
     layer->setModelScale(mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("size"))));
     // (missing property → expression error → evaluateFor's default 1.0)
@@ -34,8 +52,10 @@ std::unique_ptr<mbgl::style::ModelLayer> makeDemoLayer(jni::JNIEnv& env,
 ModelLayerAndroid::ModelLayerAndroid(jni::JNIEnv& env,
                                      const jni::String& layerId,
                                      const jni::String& sourceId,
-                                     const jni::String& glbPath)
-    : Layer(makeDemoLayer(env, layerId, sourceId, glbPath)) {}
+                                     const jni::Array<jni::String>& assetIds,
+                                     const jni::Array<jni::String>& assetPaths,
+                                     const jni::String& modelID)
+    : Layer(makeLayer(env, layerId, sourceId, assetIds, assetPaths, modelID)) {}
 
 ModelLayerAndroid::ModelLayerAndroid(mbgl::style::ModelLayer& coreLayer)
     : Layer(coreLayer) {}
@@ -74,7 +94,12 @@ void ModelJavaLayerPeerFactory::registerNative(jni::JNIEnv& env) {
         env,
         javaClass,
         "nativePtr",
-        jni::MakePeer<ModelLayerAndroid, const jni::String&, const jni::String&, const jni::String&>,
+        jni::MakePeer<ModelLayerAndroid,
+                      const jni::String&,
+                      const jni::String&,
+                      const jni::Array<jni::String>&,
+                      const jni::Array<jni::String>&,
+                      const jni::String&>,
         "initialize",
         "finalize");
 }
