@@ -32,6 +32,12 @@ android {
 
         manifestPlaceholders["SENTRY_DSN"] = ""
         manifestPlaceholders["SENTRY_ENV"] = ""
+
+        // Local dev loop: arm64 only keeps the debug APK small (full ABI set
+        // with native debug symbols is ~1.4 GB)
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     nativeBuild(listOf("example-custom-layer"))
