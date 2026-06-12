@@ -7,15 +7,15 @@ import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.floatingactionbutton.FloatingActionButton
+import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
-import org.maplibre.android.style.layers.CustomLayer
+import org.maplibre.android.style.layers.DebugCubeLayer
 import org.maplibre.android.testapp.R
 import org.maplibre.android.testapp.model.customlayer.ExampleCustomLayer
-import org.maplibre.android.testapp.styles.TestStyles
 
 /**
  * Test activity showcasing the Custom Layer API
@@ -27,7 +27,7 @@ import org.maplibre.android.testapp.styles.TestStyles
 class CustomLayerActivity : AppCompatActivity() {
     private lateinit var maplibreMap: MapLibreMap
     private lateinit var mapView: MapView
-    private var customLayer: CustomLayer? = null
+    private var cubeLayer: DebugCubeLayer? = null
     private lateinit var fab: FloatingActionButton
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,13 +36,24 @@ class CustomLayerActivity : AppCompatActivity() {
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { map: MapLibreMap ->
             maplibreMap = map
+            // M1 debug cube QA: HataHub style (fill-extrusion buildings) at Kyiv center
             maplibreMap.moveCamera(
-                CameraUpdateFactory.newLatLngZoom(
-                    LatLng(39.91448, -243.60947),
-                    10.0
+                CameraUpdateFactory.newCameraPosition(
+                    CameraPosition.Builder()
+                        .target(LatLng(50.4501, 30.5234))
+                        .zoom(16.0)
+                        .tilt(55.0)
+                        .build()
                 )
             )
-            maplibreMap.setStyle(TestStyles.getPredefinedStyleWithFallback("Streets")) { _: Style? -> initFab() }
+            maplibreMap.setStyle(
+                Style.Builder().fromUri("https://map.hatahub.com.ua/style/light.json")
+            ) { _: Style? ->
+                initFab()
+                // M1 QA: add the debug cube immediately so headless adb QA
+                // does not depend on tapping the FAB.
+                swapCustomLayer()
+            }
         }
     }
 
@@ -58,16 +69,13 @@ class CustomLayerActivity : AppCompatActivity() {
 
     private fun swapCustomLayer() {
         val style = maplibreMap.style
-        if (customLayer != null) {
-            style!!.removeLayer(customLayer!!)
-            customLayer = null
+        if (cubeLayer != null) {
+            style!!.removeLayer(cubeLayer!!)
+            cubeLayer = null
             fab.setImageResource(R.drawable.ic_layers)
         } else {
-            customLayer = CustomLayer(
-                "custom",
-                ExampleCustomLayer.createContext()
-            )
-            style!!.addLayerBelow(customLayer!!, "building")
+            cubeLayer = DebugCubeLayer("debug-cube", 50.4501, 30.5234, 50.0)
+            style!!.addLayer(cubeLayer!!)
             fab.setImageResource(R.drawable.ic_layers_clear)
         }
     }

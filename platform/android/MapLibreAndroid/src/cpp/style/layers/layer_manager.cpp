@@ -9,6 +9,7 @@
 #include "background_layer.hpp"
 #include "circle_layer.hpp"
 #include "color_relief_layer.hpp"
+#include "custom_drawable_debug_layer.hpp"
 #include "custom_layer.hpp"
 #include "fill_extrusion_layer.hpp"
 #include "fill_layer.hpp"
@@ -79,6 +80,7 @@ LayerManagerAndroid::LayerManagerAndroid() {
     addLayerTypeCoreOnly(std::make_unique<CustomLayerFactory>());
 #elif !defined(MBGL_LAYER_CUSTOM_DISABLE_ALL)
     addLayerType(std::make_unique<CustomJavaLayerPeerFactory>());
+    addLayerType(std::make_unique<DebugCubeJavaLayerPeerFactory>());
 #endif
 #if !defined(MBGL_LAYER_LOCATION_INDICATOR_DISABLE_ALL)
     addLayerType(std::make_unique<LocationIndicatorJavaLayerPeerFactory>());
