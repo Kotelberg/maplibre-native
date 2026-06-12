@@ -65,6 +65,18 @@ ModelLayerAndroid::ModelLayerAndroid(std::unique_ptr<mbgl::style::ModelLayer> co
 
 ModelLayerAndroid::~ModelLayerAndroid() = default;
 
+void ModelLayerAndroid::setModelAssets(jni::JNIEnv& env,
+                                       const jni::Array<jni::String>& assetIds,
+                                       const jni::Array<jni::String>& assetPaths) {
+    std::map<std::string, std::string> assets;
+    const std::size_t count = std::min(assetIds.Length(env), assetPaths.Length(env));
+    for (std::size_t i = 0; i < count; ++i) {
+        assets.emplace(jni::Make<std::string>(env, assetIds.Get(env, i)),
+                       jni::Make<std::string>(env, assetPaths.Get(env, i)));
+    }
+    static_cast<mbgl::style::ModelLayer&>(get()).setModelAssets(std::move(assets));
+}
+
 namespace {
 jni::Local<jni::Object<Layer>> createJavaPeer(jni::JNIEnv& env, Layer* layer) {
     static auto& javaClass = jni::Class<ModelLayerAndroid>::Singleton(env);
@@ -90,6 +102,8 @@ jni::Local<jni::Object<Layer>> ModelJavaLayerPeerFactory::createJavaLayerPeer(
 void ModelJavaLayerPeerFactory::registerNative(jni::JNIEnv& env) {
     static auto& javaClass = jni::Class<ModelLayerAndroid>::Singleton(env);
 
+#define METHOD(MethodPtr, name) jni::MakeNativePeerMethod<decltype(MethodPtr), (MethodPtr)>(name)
+
     jni::RegisterNativePeer<ModelLayerAndroid>(
         env,
         javaClass,
@@ -101,7 +115,8 @@ void ModelJavaLayerPeerFactory::registerNative(jni::JNIEnv& env) {
                       const jni::Array<jni::String>&,
                       const jni::String&>,
         "initialize",
-        "finalize");
+        "finalize",
+        METHOD(&ModelLayerAndroid::setModelAssets, "nativeSetModelAssets"));
 }
 
 } // namespace android

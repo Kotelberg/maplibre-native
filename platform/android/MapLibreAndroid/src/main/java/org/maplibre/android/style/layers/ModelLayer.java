@@ -48,6 +48,15 @@ public class ModelLayer extends Layer {
     return values;
   }
 
+  /**
+   * Replace the asset registry on a live layer — new placements can reference
+   * models that were not known when the layer was created.
+   */
+  public void setModelAssets(@NonNull String[] assetIds, @NonNull String[] assetPaths) {
+    checkThread();
+    nativeSetModelAssets(assetIds, assetPaths);
+  }
+
   @Keep
   ModelLayer(long nativePtr) {
     super(nativePtr);
@@ -56,6 +65,9 @@ public class ModelLayer extends Layer {
   @Keep
   protected native void initialize(
       String id, String sourceId, String[] assetIds, String[] assetPaths, String modelID);
+
+  @Keep
+  private native void nativeSetModelAssets(String[] assetIds, String[] assetPaths);
 
   @Override
   @Keep

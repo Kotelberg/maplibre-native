@@ -30,6 +30,9 @@ public:
     ModelLayerAndroid(std::unique_ptr<mbgl::style::ModelLayer>);
     ~ModelLayerAndroid();
 
+    /** Replace the asset registry on a live layer. */
+    void setModelAssets(jni::JNIEnv&, const jni::Array<jni::String>&, const jni::Array<jni::String>&);
+
     jni::Local<jni::Object<Layer>> createJavaPeer(jni::JNIEnv&);
 };
 
