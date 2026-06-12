@@ -979,8 +979,6 @@ MLN_DRAWABLES_SOURCE = [
     "src/mbgl/layermanager/model_layer_factory.cpp",
     "src/mbgl/renderer/layers/render_model_layer.cpp",
     "src/mbgl/renderer/layers/render_model_layer.hpp",
-    "src/mbgl/renderer/model/filament_model_renderer.cpp",
-    "src/mbgl/renderer/model/filament_model_renderer.hpp",
     "src/mbgl/renderer/model/glb_mesh_loader.cpp",
     "src/mbgl/renderer/model/glb_mesh_loader.hpp",
     "src/mbgl/renderer/model/cgltf.h",

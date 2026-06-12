@@ -15,27 +15,6 @@ bazel_dep(name = "rules_swift_package_manager", version = "1.3.0")
 bazel_dep(name = "googletest", version = "1.17.0.bcr.2")
 
 # Fork extension: prebuilt Filament for the model layer (iOS simulator slice)
-new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
-
-new_local_repository(
-    name = "filament_ios",
-    build_file_content = """
-cc_library(
-    name = "headers",
-    hdrs = glob(["filament/include/**"]),
-    includes = ["filament/include"],
-    visibility = ["//visibility:public"],
-)
-
-cc_import(
-    name = "libs",
-    static_library = "merged-sim/libfilament_all.a",
-    visibility = ["//visibility:public"],
-)
-""",
-    path = "/Users/berg/Work/filament-dist/v1.71.6-ios",
-)
-
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node", dev_dependency = True)
 node.toolchain(node_version = "20.14.0")
 

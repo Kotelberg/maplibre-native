@@ -11,16 +11,13 @@
 #include <memory>
 #include <vector>
 
-#if MLN_WITH_FILAMENT_MODELS
-#include <mbgl/renderer/model/filament_model_renderer.hpp>
-#endif
-
 namespace mbgl {
 
-/// M3a render layer for `type: "model"`: reads Point features synchronously
-/// from the layer's GeoJSON source (z0 tile = whole dataset) and renders one
-/// placeholder cube per feature through the custom-drawable geometry path.
-/// Filament-backed glTF visuals replace the cubes in M3b.
+/// Render layer for `type: "model"` (fork extension): reads Point features
+/// from the viewport tile cover of the layer's GeoJSON source and renders
+/// each feature's glTF model through the custom-drawable geometry path
+/// (meshes baked into map space — rigid under camera motion, per-pixel
+/// depth). Features without a resolvable model render a placeholder cube.
 class RenderModelLayer final : public RenderLayer {
 public:
     explicit RenderModelLayer(Immutable<style::ModelLayer::Impl>);
@@ -45,17 +42,11 @@ private:
     const void* lastData = nullptr;
     std::size_t lastFeatureCount = 0;
     std::uint64_t lastPlacementKey = 0;
-    std::uint64_t lastCameraKey = 0;
 
     std::vector<util::SimpleIdentity> drawableIds;
 
-    // Static-mesh path: GLBs baked into map geometry (rock-solid under camera
-    // motion, true per-pixel depth, unlit). Cached per model id.
+    // GLBs baked into map geometry, cached per model id.
     std::map<std::string, model::BakedModel> meshCache;
-
-#if MLN_WITH_FILAMENT_MODELS
-    std::unique_ptr<model::FilamentModelRenderer> filamentRenderer;
-#endif
 };
 
 } // namespace mbgl

@@ -116,11 +116,6 @@ cc_library(
         ],
         "//conditions:default": [],
     }) + select({
-        ":filament_models_enabled": [
-            "MLN_WITH_FILAMENT_MODELS=1",
-        ],
-        "//conditions:default": [],
-    }) + select({
         "//:harfbuzz_text_shaping": ["MLN_TEXT_SHAPING_HARFBUZZ=1"],
         "//conditions:default": [],
     }),
@@ -172,12 +167,6 @@ cc_library(
         ],
         "@platforms//os:linux": [
             "//vendor:sqlite",
-        ],
-        "//conditions:default": [],
-    }) + select({
-        ":filament_models_enabled": [
-            "@filament_ios//:headers",
-            "@filament_ios//:libs",
         ],
         "//conditions:default": [],
     }) + select({
@@ -256,19 +245,6 @@ config_setting(
     name = "legacy_text_shaping",
     flag_values = {
         ":shaping": "legacy",
-    },
-)
-
-bool_flag(
-    name = "filament_models",
-    build_setting_default = False,
-    visibility = ["//visibility:public"],
-)
-
-config_setting(
-    name = "filament_models_enabled",
-    flag_values = {
-        ":filament_models": "true",
     },
 )
 

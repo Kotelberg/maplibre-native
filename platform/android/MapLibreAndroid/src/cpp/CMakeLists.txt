@@ -10,10 +10,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 target_compile_options(mbgl-compiler-options INTERFACE -frtti)
 
-if(MLN_WITH_FILAMENT_MODELS)
-    add_compile_definitions(MLN_WITH_FILAMENT_MODELS=1)
-endif()
-
 add_library(maplibre SHARED
             ${PROJECT_SOURCE_DIR}/main.cpp
             ${PROJECT_SOURCE_DIR}/jni_native.cpp

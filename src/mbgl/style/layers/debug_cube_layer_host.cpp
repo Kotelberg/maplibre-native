@@ -122,7 +122,7 @@ void DebugCubeLayerHost::update(Interface& interface) {
             matrix::multiply(currentOptions.matrix, params.transformParams.nearClippedProjMatrix, m);
 
             // M2: hand the map camera to the external Filament harness
-            // (misc/filament-harness) for camera-sync experiments.
+            // for camera-sync experiments (the Filament harness era).
             if (const char* dumpPath = std::getenv("MLN_DEBUG_CUBE_DUMP")) {
                 static bool dumped = false;
                 if (!dumped) {
