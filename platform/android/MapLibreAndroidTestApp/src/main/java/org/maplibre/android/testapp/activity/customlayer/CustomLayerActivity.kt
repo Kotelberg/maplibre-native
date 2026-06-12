@@ -14,6 +14,7 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.DebugCubeLayer
+import org.maplibre.android.style.layers.ModelLayer
 import org.maplibre.android.testapp.R
 import org.maplibre.android.testapp.model.customlayer.ExampleCustomLayer
 
@@ -48,11 +49,26 @@ class CustomLayerActivity : AppCompatActivity() {
             )
             maplibreMap.setStyle(
                 Style.Builder().fromUri("https://map.hatahub.com.ua/style/light.json")
-            ) { _: Style? ->
+            ) { style: Style ->
                 initFab()
-                // M1 QA: add the debug cube immediately so headless adb QA
-                // does not depend on tapping the FAB.
-                swapCustomLayer()
+                // M6 QA: if a GLB was pushed to the device, add a model layer
+                // with 3 demo points (data-driven bearing/size). Falls back to
+                // the M1 debug cube toggle otherwise.
+                val glb = java.io.File("/data/local/tmp/Duck.glb")
+                if (glb.canRead()) {
+                    val geojson = """{"type":"FeatureCollection","features":[
+{"type":"Feature","properties":{"bearing":0,"size":15},"geometry":{"type":"Point","coordinates":[30.5224,50.4505]}},
+{"type":"Feature","properties":{"bearing":45,"size":30},"geometry":{"type":"Point","coordinates":[30.5234,50.4495]}},
+{"type":"Feature","properties":{"bearing":120,"size":50},"geometry":{"type":"Point","coordinates":[30.5246,50.4509]}}]}"""
+                    style.addSource(
+                        org.maplibre.android.style.sources.GeoJsonSource("m6-points", geojson)
+                    )
+                    style.addLayer(ModelLayer("m6-models", "m6-points", glb.absolutePath))
+                } else {
+                    // M1 QA: add the debug cube immediately so headless adb QA
+                    // does not depend on tapping the FAB.
+                    swapCustomLayer()
+                }
             }
         }
     }

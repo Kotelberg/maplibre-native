@@ -10,6 +10,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 target_compile_options(mbgl-compiler-options INTERFACE -frtti)
 
+if(MLN_WITH_FILAMENT_MODELS)
+    add_compile_definitions(MLN_WITH_FILAMENT_MODELS=1)
+endif()
+
 add_library(maplibre SHARED
             ${PROJECT_SOURCE_DIR}/main.cpp
             ${PROJECT_SOURCE_DIR}/jni_native.cpp
@@ -151,6 +155,8 @@ add_library(maplibre SHARED
             ${PROJECT_SOURCE_DIR}/style/layers/color_relief_layer.hpp
             ${PROJECT_SOURCE_DIR}/style/layers/custom_drawable_debug_layer.cpp
             ${PROJECT_SOURCE_DIR}/style/layers/custom_drawable_debug_layer.hpp
+            ${PROJECT_SOURCE_DIR}/style/layers/model_layer_android.cpp
+            ${PROJECT_SOURCE_DIR}/style/layers/model_layer_android.hpp
             ${PROJECT_SOURCE_DIR}/style/layers/custom_layer.cpp
             ${PROJECT_SOURCE_DIR}/style/layers/custom_layer.hpp
             ${PROJECT_SOURCE_DIR}/style/layers/fill_extrusion_layer.cpp
