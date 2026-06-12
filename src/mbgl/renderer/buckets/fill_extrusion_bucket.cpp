@@ -39,6 +39,121 @@ using namespace style;
 
 struct GeometryTooLongException : std::exception {};
 
+namespace {
+
+// Fork extension: rounded footprint corners (the plan-view half of Mapbox's
+// fill-extrusion-edge-radius). Sharp building corners are replaced by short
+// arcs, softening silhouettes and wall shading. The radius is configured in
+// meters (fork-wide constant, MLN_FILL_EXTRUSION_EDGE_RADIUS overrides, 0
+// disables) and converted to tile units per canonical zoom. The vertical top
+// bevel needs shader-side height interaction and lands separately.
+double edgeRadiusMeters() {
+    static const double value = [] {
+        if (const char* env = std::getenv("MLN_FILL_EXTRUSION_EDGE_RADIUS")) {
+            return std::atof(env);
+        }
+        return 2.0;
+    }();
+    return value;
+}
+
+constexpr double kEarthCircumference = 40075016.686;
+
+GeometryCoordinates roundRingCorners(const GeometryCoordinates& ring, double radiusUnits) {
+    // Rings arrive closed (first == last); operate on the open form.
+    std::size_t n = ring.size();
+    if (n >= 2 && ring.front() == ring.back()) {
+        n -= 1;
+    }
+    if (n < 4) {
+        // Triangles keep their sharpness — rounding degenerates them.
+        return ring;
+    }
+
+    GeometryCoordinates out;
+    out.reserve(n * 3 + 1);
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& prev = ring[(i + n - 1) % n];
+        const auto& curr = ring[i];
+        const auto& next = ring[(i + 1) % n];
+
+        const Point<double> a = convertPoint<double>(prev);
+        const Point<double> b = convertPoint<double>(curr);
+        const Point<double> c = convertPoint<double>(next);
+
+        const Point<double> inVec = b - a;
+        const Point<double> outVec = c - b;
+        const double inLen = std::sqrt(inVec.x * inVec.x + inVec.y * inVec.y);
+        const double outLen = std::sqrt(outVec.x * outVec.x + outVec.y * outVec.y);
+        if (inLen < 1e-6 || outLen < 1e-6) {
+            out.emplace_back(curr);
+            continue;
+        }
+
+        // Skip near-straight corners: rounding them only adds vertices.
+        const double cross = inVec.x * outVec.y - inVec.y * outVec.x;
+        const double dot = inVec.x * outVec.x + inVec.y * outVec.y;
+        const double turn = std::abs(std::atan2(cross, dot));
+        if (turn < 0.20) {
+            out.emplace_back(curr);
+            continue;
+        }
+
+        // Clamp the cut so adjacent corners never overlap.
+        const double cut = std::min({radiusUnits, inLen * 0.5 - 0.5, outLen * 0.5 - 0.5});
+        if (cut < 1.0) {
+            out.emplace_back(curr);
+            continue;
+        }
+
+        const Point<double> inDir{inVec.x / inLen, inVec.y / inLen};
+        const Point<double> outDir{outVec.x / outLen, outVec.y / outLen};
+        const Point<double> start = b - inDir * cut;
+        const Point<double> end = b + outDir * cut;
+        // Quadratic bezier (control point = the original corner) sampled at
+        // t = 1/3 and 2/3: enough segments to read round at building scale
+        // without exploding vertex counts.
+        const Point<double> mid1 = start * (4.0 / 9.0) + b * (4.0 / 9.0) + end * (1.0 / 9.0);
+        const Point<double> mid2 = start * (1.0 / 9.0) + b * (4.0 / 9.0) + end * (4.0 / 9.0);
+
+        const auto push = [&](const Point<double>& p) {
+            out.emplace_back(static_cast<int16_t>(std::lround(p.x)), static_cast<int16_t>(std::lround(p.y)));
+        };
+        push(start);
+        push(mid1);
+        push(mid2);
+        push(end);
+    }
+    if (out.size() < 3) {
+        return ring;
+    }
+    // Restore closure to match the input convention.
+    if (ring.front() == ring.back()) {
+        out.emplace_back(out.front());
+    }
+    return out;
+}
+
+void roundPolygonCorners(GeometryCollection& polygon, const CanonicalTileID& canonical) {
+    const double radiusM = edgeRadiusMeters();
+    if (radiusM <= 0.0) {
+        return;
+    }
+    // Tile units per meter at this canonical zoom (equator approximation is
+    // fine for a visual radius).
+    const double tileMeters = kEarthCircumference / (1u << canonical.z);
+    const double radiusUnits = radiusM * (static_cast<double>(util::EXTENT) / tileMeters);
+    if (radiusUnits < 1.5) {
+        // Below ~1.5 units the arc collapses to the original corner.
+        return;
+    }
+    for (auto& ring : polygon) {
+        ring = roundRingCorners(ring, radiusUnits);
+    }
+}
+
+} // namespace
+
 FillExtrusionBucket::FillExtrusionBucket(
     const FillExtrusionBucket::PossiblyEvaluatedLayoutProperties&,
     const std::map<std::string, Immutable<style::LayerProperties>>& layerPaintProperties,
@@ -65,6 +180,8 @@ void FillExtrusionBucket::addFeature(const GeometryTileFeature& feature,
     for (auto& polygon : classifyRings(geometry)) {
         // Optimize polygons with many interior rings for earcut tesselation.
         limitHoles(polygon, 500);
+
+        roundPolygonCorners(polygon, canonical);
 
         std::size_t totalVertices = 0;
 
