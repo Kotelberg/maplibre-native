@@ -110,7 +110,10 @@ BakedModel loadGlbMesh(const std::string& path) {
     // per-face lambert factor baked into the part color gives the flat-shaded
     // look of the source renders instead of fully-unlit flatness.
     std::map<std::pair<const cgltf_material*, int>, std::vector<RawTri>> byMaterial;
-    constexpr float kSun[3] = {-0.42f, 0.33f, 0.84f}; // normalized-ish, z-up
+    // Matches the style-spec default light (azimuthal 210°, polar 30°) so
+    // models and fill-extrusions shade from the same direction. World axes:
+    // x east, y south, z up; direction points toward the light.
+    constexpr float kSun[3] = {-0.25f, 0.433f, 0.866f};
     constexpr float kAmbient = 0.62f;
     float minX = std::numeric_limits<float>::max(), maxX = std::numeric_limits<float>::lowest();
     float minY = minX, maxY = maxX, minZ = minX, maxZ = maxX;

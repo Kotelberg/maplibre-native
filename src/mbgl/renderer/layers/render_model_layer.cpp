@@ -45,6 +45,32 @@ inline double latitudeFromMercatorFraction(double y) {
     return util::rad2deg(2.0 * std::atan(std::exp(M_PI * (1.0 - 2.0 * y))) - M_PI_2);
 }
 
+// Soft radial contact shadow rendered under every model instance: grounds
+// the object without a shadow-mapping pass.
+std::shared_ptr<PremultipliedImage> makeContactShadowImage() {
+    constexpr uint32_t kSize = 64;
+    auto image = std::make_shared<PremultipliedImage>(Size{kSize, kSize});
+    std::memset(image->data.get(), 0, image->bytes());
+    for (uint32_t y = 0; y < kSize; ++y) {
+        for (uint32_t x = 0; x < kSize; ++x) {
+            const double dx = (static_cast<double>(x) + 0.5) / kSize * 2.0 - 1.0;
+            const double dy = (static_cast<double>(y) + 0.5) / kSize * 2.0 - 1.0;
+            const double r = std::sqrt(dx * dx + dy * dy);
+            const double falloff = std::max(0.0, 1.0 - r);
+            const auto alpha = static_cast<uint8_t>(std::lround(falloff * falloff * 0.38 * 255.0));
+            // Premultiplied black: rgb stay 0.
+            image->data[(y * kSize + x) * 4 + 3] = alpha;
+        }
+    }
+    return image;
+}
+
+// Models fade in across the first ~0.7 zoom past the layer minzoom instead of
+// popping (the same window where fill-extrusion heights grow).
+inline float zoomFade(double zoom) {
+    return static_cast<float>(std::clamp((zoom - 15.0) / 0.7, 0.0, 1.0));
+}
+
 } // namespace
 
 RenderModelLayer::RenderModelLayer(Immutable<style::ModelLayer::Impl> _impl)
@@ -99,6 +125,20 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     if (cover.size() > kMaxCoverTiles) {
         cover.erase(cover.begin() + kMaxCoverTiles, cover.end());
     }
+
+    // Per-frame early-out: with an unchanged cover, source, and style, the
+    // placements cannot have changed — skip the feature walk entirely (it is
+    // far too expensive to run per frame at thousands of features).
+    std::uint64_t coverSig = 1469598103934665603ull;
+    for (const auto& coverTile : cover) {
+        const auto& c = coverTile.canonical;
+        coverSig = (coverSig ^ ((std::uint64_t(c.z) << 58) ^ (std::uint64_t(c.x) << 29) ^ std::uint64_t(c.y))) *
+                   1099511628211ull;
+    }
+    if (coverSig == lastCoverSig && lastData == data.get() && lastImpl == baseImpl.get()) {
+        return;
+    }
+    lastCoverSig = coverSig;
 
     struct PlacedFeature {
         mapbox::feature::feature<std::int16_t> feature;
@@ -174,77 +214,237 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     // GPU textures for baked-mesh parts, shared across features this rebuild
     std::map<const PremultipliedImage*, gfx::Texture2DPtr> partTextures;
 
+    const float layerOpacity = layerImpl.modelOpacity.isUndefined()
+                                   ? 1.0f
+                                   : (layerImpl.modelOpacity.isConstant() ? layerImpl.modelOpacity.asConstant()
+                                                                          : 1.0f);
+
+    // Group instances by model so each (model, part) bakes into a handful of
+    // merged drawables instead of one per feature — at thousands of features
+    // (procedural trees) per-feature drawables collapse the frame rate.
+    struct Instance {
+        double fx;
+        double fy;
+        float size;
+        float rotationDeg;
+        float footprint;
+    };
+    std::map<std::string, std::vector<Instance>> groups;
+    std::vector<Instance> cubes;
+
     for (const auto& placed : features) {
-        const auto& feature = placed.feature;
-        const double fx = placed.fx;
-        const double fy = placed.fy;
-        const double lat = latitudeFromMercatorFraction(fy);
-
-        const GeoJSONTileFeature tileFeature(feature);
-        const float sizeMeters = evaluateFor(layerImpl.modelScale, tileFeature, 20.0f);
-        const float rotationDeg = evaluateFor(layerImpl.modelRotation, tileFeature, 0.0f);
-        const float opacity = layerImpl.modelOpacity.isUndefined()
-                                  ? 1.0f
-                                  : (layerImpl.modelOpacity.isConstant() ? layerImpl.modelOpacity.asConstant() : 1.0f);
-        const float footprint = evaluateFor(layerImpl.modelFootprint, tileFeature, 1.0f);
+        const GeoJSONTileFeature tileFeature(placed.feature);
+        Instance instance{placed.fx,
+                          placed.fy,
+                          evaluateFor(layerImpl.modelScale, tileFeature, 20.0f),
+                          evaluateFor(layerImpl.modelRotation, tileFeature, 0.0f),
+                          evaluateFor(layerImpl.modelFootprint, tileFeature, 1.0f)};
         const std::string modelId = evaluateFor(layerImpl.modelId, tileFeature, std::string{});
-
         if (!modelId.empty() && layerImpl.modelAssets.count(modelId)) {
-            // Static-mesh path (default): GLB baked into map geometry — same
-            // tweaker-matrix mechanics as the cube, so placement is rigid
-            // under all camera motion and depth is per-pixel correct.
-            auto cacheIt = meshCache.find(modelId);
-            if (cacheIt == meshCache.end()) {
-                cacheIt = meshCache.emplace(modelId, model::loadGlbMesh(layerImpl.modelAssets.at(modelId))).first;
-            }
-            const auto& baked = cacheIt->second;
-            if (baked.valid) {
-                for (const auto& part : baked.parts) {
-                    CustomDrawableLayerHost::Interface::GeometryOptions partOptions;
-                    if (part.texture) {
-                        if (!partTextures.count(part.texture.get())) {
-                            auto tex = context.createTexture2D();
-                            tex->setSamplerConfiguration({.filter = gfx::TextureFilterType::Linear,
-                                                          .wrapU = gfx::TextureWrapType::Repeat,
-                                                          .wrapV = gfx::TextureWrapType::Repeat,
-                                                          .mipmapped = true});
-                            tex->setImage(part.texture);
-                            partTextures[part.texture.get()] = std::move(tex);
-                        }
-                        partOptions.texture = partTextures[part.texture.get()];
-                        partOptions.color.a = opacity;
-                    } else {
-                        partOptions.color = part.color;
-                        partOptions.color.a *= opacity;
-                    }
-
-                    interface.setGeometryOptions(partOptions);
-                    interface.setGeometryTweakerCallback(
-                        [fx, fy, lat, sizeMeters, rotationDeg, footprint](
-                            gfx::Drawable&,
-                            const PaintParameters& params,
-                            CustomDrawableLayerHost::Interface::GeometryOptions& current) {
-                            const double worldSize = Projection::worldSize(params.state.getScale());
-                            const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(
-                                lat, params.state.getZoom());
-                            const double s = sizeMeters / metersPerPixel * footprint;
-
-                            mat4 m = matrix::identity4();
-                            matrix::translate(m, m, fx * worldSize, fy * worldSize, 0.0);
-                            matrix::rotate_z(m, m, util::deg2rad(rotationDeg));
-                            matrix::scale(m, m, s, s, sizeMeters);
-                            matrix::multiply(
-                                current.matrix, params.transformParams.nearClippedProjMatrix, m);
-                        });
-                    drawableIds.push_back(interface.addGeometry(part.vertices, part.indices, /*is3D=*/true));
-                }
-                continue;
-            }
+            groups[modelId].push_back(instance);
+        } else {
+            cubes.push_back(instance);
         }
+    }
+
+    using Vertex = CustomDrawableLayerHost::Interface::GeometryVertex;
+
+    for (auto& [modelId, instances] : groups) {
+        auto cacheIt = meshCache.find(modelId);
+        if (cacheIt == meshCache.end()) {
+            cacheIt = meshCache.emplace(modelId, model::loadGlbMesh(layerImpl.modelAssets.at(modelId))).first;
+        }
+        const auto& baked = cacheIt->second;
+        if (!baked.valid) {
+            cubes.insert(cubes.end(), instances.begin(), instances.end());
+            continue;
+        }
+
+        // All instances of a group bake relative to the first instance's
+        // anchor, in ground meters; the per-frame tweaker maps meters→pixels
+        // at the anchor latitude. City-scale spans keep the mercator scale
+        // error negligible.
+        const Instance& ref = instances.front();
+        const double refFx = ref.fx;
+        const double refFy = ref.fy;
+        const double lat0 = latitudeFromMercatorFraction(refFy);
+        const double metersPerFraction = 40075016.686 * std::cos(util::deg2rad(lat0));
+
+        // Contact shadows: one merged drawable of soft radial quads under the
+        // group's instances, grounding the models.
+        {
+            if (!shadowTexture) {
+                auto tex = context.createTexture2D();
+                tex->setSamplerConfiguration({.filter = gfx::TextureFilterType::Linear,
+                                              .wrapU = gfx::TextureWrapType::Clamp,
+                                              .wrapV = gfx::TextureWrapType::Clamp});
+                tex->setImage(makeContactShadowImage());
+                shadowTexture = std::move(tex);
+            }
+            auto shadowVertices = std::make_shared<gfx::VertexVector<Vertex>>();
+            auto shadowIndices = std::make_shared<gfx::IndexVector<gfx::Triangles>>();
+            for (const auto& inst : instances) {
+                if (shadowVertices->elements() + 4 > 60000) break;
+                const double cx = (inst.fx - refFx) * metersPerFraction;
+                const double cy = (inst.fy - refFy) * metersPerFraction;
+                const double half = inst.size * inst.footprint * 0.78;
+                // A few cm above ground, scaled with model size, to dodge
+                // ground-plane z-fighting.
+                const double zLift = std::max(0.05, inst.size * 0.004);
+                const auto base = static_cast<uint16_t>(shadowVertices->elements());
+                shadowVertices->emplace_back(Vertex{{static_cast<float>(cx - half),
+                                                     static_cast<float>(cy - half),
+                                                     static_cast<float>(zLift)},
+                                                    {0.f, 0.f}});
+                shadowVertices->emplace_back(Vertex{{static_cast<float>(cx + half),
+                                                     static_cast<float>(cy - half),
+                                                     static_cast<float>(zLift)},
+                                                    {1.f, 0.f}});
+                shadowVertices->emplace_back(Vertex{{static_cast<float>(cx + half),
+                                                     static_cast<float>(cy + half),
+                                                     static_cast<float>(zLift)},
+                                                    {1.f, 1.f}});
+                shadowVertices->emplace_back(Vertex{{static_cast<float>(cx - half),
+                                                     static_cast<float>(cy + half),
+                                                     static_cast<float>(zLift)},
+                                                    {0.f, 1.f}});
+                // Double-sided: the world's south-positive y flips winding.
+                shadowIndices->emplace_back(base, base + 1, base + 2);
+                shadowIndices->emplace_back(base, base + 2, base + 3);
+                shadowIndices->emplace_back(base, base + 2, base + 1);
+                shadowIndices->emplace_back(base, base + 3, base + 2);
+            }
+            CustomDrawableLayerHost::Interface::GeometryOptions shadowOptions;
+            shadowOptions.texture = shadowTexture;
+            interface.setGeometryOptions(shadowOptions);
+            interface.setGeometryTweakerCallback(
+                [refFx, refFy, lat0](gfx::Drawable&,
+                                     const PaintParameters& params,
+                                     CustomDrawableLayerHost::Interface::GeometryOptions& current) {
+                    const double worldSize = Projection::worldSize(params.state.getScale());
+                    const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(
+                        lat0, params.state.getZoom());
+                    const double pxPerMeter = 1.0 / metersPerPixel;
+                    mat4 m = matrix::identity4();
+                    matrix::translate(m, m, refFx * worldSize, refFy * worldSize, 0.0);
+                    matrix::scale(m, m, pxPerMeter, pxPerMeter, 1.0);
+                    matrix::multiply(current.matrix, params.transformParams.nearClippedProjMatrix, m);
+                    const float fade = zoomFade(params.state.getZoom());
+                    current.color = {fade, fade, fade, fade};
+                });
+            drawableIds.push_back(interface.addGeometry(shadowVertices, shadowIndices, /*is3D=*/true));
+        }
+
+        for (const auto& part : baked.parts) {
+            CustomDrawableLayerHost::Interface::GeometryOptions partOptions;
+            if (part.texture) {
+                if (!partTextures.count(part.texture.get())) {
+                    auto tex = context.createTexture2D();
+                    tex->setSamplerConfiguration({.filter = gfx::TextureFilterType::Linear,
+                                                  .wrapU = gfx::TextureWrapType::Repeat,
+                                                  .wrapV = gfx::TextureWrapType::Repeat,
+                                                  .mipmapped = true});
+                    tex->setImage(part.texture);
+                    partTextures[part.texture.get()] = std::move(tex);
+                }
+                partOptions.texture = partTextures[part.texture.get()];
+                partOptions.color.a = layerOpacity;
+            } else {
+                partOptions.color = part.color;
+                partOptions.color.a *= layerOpacity;
+            }
+
+            const std::size_t partVertexCount = part.vertices->elements();
+            constexpr std::size_t kMaxChunkVertices = 60000;
+
+            std::shared_ptr<gfx::VertexVector<Vertex>> chunkVertices;
+            std::shared_ptr<gfx::IndexVector<gfx::Triangles>> chunkIndices;
+
+            const Color baseColor = partOptions.color;
+            const auto flushChunk = [&] {
+                if (!chunkVertices || chunkVertices->empty()) return;
+                interface.setGeometryOptions(partOptions);
+                interface.setGeometryTweakerCallback(
+                    [refFx, refFy, lat0, baseColor](
+                        gfx::Drawable&,
+                        const PaintParameters& params,
+                        CustomDrawableLayerHost::Interface::GeometryOptions& current) {
+                        const double worldSize = Projection::worldSize(params.state.getScale());
+                        const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(
+                            lat0, params.state.getZoom());
+                        const double pxPerMeter = 1.0 / metersPerPixel;
+
+                        mat4 m = matrix::identity4();
+                        matrix::translate(m, m, refFx * worldSize, refFy * worldSize, 0.0);
+                        // x/y baked in ground meters → pixels; z stays meters
+                        // (projection convention).
+                        matrix::scale(m, m, pxPerMeter, pxPerMeter, 1.0);
+                        matrix::multiply(current.matrix, params.transformParams.nearClippedProjMatrix, m);
+
+                        // Fade in across the minzoom boundary (premultiplied:
+                        // scale all components).
+                        const float fade = zoomFade(params.state.getZoom());
+                        current.color = {
+                            baseColor.r * fade, baseColor.g * fade, baseColor.b * fade, baseColor.a * fade};
+                    });
+                drawableIds.push_back(interface.addGeometry(chunkVertices, chunkIndices, /*is3D=*/true));
+                chunkVertices.reset();
+                chunkIndices.reset();
+            };
+
+            for (const auto& inst : instances) {
+                if (chunkVertices && chunkVertices->elements() + partVertexCount > kMaxChunkVertices) {
+                    flushChunk();
+                }
+                if (!chunkVertices) {
+                    chunkVertices = std::make_shared<gfx::VertexVector<Vertex>>();
+                    chunkIndices = std::make_shared<gfx::IndexVector<gfx::Triangles>>();
+                }
+
+                // Per-instance transform baked into vertices (ground meters
+                // relative to the group anchor).
+                mat4 f = matrix::identity4();
+                matrix::translate(f,
+                                  f,
+                                  (inst.fx - refFx) * metersPerFraction,
+                                  (inst.fy - refFy) * metersPerFraction,
+                                  0.0);
+                matrix::rotate_z(f, f, util::deg2rad(inst.rotationDeg));
+                matrix::scale(
+                    f, f, inst.size * inst.footprint, inst.size * inst.footprint, inst.size);
+
+                const auto base = static_cast<uint16_t>(chunkVertices->elements());
+                for (std::size_t vi = 0; vi < partVertexCount; ++vi) {
+                    const Vertex& v = part.vertices->at(vi);
+                    const vec4 p{v.position[0], v.position[1], v.position[2], 1.0};
+                    vec4 out;
+                    matrix::transformMat4(out, p, f);
+                    chunkVertices->emplace_back(Vertex{
+                        {static_cast<float>(out[0]), static_cast<float>(out[1]), static_cast<float>(out[2])},
+                        v.texcoords});
+                }
+                const auto& idx = part.indices->vector();
+                for (std::size_t ii = 0; ii + 2 < idx.size(); ii += 3) {
+                    chunkIndices->emplace_back(static_cast<uint16_t>(base + idx[ii]),
+                                               static_cast<uint16_t>(base + idx[ii + 1]),
+                                               static_cast<uint16_t>(base + idx[ii + 2]));
+                }
+            }
+            flushChunk();
+        }
+    }
+
+    // Unresolved features keep the per-feature placeholder cube (rare).
+    for (const auto& inst : cubes) {
+        const double fx = inst.fx;
+        const double fy = inst.fy;
+        const double lat = latitudeFromMercatorFraction(fy);
+        const float sizeMeters = inst.size;
+        const float rotationDeg = inst.rotationDeg;
 
         CustomDrawableLayerHost::Interface::GeometryOptions options;
         options.texture = texture;
-        options.color.a = opacity;
+        options.color.a = layerOpacity;
 
         interface.setGeometryOptions(options);
         interface.setGeometryTweakerCallback(

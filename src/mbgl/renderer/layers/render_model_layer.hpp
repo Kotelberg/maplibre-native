@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mbgl/gfx/texture2d.hpp>
 #include <mbgl/renderer/model/glb_mesh_loader.hpp>
 #include <mbgl/renderer/render_layer.hpp>
 #include <mbgl/style/layers/model_layer_impl.hpp>
@@ -42,11 +43,15 @@ private:
     const void* lastData = nullptr;
     std::size_t lastFeatureCount = 0;
     std::uint64_t lastPlacementKey = 0;
+    std::uint64_t lastCoverSig = 0;
 
     std::vector<util::SimpleIdentity> drawableIds;
 
     // GLBs baked into map geometry, cached per model id.
     std::map<std::string, model::BakedModel> meshCache;
+
+    // Shared soft contact-shadow texture (built lazily).
+    gfx::Texture2DPtr shadowTexture;
 };
 
 } // namespace mbgl
