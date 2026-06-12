@@ -22,6 +22,7 @@
 #include <gltfio/AssetLoader.h>
 #include <gltfio/FilamentAsset.h>
 #include <gltfio/ResourceLoader.h>
+#include <gltfio/TextureProvider.h>
 #include <gltfio/materials/uberarchive.h>
 
 #include <math/mat4.h>
@@ -155,6 +156,9 @@ int main(int argc, char** argv) {
         rc.gltfPath = ".";
         rc.normalizeSkinningWeights = true;
         gltfio::ResourceLoader resourceLoader(rc);
+        gltfio::TextureProvider* stbProvider = gltfio::createStbProvider(engine);
+        resourceLoader.addTextureProvider("image/png", stbProvider);
+        resourceLoader.addTextureProvider("image/jpeg", stbProvider);
         if (!resourceLoader.loadResources(asset)) {
             std::fprintf(stderr, "loadResources failed\n");
             return 1;
