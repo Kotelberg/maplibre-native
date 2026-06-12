@@ -122,6 +122,24 @@ void ModelLayer::setModelOpacity(const PropertyValue<float>& value) {
     observer->onLayerChanged(*this);
 }
 
+// Paint: model-footprint (x/y multiplier, height-independent)
+
+PropertyValue<float> ModelLayer::getDefaultModelFootprint() {
+    return {1.0f};
+}
+
+const PropertyValue<float>& ModelLayer::getModelFootprint() const {
+    return impl().modelFootprint;
+}
+
+void ModelLayer::setModelFootprint(const PropertyValue<float>& value) {
+    if (value == getModelFootprint()) return;
+    auto impl_ = mutableImpl();
+    impl_->modelFootprint = value;
+    baseImpl = std::move(impl_);
+    observer->onLayerChanged(*this);
+}
+
 // Model assets (registry-lite)
 
 const std::map<std::string, std::string>& ModelLayer::getModelAssets() const {
@@ -159,6 +177,12 @@ std::optional<Error> ModelLayer::setPropertyInternal(const std::string& name, co
         setModelRotation(*property);
         return std::nullopt;
     }
+    if (name == "model-footprint") {
+        const auto property = convert<PropertyValue<float>>(value, error, /*allowDataExpressions=*/true, false);
+        if (!property) return error;
+        setModelFootprint(*property);
+        return std::nullopt;
+    }
     if (name == "model-opacity") {
         const auto property = convert<PropertyValue<float>>(value, error, /*allowDataExpressions=*/false, false);
         if (!property) return error;
@@ -174,6 +198,7 @@ StyleProperty ModelLayer::getProperty(const std::string& name) const {
     if (name == "model-scale") return makeStyleProperty(getModelScale());
     if (name == "model-rotation") return makeStyleProperty(getModelRotation());
     if (name == "model-opacity") return makeStyleProperty(getModelOpacity());
+    if (name == "model-footprint") return makeStyleProperty(getModelFootprint());
     return {};
 }
 

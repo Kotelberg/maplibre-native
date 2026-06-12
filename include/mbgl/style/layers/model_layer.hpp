@@ -40,6 +40,11 @@ public:
     const PropertyValue<float>& getModelOpacity() const;
     void setModelOpacity(const PropertyValue<float>&);
 
+    // Footprint multiplier on x/y, independent of height (data-driven)
+    static PropertyValue<float> getDefaultModelFootprint();
+    const PropertyValue<float>& getModelFootprint() const;
+    void setModelFootprint(const PropertyValue<float>&);
+
     // Model assets (registry-lite): model id → local GLB file path
     const std::map<std::string, std::string>& getModelAssets() const;
     void setModelAssets(std::map<std::string, std::string>);

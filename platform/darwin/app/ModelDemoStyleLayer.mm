@@ -25,6 +25,8 @@
   layer->setModelRotation(
       mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("bearing"))));
   layer->setModelScale(mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("size"))));
+  layer->setModelFootprint(
+      mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("footprint"))));
   return self = [super initWithPendingLayer:std::move(layer)];
 }
 

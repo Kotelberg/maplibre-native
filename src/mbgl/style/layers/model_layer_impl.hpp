@@ -22,6 +22,7 @@ public:
     PropertyValue<float> modelScale;
     PropertyValue<float> modelRotation;
     PropertyValue<float> modelOpacity;
+    PropertyValue<float> modelFootprint;
 
     /// Registry-lite (M3b): model id → local GLB file path. A style-wide
     /// registry (style.addModel) is planned for the RN bindings milestone.

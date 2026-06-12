@@ -175,6 +175,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         const float opacity = layerImpl.modelOpacity.isUndefined()
                                   ? 1.0f
                                   : (layerImpl.modelOpacity.isConstant() ? layerImpl.modelOpacity.asConstant() : 1.0f);
+        const float footprint = evaluateFor(layerImpl.modelFootprint, tileFeature, 1.0f);
         const std::string modelId = evaluateFor(layerImpl.modelId, tileFeature, std::string{});
 
         if (!modelId.empty() && layerImpl.modelAssets.count(modelId)) {
@@ -208,14 +209,14 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
 
                     interface.setGeometryOptions(partOptions);
                     interface.setGeometryTweakerCallback(
-                        [fx, fy, lat, sizeMeters, rotationDeg](
+                        [fx, fy, lat, sizeMeters, rotationDeg, footprint](
                             gfx::Drawable&,
                             const PaintParameters& params,
                             CustomDrawableLayerHost::Interface::GeometryOptions& current) {
                             const double worldSize = Projection::worldSize(params.state.getScale());
                             const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(
                                 lat, params.state.getZoom());
-                            const double s = sizeMeters / metersPerPixel;
+                            const double s = sizeMeters / metersPerPixel * footprint;
 
                             mat4 m = matrix::identity4();
                             matrix::translate(m, m, fx * worldSize, fy * worldSize, 0.0);

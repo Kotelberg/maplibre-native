@@ -159,6 +159,14 @@ int main(int argc, char* argv[]) {
                 return;
             }
 
+            // MLN_MODEL_GEOJSON overrides the synthesized demo points with a
+            // GeoJSON file (single-building placements etc.)
+            std::string overrideGeojson;
+            if (const char* gj = getenv("MLN_MODEL_GEOJSON")) {
+                std::ifstream in(gj);
+                overrideGeojson.assign(std::istreambuf_iterator<char>(in), {});
+            }
+
             char geojson[1024];
             std::snprintf(geojson,
                           sizeof(geojson),
@@ -174,7 +182,8 @@ int main(int argc, char* argv[]) {
                           lat + 0.0008);
 
             style::conversion::Error geojsonError;
-            auto converted = style::conversion::parseGeoJSON(geojson, geojsonError);
+            auto converted = style::conversion::parseGeoJSON(
+                overrideGeojson.empty() ? std::string(geojson) : overrideGeojson, geojsonError);
             if (!converted) {
                 std::cerr << "model-layer geojson error: " << geojsonError.message << std::endl;
                 return;
@@ -188,6 +197,9 @@ int main(int argc, char* argv[]) {
             auto layer = std::make_unique<style::ModelLayer>("m3-models", "m3-points");
             layer->setModelRotation(style::PropertyExpression<float>(dsl::number(dsl::get("bearing"))));
             layer->setModelScale(style::PropertyExpression<float>(dsl::number(dsl::get("size"))));
+            // (missing property → expression error → evaluateFor's default 1.0)
+            layer->setModelFootprint(
+                style::PropertyExpression<float>(dsl::number(dsl::get("footprint"))));
             layer->setModelOpacity(0.9f);
             // M3b: register a GLB asset and select it. The MLN_MODEL_GLB env
             // var points at a local GLB; features whose model-id resolves use
