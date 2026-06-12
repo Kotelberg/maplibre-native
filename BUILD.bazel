@@ -111,7 +111,10 @@ cc_library(
             "MLN_RENDER_BACKEND_WEBGPU=1",
         ],
     }) + select({
-        "@platforms//os:ios": ["GLES_SILENCE_DEPRECATION=1"],
+        "@platforms//os:ios": [
+            "GLES_SILENCE_DEPRECATION=1",
+            "MLN_WITH_FILAMENT_MODELS=1",
+        ],
         "//conditions:default": [],
     }) + select({
         "//:harfbuzz_text_shaping": ["MLN_TEXT_SHAPING_HARFBUZZ=1"],
@@ -159,6 +162,8 @@ cc_library(
         "@platforms//os:ios": [
             "//vendor:ghc_filesystem",
             "//vendor:icu",
+            "@filament_ios//:headers",
+            "@filament_ios//:libs",
         ],
         "@platforms//os:osx": [
             "//vendor:icu",

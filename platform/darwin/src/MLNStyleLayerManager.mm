@@ -14,6 +14,8 @@
 
 #import "MLNCustomDrawableStyleLayer_Private.h"
 
+#include <mbgl/layermanager/model_layer_factory.hpp>
+
 #include <vector>
 
 namespace mbgl {
@@ -80,6 +82,10 @@ LayerManagerDarwin::LayerManagerDarwin() {
 #elif !defined(MLN_LAYER_CUSTOM_DRAWABLE_DISABLE_ALL)
   addLayerType(std::make_unique<CustomDrawableStyleLayerPeerFactory>());
 #endif
+
+  // Fork extension: experimental model layer (no ObjC peer; created via
+  // pending-layer wrappers)
+  addLayerTypeCoreOnly(std::make_unique<ModelLayerFactory>());
 }
 
 LayerManagerDarwin::~LayerManagerDarwin() = default;

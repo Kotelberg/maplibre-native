@@ -979,6 +979,8 @@ MLN_DRAWABLES_SOURCE = [
     "src/mbgl/layermanager/model_layer_factory.cpp",
     "src/mbgl/renderer/layers/render_model_layer.cpp",
     "src/mbgl/renderer/layers/render_model_layer.hpp",
+    "src/mbgl/renderer/model/filament_model_renderer.cpp",
+    "src/mbgl/renderer/model/filament_model_renderer.hpp",
     "src/mbgl/renderer/model/placeholder_mesh.cpp",
     "src/mbgl/renderer/model/placeholder_mesh.hpp",
     "src/mbgl/style/layers/model_layer.cpp",
@@ -1027,6 +1029,8 @@ MLN_DRAWABLES_HEADERS = [
     "include/mbgl/shaders/widevector_ubo.hpp",
     "include/mbgl/util/suppress_copies.hpp",
     "include/mbgl/style/layers/custom_drawable_layer.hpp",
+    "include/mbgl/style/layers/model_layer.hpp",
+    "include/mbgl/layermanager/model_layer_factory.hpp",
     "include/mbgl/layermanager/custom_drawable_layer_factory.hpp",
 ]
 

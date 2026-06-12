@@ -291,6 +291,8 @@ objc_library(
     srcs = [
         "//platform/darwin:app/DebugCubeStyleLayer.h",
         "//platform/darwin:app/DebugCubeStyleLayer.mm",
+        "//platform/darwin:app/ModelDemoStyleLayer.h",
+        "//platform/darwin:app/ModelDemoStyleLayer.mm",
         "//platform/darwin:app/ExampleCustomDrawableStyleLayer.h",
         "//platform/darwin:app/ExampleCustomDrawableStyleLayer.mm",
     ],
@@ -315,6 +317,7 @@ objc_library(
     srcs = [
         "//platform/darwin:app/CustomStyleLayerExample.h",
         "//platform/darwin:app/DebugCubeStyleLayer.h",
+        "//platform/darwin:app/ModelDemoStyleLayer.h",
         "//platform/darwin:app/ExampleCustomDrawableStyleLayer.h",
         "//platform/darwin:app/PluginLayerExample.h",
         "//platform/darwin:app/PluginLayerExample.mm",
