@@ -21,6 +21,8 @@ std::unique_ptr<mbgl::style::ModelLayer> makeDemoLayer(jni::JNIEnv& env,
     layer->setModelId(std::string("demo"));
     layer->setModelRotation(mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("bearing"))));
     layer->setModelScale(mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("size"))));
+    // (missing property → expression error → evaluateFor's default 1.0)
+    layer->setModelFootprint(mbgl::style::PropertyExpression<float>(dsl::number(dsl::get("footprint"))));
     return layer;
 }
 

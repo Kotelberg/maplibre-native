@@ -37,13 +37,17 @@ class CustomLayerActivity : AppCompatActivity() {
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { map: MapLibreMap ->
             maplibreMap = map
-            // M1 debug cube QA: HataHub style (fill-extrusion buildings) at Kyiv center
+            // Apartment-on-plot demo (matches the iOS QA hook): camera at the
+            // Микільська Слобідка plot when the apartment GLB is on the device.
+            val apartment = java.io.File("/data/local/tmp/apartment.glb")
+            val duck = java.io.File("/data/local/tmp/Duck.glb")
             maplibreMap.moveCamera(
                 CameraUpdateFactory.newCameraPosition(
                     CameraPosition.Builder()
-                        .target(LatLng(50.4501, 30.5234))
-                        .zoom(16.0)
+                        .target(if (apartment.canRead()) LatLng(50.45702, 30.58452) else LatLng(50.4501, 30.5234))
+                        .zoom(if (apartment.canRead()) 15.5 else 16.0)
                         .tilt(55.0)
+                        .bearing(if (apartment.canRead()) 20.0 else 0.0)
                         .build()
                 )
             )
@@ -52,10 +56,16 @@ class CustomLayerActivity : AppCompatActivity() {
             ) { style: Style ->
                 initFab()
                 // M6 QA: if a GLB was pushed to the device, add a model layer
-                // with 3 demo points (data-driven bearing/size). Falls back to
-                // the M1 debug cube toggle otherwise.
-                val glb = java.io.File("/data/local/tmp/Duck.glb")
-                if (glb.canRead()) {
+                // with data-driven bearing/size/footprint. Falls back to the
+                // M1 debug cube toggle otherwise.
+                if (apartment.canRead()) {
+                    val geojson = """{"type":"FeatureCollection","features":[
+{"type":"Feature","properties":{"bearing":247,"size":85,"footprint":2.0},"geometry":{"type":"Point","coordinates":[30.58428,50.45679]}}]}"""
+                    style.addSource(
+                        org.maplibre.android.style.sources.GeoJsonSource("m6-points", geojson)
+                    )
+                    style.addLayer(ModelLayer("m6-models", "m6-points", apartment.absolutePath))
+                } else if (duck.canRead()) {
                     val geojson = """{"type":"FeatureCollection","features":[
 {"type":"Feature","properties":{"bearing":0,"size":15},"geometry":{"type":"Point","coordinates":[30.5224,50.4505]}},
 {"type":"Feature","properties":{"bearing":45,"size":30},"geometry":{"type":"Point","coordinates":[30.5234,50.4495]}},
@@ -63,7 +73,7 @@ class CustomLayerActivity : AppCompatActivity() {
                     style.addSource(
                         org.maplibre.android.style.sources.GeoJsonSource("m6-points", geojson)
                     )
-                    style.addLayer(ModelLayer("m6-models", "m6-points", glb.absolutePath))
+                    style.addLayer(ModelLayer("m6-models", "m6-points", duck.absolutePath))
                 } else {
                     // M1 QA: add the debug cube immediately so headless adb QA
                     // does not depend on tapping the FAB.
