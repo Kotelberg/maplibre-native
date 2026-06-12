@@ -197,8 +197,9 @@ BakedModel loadGlbMesh(const std::string& path) {
         if (material) {
             if (material->has_pbr_metallic_roughness) {
                 texture = decodeTexture(material->pbr_metallic_roughness.base_color_texture.texture);
+                // glTF semantics: baseColor = texture * factor (factor alone when untextured)
                 const auto* c = material->pbr_metallic_roughness.base_color_factor;
-                if (!texture) color = Color{c[0], c[1], c[2], c[3]};
+                color = Color{c[0], c[1], c[2], c[3]};
             }
         }
 
