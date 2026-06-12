@@ -7,6 +7,8 @@
 #include <mbgl/util/projection.hpp>
 
 #include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 
@@ -118,6 +120,28 @@ void DebugCubeLayerHost::update(Interface& interface) {
             // pixelsPerMeter (src/mbgl/util/camera.cpp).
             matrix::scale(m, m, s, s, size);
             matrix::multiply(currentOptions.matrix, params.transformParams.nearClippedProjMatrix, m);
+
+            // M2: hand the map camera to the external Filament harness
+            // (misc/filament-harness) for camera-sync experiments.
+            if (const char* dumpPath = std::getenv("MLN_DEBUG_CUBE_DUMP")) {
+                static bool dumped = false;
+                if (!dumped) {
+                    dumped = true;
+                    if (FILE* f = std::fopen(dumpPath, "w")) {
+                        std::fputs("{\"proj\":[", f);
+                        const auto& p = params.transformParams.nearClippedProjMatrix;
+                        for (int i = 0; i < 16; ++i) {
+                            std::fprintf(f, "%s%.17g", i ? "," : "", p[i]);
+                        }
+                        std::fprintf(f,
+                                     "],\"centerX\":%.17g,\"centerY\":%.17g,\"metersPerPixel\":%.17g}\n",
+                                     center.x,
+                                     center.y,
+                                     metersPerPixel);
+                        std::fclose(f);
+                    }
+                }
+            }
         });
 
     interface.setGeometryOptions(options);
