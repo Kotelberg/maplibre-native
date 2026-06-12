@@ -218,49 +218,95 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         filamentRenderer->setAssets(layerImpl.modelAssets);
 
         const auto viewport = state.getSize();
+        const double worldSize = Projection::worldSize(state.getScale());
         mat4 proj;
         // Same construction as PaintParameters::nearClippedProjMatrix
         state.getProjMatrix(proj, static_cast<uint16_t>(0.1 * state.getCameraToCenterDistance()));
         const Point<double> anchorPx = Projection::project(state.getLatLng(), state.getScale());
 
-        if (auto image = filamentRenderer->render(filamentSpecs,
+        // Per-model billboard with depth (M4): each model renders into its
+        // own cropped image; the textured quad sits at the anchor's clip-space
+        // depth with is3D depth read/write, so extruded buildings occlude it.
+        using Vertex = CustomDrawableLayerHost::Interface::GeometryVertex;
+        auto quadVertices = std::make_shared<gfx::VertexVector<Vertex>>();
+        auto quadIndices = std::make_shared<gfx::IndexVector<gfx::Triangles>>();
+        quadVertices->emplace_back(Vertex{.position = {-1, -1, 0}, .texcoords = {0, 1}});
+        quadVertices->emplace_back(Vertex{.position = {1, -1, 0}, .texcoords = {1, 1}});
+        quadVertices->emplace_back(Vertex{.position = {1, 1, 0}, .texcoords = {1, 0}});
+        quadVertices->emplace_back(Vertex{.position = {-1, 1, 0}, .texcoords = {0, 0}});
+        quadIndices->emplace_back(0, 1, 2);
+        quadIndices->emplace_back(0, 2, 3);
+
+        for (const auto& spec : filamentSpecs) {
+            const double wx = spec.worldFractionX * worldSize;
+            const double wy = spec.worldFractionY * worldSize;
+
+            // Anchor in map clip space
+            const double cw = proj[3] * wx + proj[7] * wy + proj[15];
+            if (cw <= 0) continue;
+            const double cx = (proj[0] * wx + proj[4] * wy + proj[12]) / cw;
+            const double cy = (proj[1] * wx + proj[5] * wy + proj[13]) / cw;
+            if (std::abs(cx) > 1.5 || std::abs(cy) > 1.5) continue;
+
+            const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(spec.latitude, state.getZoom());
+            const double halfPx = std::max(8.0, spec.sizeMeters / metersPerPixel * 1.6);
+            model::FilamentModelRenderer::CropRect cropRect{
+                cx, cy, 2.0 * halfPx / viewport.width, 2.0 * halfPx / viewport.height};
+
+            const auto texSize = static_cast<uint32_t>(
+                std::clamp(2.0 * halfPx, 16.0, static_cast<double>(std::max(viewport.width, viewport.height))));
+
+            auto image = filamentRenderer->render({spec},
                                                   proj,
                                                   anchorPx.x,
                                                   anchorPx.y,
-                                                  Projection::worldSize(state.getScale()),
+                                                  worldSize,
                                                   state.getZoom(),
-                                                  viewport.width,
-                                                  viewport.height)) {
-            // Fullscreen NDC quad textured with the Filament output. Identity
-            // matrix in the tweaker → vertex positions pass through as clip
-            // coords. Image rows are top-down; NDC +y is up → v flipped.
+                                                  texSize,
+                                                  texSize,
+                                                  &cropRect);
+            if (!image) continue;
+
             auto overlayTexture = context.createTexture2D();
             overlayTexture->setSamplerConfiguration({.filter = gfx::TextureFilterType::Linear,
                                                      .wrapU = gfx::TextureWrapType::Clamp,
                                                      .wrapV = gfx::TextureWrapType::Clamp});
             overlayTexture->setImage(std::move(image));
 
-            using Vertex = CustomDrawableLayerHost::Interface::GeometryVertex;
-            auto quadVertices = std::make_shared<gfx::VertexVector<Vertex>>();
-            auto quadIndices = std::make_shared<gfx::IndexVector<gfx::Triangles>>();
-            quadVertices->emplace_back(Vertex{.position = {-1, -1, 0}, .texcoords = {0, 1}});
-            quadVertices->emplace_back(Vertex{.position = {1, -1, 0}, .texcoords = {1, 1}});
-            quadVertices->emplace_back(Vertex{.position = {1, 1, 0}, .texcoords = {1, 0}});
-            quadVertices->emplace_back(Vertex{.position = {-1, 1, 0}, .texcoords = {0, 0}});
-            quadIndices->emplace_back(0, 1, 2);
-            quadIndices->emplace_back(0, 2, 3);
-
             CustomDrawableLayerHost::Interface::GeometryOptions overlayOptions;
             overlayOptions.texture = std::move(overlayTexture);
 
             interface.setGeometryOptions(overlayOptions);
             interface.setGeometryTweakerCallback(
-                [](gfx::Drawable&,
-                   const PaintParameters&,
-                   CustomDrawableLayerHost::Interface::GeometryOptions& current) {
-                    current.matrix = matrix::identity4();
+                [wx, wy, spec, halfPx](gfx::Drawable&,
+                                       const PaintParameters& params,
+                                       CustomDrawableLayerHost::Interface::GeometryOptions& current) {
+                    // Recompute the clip rect per frame (cheap; camera changes
+                    // trigger a full re-render anyway, this keeps it aligned).
+                    const auto& p = params.transformParams.nearClippedProjMatrix;
+                    const double w = p[3] * wx + p[7] * wy + p[15];
+                    if (w <= 0) {
+                        current.matrix = matrix::identity4();
+                        matrix::scale(current.matrix, current.matrix, 0, 0, 0);
+                        return;
+                    }
+                    const double ncx = (p[0] * wx + p[4] * wy + p[12]) / w;
+                    const double ncy = (p[1] * wx + p[5] * wy + p[13]) / w;
+                    const double nz = (p[2] * wx + p[6] * wy + p[14]) / w;
+                    const auto size = params.state.getSize();
+                    const double nhx = 2.0 * halfPx / size.width;
+                    const double nhy = 2.0 * halfPx / size.height;
+
+                    mat4 m = matrix::identity4();
+                    m[0] = nhx;
+                    m[5] = nhy;
+                    m[10] = 0.0;
+                    m[12] = ncx;
+                    m[13] = ncy;
+                    m[14] = nz;
+                    current.matrix = m;
                 });
-            drawableIds.push_back(interface.addGeometry(quadVertices, quadIndices, /*is3D=*/false));
+            drawableIds.push_back(interface.addGeometry(quadVertices, quadIndices, /*is3D=*/true));
         }
     }
 #endif

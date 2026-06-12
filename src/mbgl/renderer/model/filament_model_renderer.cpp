@@ -170,7 +170,8 @@ std::shared_ptr<PremultipliedImage> FilamentModelRenderer::render(const std::vec
                                                                   double worldSize,
                                                                   double zoom,
                                                                   uint32_t width,
-                                                                  uint32_t height) {
+                                                                  uint32_t height,
+                                                                  const CropRect* crop) {
     if (!backend->initialize()) return nullptr;
     auto& b = *backend;
 
@@ -195,7 +196,16 @@ std::shared_ptr<PremultipliedImage> FilamentModelRenderer::render(const std::vec
                                    fl::math::double4{0, -1, 0, 0},
                                    fl::math::double4{0, 0, 1, 0},
                                    fl::math::double4{0, 0, 0, 1});
-    b.camera->setCustomProjection(clipFlipY * P * anchor, 0.1, 100000.0);
+    fl::math::mat4 full = clipFlipY * P * anchor;
+    if (crop) {
+        // Linear clip-space crop: x' = x/hx - (cx/hx)·w (valid pre-divide).
+        fl::math::mat4 C(fl::math::double4{1.0 / crop->hx, 0, 0, 0},
+                         fl::math::double4{0, 1.0 / crop->hy, 0, 0},
+                         fl::math::double4{0, 0, 1, 0},
+                         fl::math::double4{-crop->cx / crop->hx, -crop->cy / crop->hy, 0, 1});
+        full = clipFlipY * C * P * anchor;
+    }
+    b.camera->setCustomProjection(full, 0.1, 100000.0);
     b.camera->setModelMatrix(fl::math::mat4f{});
 
     // Per-instance transforms, fp32-safe relative to the anchor.

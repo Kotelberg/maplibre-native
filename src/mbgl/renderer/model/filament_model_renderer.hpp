@@ -39,7 +39,13 @@ public:
     /// id → local GLB file path. Assets load lazily on first use and stay cached.
     void setAssets(std::map<std::string, std::string> idToPath);
 
-    /// Render all instances. proj = the map's nearClippedProjMatrix;
+    /// Clip-space crop: render only the NDC rect [cx±hx, cy±hy] of the map
+    /// view, mapped to the full output image (per-model depth billboards, M4).
+    struct CropRect {
+        double cx = 0, cy = 0, hx = 1, hy = 1;
+    };
+
+    /// Render instances. proj = the map's nearClippedProjMatrix;
     /// anchor/worldSize/zoom describe the current camera. Returns a
     /// premultiplied RGBA image (rows top-down), or nullptr on failure.
     std::shared_ptr<PremultipliedImage> render(const std::vector<ModelInstanceSpec>& instances,
@@ -49,7 +55,8 @@ public:
                                                double worldSize,
                                                double zoom,
                                                uint32_t width,
-                                               uint32_t height);
+                                               uint32_t height,
+                                               const CropRect* crop = nullptr);
 
 private:
     struct Backend;
