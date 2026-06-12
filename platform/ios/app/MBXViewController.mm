@@ -18,6 +18,7 @@
 
 #import "CustomStyleLayerExample.h"
 
+#import "DebugCubeStyleLayer.h"
 #import "ExampleCustomDrawableStyleLayer.h"
 
 #import <objc/runtime.h>
@@ -1888,6 +1889,19 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
   if (layer) {
     [self.mapView.style addLayer:layer];
   }
+
+  // M1 debug cube at Kyiv center: placement/depth validation for the model-layer work
+  DebugCubeStyleLayer *cubeLayer = [[DebugCubeStyleLayer alloc] initWithIdentifier:@"debug-cube"];
+  if (cubeLayer) {
+    [self.mapView.style addLayer:cubeLayer];
+
+    MLNMapCamera *camera =
+        [MLNMapCamera cameraLookingAtCenterCoordinate:CLLocationCoordinate2DMake(50.4501, 30.5234)
+                                       acrossDistance:600
+                                                pitch:60
+                                              heading:35];
+    [self.mapView flyToCamera:camera withDuration:2 completionHandler:nil];
+  }
 #endif
 }
 
@@ -2914,6 +2928,18 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
   // that a device with an English-language locale is already effectively
   // using locale-based country labels.
   _localizingLabels = [[self bestLanguageForUser] isEqualToString:@"en"];
+
+  // Headless QA hook: `simctl launch ... --debug-cube` loads a style with
+  // fill-extrusion buildings, adds the M1 debug cube, and flies to Kyiv —
+  // no UI interaction needed.
+  if ([NSProcessInfo.processInfo.arguments containsObject:@"--debug-cube"]) {
+    NSURL *qaStyle = [NSURL URLWithString:@"https://map.hatahub.com.ua/style/light.json"];
+    if (![self.mapView.styleURL isEqual:qaStyle]) {
+      self.mapView.styleURL = qaStyle;
+    } else if (![self.mapView.style layerWithIdentifier:@"debug-cube"]) {
+      [self addCustomDrawableLayer];
+    }
+  }
 }
 
 - (BOOL)mapView:(MLNMapView *)mapView

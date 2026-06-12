@@ -219,6 +219,15 @@ ios_application(
         "ipad",
     ],
     infoplists = ["info_app_plist"],
+    # Xcode 26.5 iOS-simulator Metal.tbd does not export these constants that
+    # the vendored metal-cpp references in its global initializers; resolve
+    # them dynamically at load time instead of failing the link.
+    linkopts = [
+        "-U",
+        "_MTLTensorDomain",
+        "-U",
+        "_MTLIOErrorDomain",
+    ],
     minimum_os_version = "12.0",
     provisioning_profile = "xcode_profile",
     resources = _IOS_APPLICATION_RESOURCES,
