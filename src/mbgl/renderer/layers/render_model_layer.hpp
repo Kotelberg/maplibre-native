@@ -2,6 +2,7 @@
 
 #include <mbgl/renderer/render_layer.hpp>
 #include <mbgl/style/layers/model_layer_impl.hpp>
+#include <mbgl/tile/tile_id.hpp>
 #include <mbgl/util/identity.hpp>
 
 #include <vector>
@@ -35,6 +36,7 @@ private:
     const void* lastImpl = nullptr;
     const void* lastData = nullptr;
     std::size_t lastFeatureCount = 0;
+    CanonicalTileID lastTile{0, 0, 0};
 
     std::vector<util::SimpleIdentity> drawableIds;
 };

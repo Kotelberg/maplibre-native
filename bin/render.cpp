@@ -12,6 +12,11 @@
 #include <mbgl/style/layers/debug_cube_layer_host.hpp>
 #endif
 
+#include <mbgl/style/conversion/geojson.hpp>
+#include <mbgl/style/expression/dsl.hpp>
+#include <mbgl/style/layers/model_layer.hpp>
+#include <mbgl/style/sources/geojson_source.hpp>
+
 #include <args.hxx>
 
 #include <cstdlib>
@@ -33,6 +38,8 @@ int main(int argc, char* argv[]) {
     args::Flag debugFlag(argumentParser, "debug", "Debug mode", {"debug"});
     args::Flag debugCubeFlag(
         argumentParser, "debug-cube", "Add the M1 debug cube layer at the camera center (placement/depth check)", {"debug-cube"});
+    args::Flag modelLayerFlag(
+        argumentParser, "model-layer", "Add an M3a model layer with 3 demo points around the camera center", {"model-layer"});
 
     args::ValueFlag<double> pixelRatioValue(argumentParser, "number", "Image scale factor", {'r', "ratio"});
 
@@ -145,6 +152,46 @@ int main(int argc, char* argv[]) {
         };
     }
 #endif
+
+    if (modelLayerFlag) {
+        observer.styleLoaded = [&map, lat, lon] {
+            if (map.getStyle().getLayer("m3-models")) {
+                return;
+            }
+
+            char geojson[1024];
+            std::snprintf(geojson,
+                          sizeof(geojson),
+                          R"({"type":"FeatureCollection","features":[
+{"type":"Feature","properties":{"bearing":0,"size":15},"geometry":{"type":"Point","coordinates":[%.6f,%.6f]}},
+{"type":"Feature","properties":{"bearing":45,"size":30},"geometry":{"type":"Point","coordinates":[%.6f,%.6f]}},
+{"type":"Feature","properties":{"bearing":120,"size":50},"geometry":{"type":"Point","coordinates":[%.6f,%.6f]}}]})",
+                          lon - 0.0010,
+                          lat + 0.0004,
+                          lon,
+                          lat - 0.0006,
+                          lon + 0.0012,
+                          lat + 0.0008);
+
+            style::conversion::Error geojsonError;
+            auto converted = style::conversion::parseGeoJSON(geojson, geojsonError);
+            if (!converted) {
+                std::cerr << "model-layer geojson error: " << geojsonError.message << std::endl;
+                return;
+            }
+
+            auto source = std::make_unique<style::GeoJSONSource>("m3-points");
+            source->setGeoJSON(*converted);
+            map.getStyle().addSource(std::move(source));
+
+            namespace dsl = style::expression::dsl;
+            auto layer = std::make_unique<style::ModelLayer>("m3-models", "m3-points");
+            layer->setModelRotation(style::PropertyExpression<float>(dsl::number(dsl::get("bearing"))));
+            layer->setModelScale(style::PropertyExpression<float>(dsl::number(dsl::get("size"))));
+            layer->setModelOpacity(0.9f);
+            map.getStyle().addLayer(std::move(layer));
+        };
+    }
 
     map.getStyle().loadURL(style);
     std::vector<double> bounds = args::get(boundsValue);

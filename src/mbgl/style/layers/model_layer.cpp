@@ -15,7 +15,9 @@ const LayerTypeInfo typeInfoModel{.type = "model",
                                   .layout = LayerTypeInfo::Layout::NotRequired,
                                   .fadingTiles = LayerTypeInfo::FadingTiles::NotRequired,
                                   .crossTileIndex = LayerTypeInfo::CrossTileIndex::NotRequired,
-                                  .tileKind = LayerTypeInfo::TileKind::NotRequired};
+                                  // Geometry: GeoJSONSource::supportsLayerType requires it; the
+                                  // render layer ignores tiles and reads the source directly (M3a).
+                                  .tileKind = LayerTypeInfo::TileKind::Geometry};
 } // namespace
 
 const LayerTypeInfo* ModelLayer::Impl::staticTypeInfo() noexcept {
