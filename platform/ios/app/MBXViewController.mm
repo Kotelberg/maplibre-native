@@ -2952,8 +2952,8 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
       self.mapView.styleURL = qaStyle;
     } else if (![self.mapView.style layerWithIdentifier:@"m6-models"]) {
       NSString *geojson = @"{\"type\":\"FeatureCollection\",\"features\":["
-                           "{\"type\":\"Feature\",\"properties\":{\"bearing\":35,\"size\":60},"
-                           "\"geometry\":{\"type\":\"Point\",\"coordinates\":[30.58452,50.45702]}}]}";
+                           "{\"type\":\"Feature\",\"properties\":{\"bearing\":61,\"size\":85},"
+                           "\"geometry\":{\"type\":\"Point\",\"coordinates\":[30.58438,50.45710]}}]}";
       NSData *data = [geojson dataUsingEncoding:NSUTF8StringEncoding];
       MLNShape *shape = [MLNShape shapeWithData:data encoding:NSUTF8StringEncoding error:nil];
       MLNShapeSource *source = [[MLNShapeSource alloc] initWithIdentifier:@"m6-points"
