@@ -173,6 +173,15 @@ void MLNMapViewMetalImpl::createView() {
   resource.mtlView.contentMode = UIViewContentModeCenter;
   resource.mtlView.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
   resource.mtlView.depthStencilPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+  // 4x MSAA: MTKView renders into a multisampled target and resolves into the
+  // drawable (storeAction MultisampleResolve), with a matching multisampled
+  // depth/stencil. Pipelines pick the sample count up from the render pass
+  // (shaders/mtl/shader_program.cpp). On Apple TBDR GPUs the resolve happens
+  // in tile memory, so the cost is small relative to the edge quality of thin
+  // extrusion silhouettes and 3D models.
+  if ([device supportsTextureSampleCount:4]) {
+    resource.mtlView.sampleCount = 4;
+  }
   resource.mtlView.opaque = mapView.opaque;
   resource.mtlView.layer.opaque = mapView.opaque;
   resource.mtlView.enableSetNeedsDisplay = YES;
