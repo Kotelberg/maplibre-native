@@ -65,10 +65,18 @@ std::shared_ptr<PremultipliedImage> makeContactShadowImage() {
     return image;
 }
 
-// Models fade in across the first ~0.7 zoom past the layer minzoom instead of
-// popping (the same window where fill-extrusion heights grow).
+// Models grow from the ground across z15→16 — the same linear ramp the style
+// applies to fill-extrusion-height — so they rise in sync with the buildings
+// around them (a full-size model fading in over half-grown buildings read as
+// unsynced).
+inline float zoomGrow(double zoom) {
+    return static_cast<float>(std::clamp(zoom - 15.0, 0.0, 1.0));
+}
+
+// Short alpha ramp at the start of the growth window: at grow≈0 the mesh is
+// collapsed onto the ground plane (every face coplanar), which z-fights.
 inline float zoomFade(double zoom) {
-    return static_cast<float>(std::clamp((zoom - 15.0) / 0.7, 0.0, 1.0));
+    return static_cast<float>(std::clamp((zoom - 15.0) / 0.12, 0.0, 1.0));
 }
 
 } // namespace
@@ -329,7 +337,8 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                     matrix::translate(m, m, refFx * worldSize, refFy * worldSize, 0.0);
                     matrix::scale(m, m, pxPerMeter, pxPerMeter, 1.0);
                     matrix::multiply(current.matrix, params.transformParams.nearClippedProjMatrix, m);
-                    const float fade = zoomFade(params.state.getZoom());
+                    // Shadow deepens on the same ramp the model grows on.
+                    const float fade = zoomGrow(params.state.getZoom());
                     current.color = {fade, fade, fade, fade};
                 });
             drawableIds.push_back(interface.addGeometry(shadowVertices, shadowIndices, /*is3D=*/true));
@@ -377,13 +386,14 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                         mat4 m = matrix::identity4();
                         matrix::translate(m, m, refFx * worldSize, refFy * worldSize, 0.0);
                         // x/y baked in ground meters → pixels; z stays meters
-                        // (projection convention).
-                        matrix::scale(m, m, pxPerMeter, pxPerMeter, 1.0);
+                        // (projection convention), scaled by the growth ramp so
+                        // the model rises with the fill-extrusion buildings.
+                        const double zoom = params.state.getZoom();
+                        matrix::scale(m, m, pxPerMeter, pxPerMeter, zoomGrow(zoom));
                         matrix::multiply(current.matrix, params.transformParams.nearClippedProjMatrix, m);
 
-                        // Fade in across the minzoom boundary (premultiplied:
-                        // scale all components).
-                        const float fade = zoomFade(params.state.getZoom());
+                        // Premultiplied: scale all components.
+                        const float fade = zoomFade(zoom);
                         current.color = {
                             baseColor.r * fade, baseColor.g * fade, baseColor.b * fade, baseColor.a * fade};
                     });
