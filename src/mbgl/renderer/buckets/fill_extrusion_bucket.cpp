@@ -215,6 +215,32 @@ void FillExtrusionBucket::addFeature(const GeometryTileFeature& feature,
 
             std::size_t edgeDistance = 0;
 
+#if !MLN_USE_FILL_EXTRUSION_INSTANCING
+            // Crease-aware smooth wall normals. Each wall quad is otherwise
+            // flat-shaded with its edge's perpendicular, so a curved facade —
+            // approximated by many short edges — shows visible facet bands.
+            // We instead give each footprint vertex a normal averaged from its
+            // two adjacent edges when the turn between them is gentle, so the
+            // fragment shader interpolates a smooth gradient along the curve;
+            // sharp building corners (turn above the crease angle) keep their
+            // distinct edge normals and stay crisp.
+            const std::size_t nEdges = nVertices > 1 ? nVertices - 1 : 0;
+            std::vector<Point<double>> edgeNrm(nEdges);
+            for (std::size_t e = 0; e < nEdges; ++e) {
+                edgeNrm[e] = util::unit(
+                    util::perp(convertPoint<double>(ring[e + 1]) - convertPoint<double>(ring[e])));
+            }
+            const bool ringClosed = nVertices > 2 && ring.front() == ring.back();
+            // cos(60°): blend turns up to 60°, leave sharper corners faceted.
+            constexpr double kCreaseCos = 0.5;
+            const auto blendNormal = [&](const Point<double>& base, std::size_t neighbor, bool hasNeighbor) {
+                if (!hasNeighbor) return base;
+                const Point<double>& o = edgeNrm[neighbor];
+                if (base.x * o.x + base.y * o.y > kCreaseCos) return util::unit(base + o);
+                return base;
+            };
+#endif
+
             for (std::size_t i = 0; i < nVertices; i++) {
                 const auto& p1 = ring[i];
 
@@ -248,23 +274,34 @@ void FillExtrusionBucket::addFeature(const GeometryTileFeature& feature,
                     const auto d1 = convertPoint<double>(p1);
                     const auto d2 = convertPoint<double>(p2);
 
-                    const Point<double> perp = util::unit(util::perp(d1 - d2));
+                    // Edge e runs ring[e] -> ring[e+1]; here p2=ring[e], p1=ring[e+1].
+                    const std::size_t e = i - 1;
+                    const Point<double> perp = edgeNrm[e];
+                    const std::size_t prevE = (e == 0) ? nEdges - 1 : e - 1;
+                    const std::size_t nextE = (e + 1 >= nEdges) ? 0 : e + 1;
+                    const bool hasPrev = (e != 0) || ringClosed;
+                    const bool hasNext = (e + 1 < nEdges) || ringClosed;
+                    // Smoothed normal at each endpoint (averaged with the
+                    // adjacent edge across gentle turns, faceted at corners).
+                    const Point<double> nP1 = blendNormal(perp, nextE, hasNext); // at ring[e+1] = p1
+                    const Point<double> nP2 = blendNormal(perp, prevE, hasPrev); // at ring[e]   = p2
+
                     const size_t dist = util::dist<int16_t>(d1, d2);
                     if (edgeDistance + dist > static_cast<size_t>(std::numeric_limits<int16_t>::max())) {
                         edgeDistance = 0;
                     }
 
                     vertices.emplace_back(FillExtrusionBucket::layoutVertex(
-                        p1, perp.x, perp.y, 0, 0, static_cast<uint16_t>(edgeDistance)));
+                        p1, nP1.x, nP1.y, 0, 0, static_cast<uint16_t>(edgeDistance)));
                     vertices.emplace_back(FillExtrusionBucket::layoutVertex(
-                        p1, perp.x, perp.y, 0, 1, static_cast<uint16_t>(edgeDistance)));
+                        p1, nP1.x, nP1.y, 0, 1, static_cast<uint16_t>(edgeDistance)));
 
                     edgeDistance += dist;
 
                     vertices.emplace_back(FillExtrusionBucket::layoutVertex(
-                        p2, perp.x, perp.y, 0, 0, static_cast<uint16_t>(edgeDistance)));
+                        p2, nP2.x, nP2.y, 0, 0, static_cast<uint16_t>(edgeDistance)));
                     vertices.emplace_back(FillExtrusionBucket::layoutVertex(
-                        p2, perp.x, perp.y, 0, 1, static_cast<uint16_t>(edgeDistance)));
+                        p2, nP2.x, nP2.y, 0, 1, static_cast<uint16_t>(edgeDistance)));
 
                     // ┌──────┐
                     // │ 0  1 │ Counter-Clockwise winding order.
