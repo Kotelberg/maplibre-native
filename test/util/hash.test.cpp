@@ -1,6 +1,7 @@
 #include <mbgl/test/util.hpp>
 
 #include <mbgl/util/hash.hpp>
+#include <mbgl/shaders/layer_ubo.hpp> // MLN_USE_FILL_EXTRUSION_INSTANCING
 
 #include <algorithm>
 #include <cstdint>
@@ -140,9 +141,13 @@ TEST(OrderIndependentHash, Shaders) {
                       BuiltIn::FillOutlinePatternShader,
                       BuiltIn::FillOutlineTriangulatedShader,
                       BuiltIn::FillExtrusionShader,
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
                       BuiltIn::FillExtrusionInstancedShader,
+#endif
                       BuiltIn::FillExtrusionPatternShader,
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
                       BuiltIn::FillExtrusionPatternInstancedShader,
+#endif
                       BuiltIn::HeatmapShader,
                       BuiltIn::HeatmapTextureShader,
                       BuiltIn::HillshadePrepareShader,
