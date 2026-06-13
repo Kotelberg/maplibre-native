@@ -174,7 +174,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             casters->addLayerTweaker(
                 std::make_shared<ShadowDepthTweaker>(getID(), evaluatedProperties, shadowMapSize()));
         }
-        if (isRenderable && shadowMap->target()) {
+        if (shadowMap->target()) {
             changes.emplace_back(std::make_unique<AddRenderTargetRequest>(shadowMap->target()));
         }
         if (!shadowDepthGroup) {
