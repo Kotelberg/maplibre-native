@@ -171,8 +171,8 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         shadowMap = std::make_unique<ShadowMap>(shadowMapSize());
         shadowMap->ensure(context, getID());
         if (auto* casters = shadowMap->casterGroup()) {
-            casters->addLayerTweaker(
-                std::make_shared<ShadowDepthTweaker>(getID(), evaluatedProperties, shadowMapSize()));
+            shadowCasterTweaker = std::make_shared<ShadowDepthTweaker>(getID(), evaluatedProperties, shadowMapSize());
+            casters->addLayerTweaker(shadowCasterTweaker);
         }
         if (shadowMap->target()) {
             changes.emplace_back(std::make_unique<AddRenderTargetRequest>(shadowMap->target()));
@@ -495,8 +495,10 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                         shadowDepthGroup->getOrCreateShader(context, propertiesAsUniforms))) {
                     if (auto casterBuilder = context.createDrawableBuilder(layerPrefix + "shadowCaster")) {
                         casterBuilder->setShader(casterShader);
-                        casterBuilder->setIs3D(true);
+                        casterBuilder->setIs3D(false); // RenderTarget renders plain opaque/translucent, not a 3D pass
                         casterBuilder->setEnableColor(true);
+                        casterBuilder->setColorMode(gfx::ColorMode::unblended()); // write packed depth (replace)
+                        casterBuilder->setEnableDepth(false); // no depth attachment yet (see ShadowMap note)
                         casterBuilder->setRenderPass(RenderPass::Opaque);
                         casterBuilder->setCullFaceMode(gfx::CullFaceMode::backCCW());
                         casterBuilder->setRawVertices({}, vertexCount, gfx::AttributeDataType::Short2);

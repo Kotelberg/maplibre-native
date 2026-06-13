@@ -13,8 +13,13 @@ void ShadowMap::ensure(gfx::Context& context, const std::string& layerID) {
     if (renderTarget) {
         return;
     }
+    // NOTE: withDepth=false for now — enabling the depth attachment silently breaks the color
+    // write in the RenderTarget pipeline (mbgl plumbing gap), and color-only is needed so the
+    // caster's packed depth lands in the map. Consequence: no hardware depth test, so the caster
+    // is last-write-wins rather than nearest — inter-building occlusion is unreliable until the
+    // depth-attachment path is fixed (or a single-channel min-blend approach is used). See notes.
     renderTarget = std::make_shared<RenderTarget>(
-        context, Size{mapSize, mapSize}, gfx::TextureChannelDataType::UnsignedByte, /*withDepth=*/true);
+        context, Size{mapSize, mapSize}, gfx::TextureChannelDataType::UnsignedByte, /*withDepth=*/false);
     renderTarget->addLayerGroup(context.createTileLayerGroup(0, /*initialCapacity=*/64, layerID + "-shadow-casters"),
                                 /*replace=*/true);
 }

@@ -50,6 +50,8 @@ private:
     std::unique_ptr<ShadowMap> shadowMap;
     gfx::ShaderGroupPtr fillExtrusionShadowGroup;
     gfx::ShaderGroupPtr shadowDepthGroup;
+    // Strong ref — the caster group stores only a weak_ptr (runTweakers drops expired ones).
+    LayerTweakerPtr shadowCasterTweaker;
 #endif
 
 #if MLN_USE_FILL_EXTRUSION_INSTANCING

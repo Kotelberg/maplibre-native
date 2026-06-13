@@ -71,10 +71,25 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
         return identity;
     }
 
-    // Generous vertical margin so tall building tops stay inside the light frustum. Tuned on-device.
-    const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 3000.0f);
-    const std::vector<vec3> pts = ShadowFrustum::heightExpand(ground, maxHeightWorld);
-    return ShadowFrustum::fit(sunDir, pts, mapSize, /*texelSnapEnabled=*/true);
+    // Tighten the footprint to a bounded box around its centroid. The full tile-cover footprint
+    // is far larger than the visible buildings; a tilted light then rotates that ground spread
+    // into the depth axis and crushes building-height depth precision. Clamp to a modest radius
+    // (world units; env-tunable) so the shadow map's depth range is dominated by buildings.
+    double cx = 0.0, cy = 0.0;
+    for (const auto& p : ground) {
+        cx += p[0];
+        cy += p[1];
+    }
+    cx /= static_cast<double>(ground.size());
+    cy /= static_cast<double>(ground.size());
+    const double radius = envFloat("MLN_SHADOW_RADIUS", 700.0f);
+    const std::vector<vec3> footprint = {
+        {cx - radius, cy - radius, 0.0}, {cx + radius, cy - radius, 0.0},
+        {cx - radius, cy + radius, 0.0}, {cx + radius, cy + radius, 0.0}};
+
+    const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f);
+    const std::vector<vec3> pts = ShadowFrustum::heightExpand(footprint, maxHeightWorld);
+    return ShadowFrustum::fit(sunDir, pts, mapSize, /*texelSnapEnabled=*/false);
 }
 
 void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParameters& parameters) {

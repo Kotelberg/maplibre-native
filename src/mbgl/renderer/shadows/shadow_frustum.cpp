@@ -85,11 +85,27 @@ mat4 ShadowFrustum::fit(const vec3& sunDir,
         }
     }
 
+    // Small depth margin so casters exactly on the fitted near/far plane aren't clipped,
+    // without over-expanding the range (which would crush the usable depth precision).
+    {
+        const double zPad = (box.max[2] - box.min[2]) * 0.02 + 1.0;
+        box.min[2] -= zPad;
+        box.max[2] += zPad;
+    }
+
     mat4 ortho;
     matrix::ortho(ortho, box.min[0], box.max[0], box.min[1], box.max[1], box.min[2], box.max[2]);
 
     mat4 out;
     matrix::multiply(out, ortho, view);
+
+    // matrix::ortho yields GL-convention clip depth [-1,1]; the Metal shadow map (and the
+    // receiver's ndc.z) need [0,1]. Premultiply the standard z-remap z' = 0.5*z + 0.5*w,
+    // which only rewrites the z row (column-major indices 2/6/10/14 vs 3/7/11/15).
+    out[2] = 0.5 * out[2] + 0.5 * out[3];
+    out[6] = 0.5 * out[6] + 0.5 * out[7];
+    out[10] = 0.5 * out[10] + 0.5 * out[11];
+    out[14] = 0.5 * out[14] + 0.5 * out[15];
     return out;
 }
 
