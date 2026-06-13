@@ -207,6 +207,12 @@ enum {
 };
 
 enum {
+    idFillExtrusionShadowDrawableUBO = getEnumValue(idDrawableReservedVertexOnlyUBO, drawableUBOStartId),
+    idFillExtrusionShadowPropsUBO = getEnumValue(drawableReservedUBOCount, idFillExtrusionShadowDrawableUBO + 1),
+    fillExtrusionShadowUBOCount
+};
+
+enum {
     idModelBloomDrawableUBO = getEnumValue(drawableReservedUBOCount, drawableUBOStartId), // UBO
     modelBloomUBOCount
 };
@@ -275,6 +281,7 @@ static constexpr uint32_t maxUBOCountPerShader = std::max({static_cast<uint32_t>
                                                            static_cast<uint32_t>(colorReliefUBOCount),
                                                            static_cast<uint32_t>(customGeometryUBOCount),
                                                            static_cast<uint32_t>(shadowDepthUBOCount),
+                                                           static_cast<uint32_t>(fillExtrusionShadowUBOCount),
                                                            static_cast<uint32_t>(debugUBOCount),
                                                            static_cast<uint32_t>(fillUBOCount),
                                                            static_cast<uint32_t>(fillExtrusionUBOCount),
@@ -318,6 +325,11 @@ enum {
 };
 
 enum { shadowDepthTextureCount }; // depth-only caster: no textures
+
+enum {
+    idFillExtrusionShadowTexture,
+    fillExtrusionShadowTextureCount
+};
 
 enum {
     idModelBloomImageTexture,
@@ -390,6 +402,7 @@ static constexpr uint32_t maxTextureCountPerShader = std::max({static_cast<uint3
                                                                static_cast<uint32_t>(collisionTextureCount),
                                                                static_cast<uint32_t>(customGeometryTextureCount),
                                                                static_cast<uint32_t>(shadowDepthTextureCount),
+                                                               static_cast<uint32_t>(fillExtrusionShadowTextureCount),
                                                                static_cast<uint32_t>(customSymbolTextureCount),
                                                                static_cast<uint32_t>(debugTextureCount),
                                                                static_cast<uint32_t>(fillTextureCount),
