@@ -66,12 +66,22 @@ public:
     struct GeometryVertex {
         std::array<float, 3> position;
         std::array<float, 2> texcoords;
+        // Smooth surface normal in model space, used by the optional fresnel
+        // rim highlight. Defaults to up so geometry that does not supply
+        // normals (debug cube, examples) keeps working unchanged.
+        std::array<float, 3> normal = {0.f, 0.f, 1.f};
     };
 
     struct GeometryOptions {
         mat4 matrix = matrix::identity4();
         Color color = Color::white();
         gfx::Texture2DPtr texture;
+        // Fresnel rim highlight (model selection). rgb = rim colour, a =
+        // intensity; a == 0 disables it entirely (no cost, no visual change).
+        Color highlight = {0.f, 0.f, 0.f, 0.f};
+        // xyz = view direction in model space, w = rim power. Set per-frame by
+        // the layer tweaker for the highlighted instance.
+        std::array<float, 4> viewAxis = {0.f, 0.f, 1.f, 2.f};
     };
 
     template <typename T>

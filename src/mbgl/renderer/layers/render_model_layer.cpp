@@ -14,6 +14,7 @@
 #include <mbgl/util/projection.hpp>
 #include <mbgl/util/tile_cover.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <unordered_set>
 
@@ -238,6 +239,9 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         float footprint;
     };
     std::map<std::string, std::vector<Instance>> groups;
+    // Selected instances render in their own (single-instance) groups with the
+    // fresnel rim highlight on, so they are excluded from the batched groups.
+    std::vector<std::pair<std::string, Instance>> highlighted;
     std::vector<Instance> cubes;
 
     for (const auto& placed : features) {
@@ -248,8 +252,21 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                           evaluateFor(layerImpl.modelRotation, tileFeature, 0.0f),
                           evaluateFor(layerImpl.modelFootprint, tileFeature, 1.0f)};
         const std::string modelId = evaluateFor(layerImpl.modelId, tileFeature, std::string{});
+        // Per-feature `selected` boolean property drives the rim highlight.
+        bool selected = false;
+        if (const auto value = tileFeature.getValue("selected")) {
+            if (value->is<bool>()) {
+                selected = value->get<bool>();
+            } else if (value->is<double>()) {
+                selected = value->get<double>() != 0.0;
+            }
+        }
         if (!modelId.empty() && layerImpl.modelAssets.count(modelId)) {
-            groups[modelId].push_back(instance);
+            if (selected) {
+                highlighted.emplace_back(modelId, instance);
+            } else {
+                groups[modelId].push_back(instance);
+            }
         } else {
             cubes.push_back(instance);
         }
@@ -257,7 +274,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
 
     using Vertex = CustomDrawableLayerHost::Interface::GeometryVertex;
 
-    for (auto& [modelId, instances] : groups) {
+    const auto bakeGroup = [&](const std::string& modelId, std::vector<Instance>& instances, bool highlight) {
         auto cacheIt = meshCache.find(modelId);
         if (cacheIt == meshCache.end()) {
             cacheIt = meshCache.emplace(modelId, model::loadGlbMesh(layerImpl.modelAssets.at(modelId))).first;
@@ -265,7 +282,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         const auto& baked = cacheIt->second;
         if (!baked.valid) {
             cubes.insert(cubes.end(), instances.begin(), instances.end());
-            continue;
+            return;
         }
 
         // All instances of a group bake relative to the first instance's
@@ -374,7 +391,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                 if (!chunkVertices || chunkVertices->empty()) return;
                 interface.setGeometryOptions(partOptions);
                 interface.setGeometryTweakerCallback(
-                    [refFx, refFy, lat0, baseColor](
+                    [refFx, refFy, lat0, baseColor, highlight](
                         gfx::Drawable&,
                         const PaintParameters& params,
                         CustomDrawableLayerHost::Interface::GeometryOptions& current) {
@@ -396,6 +413,44 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                         const float fade = zoomFade(zoom);
                         current.color = {
                             baseColor.r * fade, baseColor.g * fade, baseColor.b * fade, baseColor.a * fade};
+
+                        if (highlight) {
+                            // Breathing yellow fresnel rim on the selected model.
+                            // Driven by a wall clock; the JS ground-glow pulse
+                            // keeps the map repainting so this stays animated.
+                            const auto now = std::chrono::steady_clock::now();
+                            static const auto t0 = now;
+                            const double t = std::chrono::duration<double>(now - t0).count();
+                            const float pulse = 0.55f + 0.45f * static_cast<float>(
+                                                                   std::sin(t * (2.0 * M_PI / 1.6)));
+                            current.highlight = {0.992f, 0.725f, 0.071f, pulse * fade};
+
+                            // View direction in the model's (east, south, up)
+                            // meter frame — matches the baked vertex normals.
+                            // Use an isotropic z-scale (not the growth ramp) so
+                            // the matrix is never singular near z15.
+                            mat4 mva = matrix::identity4();
+                            matrix::translate(mva, mva, refFx * worldSize, refFy * worldSize, 0.0);
+                            matrix::scale(mva, mva, pxPerMeter, pxPerMeter, pxPerMeter);
+                            mat4 fullva;
+                            matrix::multiply(fullva, params.transformParams.nearClippedProjMatrix, mva);
+                            mat4 inv;
+                            if (matrix::invert(inv, fullva)) {
+                                vec4 np, fp;
+                                matrix::transformMat4(np, vec4{0.0, 0.0, -1.0, 1.0}, inv);
+                                matrix::transformMat4(fp, vec4{0.0, 0.0, 1.0, 1.0}, inv);
+                                const double vx = fp[0] / fp[3] - np[0] / np[3];
+                                const double vy = fp[1] / fp[3] - np[1] / np[3];
+                                const double vz = fp[2] / fp[3] - np[2] / np[3];
+                                const double len = std::sqrt(vx * vx + vy * vy + vz * vz);
+                                if (len > 1e-9) {
+                                    current.viewAxis = {static_cast<float>(vx / len),
+                                                        static_cast<float>(vy / len),
+                                                        static_cast<float>(vz / len),
+                                                        2.5f};
+                                }
+                            }
+                        }
                     });
                 drawableIds.push_back(interface.addGeometry(chunkVertices, chunkIndices, /*is3D=*/true));
                 chunkVertices.reset();
@@ -423,15 +478,25 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                 matrix::scale(
                     f, f, inst.size * inst.footprint, inst.size * inst.footprint, inst.size);
 
+                // Rotation-only transform for the normal (uniform scale leaves
+                // it unchanged; the rare non-1 footprint stretch is ignored —
+                // negligible for the rim's silhouette).
+                mat4 rotOnly = matrix::identity4();
+                matrix::rotate_z(rotOnly, rotOnly, util::deg2rad(inst.rotationDeg));
+
                 const auto base = static_cast<uint16_t>(chunkVertices->elements());
                 for (std::size_t vi = 0; vi < partVertexCount; ++vi) {
                     const Vertex& v = part.vertices->at(vi);
                     const vec4 p{v.position[0], v.position[1], v.position[2], 1.0};
                     vec4 out;
                     matrix::transformMat4(out, p, f);
+                    const vec4 n{v.normal[0], v.normal[1], v.normal[2], 0.0};
+                    vec4 outN;
+                    matrix::transformMat4(outN, n, rotOnly);
                     chunkVertices->emplace_back(Vertex{
                         {static_cast<float>(out[0]), static_cast<float>(out[1]), static_cast<float>(out[2])},
-                        v.texcoords});
+                        v.texcoords,
+                        {static_cast<float>(outN[0]), static_cast<float>(outN[1]), static_cast<float>(outN[2])}});
                 }
                 const auto& idx = part.indices->vector();
                 for (std::size_t ii = 0; ii + 2 < idx.size(); ii += 3) {
@@ -442,6 +507,15 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
             }
             flushChunk();
         }
+    };
+
+    for (auto& [modelId, instances] : groups) {
+        bakeGroup(modelId, instances, /*highlight=*/false);
+    }
+    // Selected instances: each its own single-instance group with the rim on.
+    for (auto& [modelId, inst] : highlighted) {
+        std::vector<Instance> one{inst};
+        bakeGroup(modelId, one, /*highlight=*/true);
     }
 
     // Unresolved features keep the per-feature placeholder cube (rare).

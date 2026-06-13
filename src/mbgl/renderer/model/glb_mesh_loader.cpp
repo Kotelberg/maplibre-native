@@ -53,6 +53,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -195,6 +196,44 @@ BakedModel loadGlbMesh(const std::string& path) {
     const float cy = (minY + maxY) * 0.5f;
     const float invH = 1.0f / height;
 
+    // Smooth vertex normals for the fresnel rim highlight: accumulate
+    // area-weighted face normals per (quantized) position so coincident
+    // vertices share one smooth normal. Keyed in the original model space;
+    // the uniform normalize-to-unit-height transform applied at emit preserves
+    // the direction. The rim uses abs(dot), so winding/sign does not matter.
+    const double quant = std::max(1e-6, static_cast<double>(height) * 1e-4);
+    const auto keyOf = [&](const std::array<float, 3>& p) {
+        return std::array<int64_t, 3>{std::llround(p[0] / quant),
+                                      std::llround(p[1] / quant),
+                                      std::llround(p[2] / quant)};
+    };
+    std::map<std::array<int64_t, 3>, std::array<double, 3>> normalAccum;
+    for (auto& [bucket, tris] : byMaterial) {
+        for (const RawTri& tri : tris) {
+            const float ux = tri.p[1][0] - tri.p[0][0], uy = tri.p[1][1] - tri.p[0][1],
+                        uz = tri.p[1][2] - tri.p[0][2];
+            const float vx = tri.p[2][0] - tri.p[0][0], vy = tri.p[2][1] - tri.p[0][1],
+                        vz = tri.p[2][2] - tri.p[0][2];
+            const double nx = static_cast<double>(uy) * vz - static_cast<double>(uz) * vy;
+            const double ny = static_cast<double>(uz) * vx - static_cast<double>(ux) * vz;
+            const double nz = static_cast<double>(ux) * vy - static_cast<double>(uy) * vx;
+            for (int k = 0; k < 3; ++k) {
+                auto& acc = normalAccum[keyOf(tri.p[k])];
+                acc[0] += nx;
+                acc[1] += ny;
+                acc[2] += nz;
+            }
+        }
+    }
+    const auto smoothNormalOf = [&](const std::array<float, 3>& p) -> std::array<float, 3> {
+        const auto it = normalAccum.find(keyOf(p));
+        if (it == normalAccum.end()) return {0.f, 0.f, 1.f};
+        const double nx = it->second[0], ny = it->second[1], nz = it->second[2];
+        const double len = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (len < 1e-12) return {0.f, 0.f, 1.f};
+        return {static_cast<float>(nx / len), static_cast<float>(ny / len), static_cast<float>(nz / len)};
+    };
+
     // Emit parts: per material, split into <=64k-vertex chunks (uint16 indices).
     constexpr size_t kMaxVerts = 65532;
     for (auto& [key, tris] : byMaterial) {
@@ -228,7 +267,8 @@ BakedModel loadGlbMesh(const std::string& path) {
                     part.vertices->emplace_back(
                         Vertex{.position = {(tri.p[k][0] - cx) * invH, (tri.p[k][1] - cy) * invH,
                                             (tri.p[k][2] - minZ) * invH},
-                               .texcoords = tri.t[k]});
+                               .texcoords = tri.t[k],
+                               .normal = smoothNormalOf(tri.p[k])});
                 }
                 part.indices->emplace_back(base, static_cast<uint16_t>(base + 1), static_cast<uint16_t>(base + 2));
             }

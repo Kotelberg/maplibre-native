@@ -104,6 +104,7 @@ const std::vector<UniformBlockInfo> CustomGeometryInfo::uniformBlocks = {
 const std::vector<AttributeInfo> CustomGeometryInfo::attributes = {
     AttributeInfo{"a_pos", idCustomGeometryPosVertexAttribute},
     AttributeInfo{"a_uv", idCustomGeometryTexVertexAttribute},
+    AttributeInfo{"a_normal", idCustomGeometryNormalVertexAttribute},
 };
 const std::vector<TextureInfo> CustomGeometryInfo::textures = {
     TextureInfo{"u_image", idCustomGeometryTexture},
