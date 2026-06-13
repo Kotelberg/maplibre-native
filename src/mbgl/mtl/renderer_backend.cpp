@@ -25,6 +25,7 @@
 #include <mbgl/shaders/mtl/heatmap_texture.hpp>
 #include <mbgl/shaders/mtl/hillshade.hpp>
 #include <mbgl/shaders/mtl/model_bloom.hpp>
+#include <mbgl/shaders/mtl/shadow_depth.hpp>
 #include <mbgl/shaders/mtl/hillshade_prepare.hpp>
 #include <mbgl/shaders/mtl/line.hpp>
 #include <mbgl/shaders/mtl/location_indicator.hpp>
@@ -128,6 +129,7 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
                   shaders::BuiltIn::HeatmapShader,
                   shaders::BuiltIn::HeatmapTextureShader,
                   shaders::BuiltIn::ModelBloomShader,
+                  shaders::BuiltIn::ShadowDepthShader,
                   shaders::BuiltIn::HillshadeShader,
                   shaders::BuiltIn::HillshadePrepareShader,
                   shaders::BuiltIn::ColorReliefShader,

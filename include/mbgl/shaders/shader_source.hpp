@@ -31,6 +31,7 @@ enum class BuiltIn {
     HeatmapShader,
     HeatmapTextureShader,
     ModelBloomShader,
+    ShadowDepthShader,
     HillshadePrepareShader,
     ColorReliefShader,
     HillshadeShader,

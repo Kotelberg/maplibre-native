@@ -202,6 +202,11 @@ enum {
 };
 
 enum {
+    idShadowDepthDrawableUBO = getEnumValue(drawableReservedUBOCount, drawableUBOStartId), // UBO
+    shadowDepthUBOCount
+};
+
+enum {
     idModelBloomDrawableUBO = getEnumValue(drawableReservedUBOCount, drawableUBOStartId), // UBO
     modelBloomUBOCount
 };
@@ -269,6 +274,7 @@ static constexpr uint32_t maxUBOCountPerShader = std::max({static_cast<uint32_t>
                                                            static_cast<uint32_t>(collisionUBOCount),
                                                            static_cast<uint32_t>(colorReliefUBOCount),
                                                            static_cast<uint32_t>(customGeometryUBOCount),
+                                                           static_cast<uint32_t>(shadowDepthUBOCount),
                                                            static_cast<uint32_t>(debugUBOCount),
                                                            static_cast<uint32_t>(fillUBOCount),
                                                            static_cast<uint32_t>(fillExtrusionUBOCount),
@@ -310,6 +316,8 @@ enum {
     idCustomGeometryTexture,
     customGeometryTextureCount
 };
+
+enum { shadowDepthTextureCount }; // depth-only caster: no textures
 
 enum {
     idModelBloomImageTexture,
@@ -381,6 +389,7 @@ static constexpr uint32_t maxTextureCountPerShader = std::max({static_cast<uint3
                                                                static_cast<uint32_t>(clippingMaskTextureCount),
                                                                static_cast<uint32_t>(collisionTextureCount),
                                                                static_cast<uint32_t>(customGeometryTextureCount),
+                                                               static_cast<uint32_t>(shadowDepthTextureCount),
                                                                static_cast<uint32_t>(customSymbolTextureCount),
                                                                static_cast<uint32_t>(debugTextureCount),
                                                                static_cast<uint32_t>(fillTextureCount),
@@ -432,6 +441,13 @@ enum {
     idCustomGeometryPosVertexAttribute,
     idCustomGeometryTexVertexAttribute,
     customGeometryVertexAttributeCount
+};
+
+enum {
+    idShadowDepthPosVertexAttribute,
+    idShadowDepthBaseVertexAttribute,
+    idShadowDepthHeightVertexAttribute,
+    shadowDepthVertexAttributeCount
 };
 
 enum {
@@ -575,6 +591,7 @@ static constexpr uint32_t maxVertexAttributeCountPerShader = std::max({
     static_cast<uint32_t>(clippingMaskVertexAttributeCount),
     static_cast<uint32_t>(collisionVertexAttributeCount),
     static_cast<uint32_t>(customGeometryVertexAttributeCount),
+    static_cast<uint32_t>(shadowDepthVertexAttributeCount),
     static_cast<uint32_t>(customSymbolVertexAttributeCount),
     static_cast<uint32_t>(debugVertexAttributeCount),
     static_cast<uint32_t>(fillVertexAttributeCount),
