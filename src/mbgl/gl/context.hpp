@@ -211,6 +211,8 @@ private:
 
 public:
     std::unique_ptr<gfx::OffscreenTexture> createOffscreenTexture(Size, gfx::TextureChannelDataType) override;
+    std::unique_ptr<gfx::OffscreenTexture> createOffscreenTexture(
+        Size, gfx::TextureChannelDataType, bool depth, bool stencil) override;
 
 private:
     std::unique_ptr<gfx::RenderbufferResource> createRenderbufferResource(gfx::RenderbufferPixelType,

@@ -83,6 +83,11 @@ public:
 
     virtual std::unique_ptr<OffscreenTexture> createOffscreenTexture(Size, TextureChannelDataType) = 0;
 
+    /// Depth/stencil-capable variant. Metal/Vulkan/WebGPU create real depth attachments;
+    /// the GL backend falls back to a color-only target (no depth attachment).
+    virtual std::unique_ptr<OffscreenTexture> createOffscreenTexture(
+        Size, TextureChannelDataType, bool depth, bool stencil) = 0;
+
     template <RenderbufferPixelType pixelType>
     Renderbuffer<pixelType> createRenderbuffer(const Size size) {
         return {size, createRenderbufferResource(pixelType, size)};

@@ -10,9 +10,13 @@
 
 namespace mbgl {
 
-RenderTarget::RenderTarget(gfx::Context& context_, const Size size, const gfx::TextureChannelDataType type)
-    : context(context_) {
-    offscreenTexture = context.createOffscreenTexture(size, type);
+RenderTarget::RenderTarget(gfx::Context& context_,
+                           const Size size,
+                           const gfx::TextureChannelDataType type,
+                           bool withDepth_)
+    : context(context_),
+      withDepth(withDepth_) {
+    offscreenTexture = context.createOffscreenTexture(size, type, withDepth_, /*stencil=*/false);
 }
 
 RenderTarget::~RenderTarget() {}
@@ -65,11 +69,14 @@ void RenderTarget::upload(gfx::UploadPass& uploadPass) {
 }
 
 void RenderTarget::render(RenderOrchestrator& orchestrator, const RenderTree& renderTree, PaintParameters& parameters) {
-    parameters.renderPass = parameters.encoder->createRenderPass("render target",
-                                                                 {.renderable = *offscreenTexture,
-                                                                  .clearColor = Color{0.0f, 0.0f, 0.0f, 1.0f},
-                                                                  .clearDepth = {},
-                                                                  .clearStencil = {}});
+    parameters.renderPass = parameters.encoder->createRenderPass(
+        "render target",
+        {.renderable = *offscreenTexture,
+         // Depth-capable targets (shadow maps) clear color to white == packed-far depth
+         // and clear depth to 1.0 so the nearest caster wins; color-only targets keep black.
+         .clearColor = withDepth ? Color{1.0f, 1.0f, 1.0f, 1.0f} : Color{0.0f, 0.0f, 0.0f, 1.0f},
+         .clearDepth = withDepth ? std::optional<float>(1.0f) : std::optional<float>{},
+         .clearStencil = {}});
 
     const gfx::ScissorRect prevScissorRect = parameters.scissorRect;
     const auto& size = getTexture()->getSize();

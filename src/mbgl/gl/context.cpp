@@ -439,6 +439,17 @@ std::unique_ptr<gfx::OffscreenTexture> Context::createOffscreenTexture(const Siz
     return std::make_unique<gl::OffscreenTexture>(*this, size, type);
 }
 
+std::unique_ptr<gfx::OffscreenTexture> Context::createOffscreenTexture(const Size size,
+                                                                       const gfx::TextureChannelDataType type,
+                                                                       bool /*depth*/,
+                                                                       bool /*stencil*/) {
+    MLN_TRACE_FUNC();
+
+    // GL OffscreenTexture is color-only; depth attachments are unsupported here. Shadows are
+    // Metal-only in S1, so this depth-requesting fallback is never exercised on the shadow path.
+    return std::make_unique<gl::OffscreenTexture>(*this, size, type);
+}
+
 std::unique_ptr<gfx::DrawScopeResource> Context::createDrawScopeResource() {
     MLN_TRACE_FUNC();
 
