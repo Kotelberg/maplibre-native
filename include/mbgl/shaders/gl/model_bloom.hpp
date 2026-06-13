@@ -32,18 +32,19 @@ layout (std140) uniform ModelBloomDrawableUBO {
 
 void main() {
     float mask = texture(u_image, v_uv).a;
-    // Two-ring disk blur of the mask coverage.
+    // Wide two-ring disk blur of the silhouette coverage.
     float blur = 0.0;
-    for (int i = 0; i < 12; i++) {
-        float a = (float(i) / 12.0) * 6.2831853;
-        vec2 dir = vec2(cos(a), sin(a)) * u_texel * u_radius;
-        blur += texture(u_image, v_uv + dir).a * 0.6;
-        blur += texture(u_image, v_uv + dir * 0.5).a * 1.0;
+    for (int i = 0; i < 16; i++) {
+        float a = (float(i) / 16.0) * 6.2831853;
+        vec2 d = vec2(cos(a), sin(a)) * u_texel * u_radius;
+        blur += texture(u_image, v_uv + d).a;
+        blur += texture(u_image, v_uv + d * 0.55).a;
     }
-    blur /= (12.0 * 1.6);
-    // Outward halo only: blurred coverage minus the solid silhouette.
-    float halo = clamp(blur - mask, 0.0, 1.0);
-    halo = pow(halo, 0.75);
+    blur /= 32.0;
+    // Outward halo only: the blurred coverage minus the solid silhouette,
+    // amplified so the soft outer falloff actually reads.
+    float halo = clamp((blur - mask) * 1.6, 0.0, 1.0);
+    halo = pow(halo, 0.7);
     fragColor = vec4(u_color.rgb, 1.0) * (halo * u_color.a);
 
 #ifdef OVERDRAW_INSPECTOR
