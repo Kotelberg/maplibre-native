@@ -609,6 +609,8 @@ list(APPEND SRC_FILES
     ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/render_layer.hpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/render_light.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/render_light.hpp
+    ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/shadows/shadow_sun.cpp
+    ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/shadows/shadow_frustum.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/render_orchestrator.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/render_orchestrator.hpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/render_pass.hpp
