@@ -202,6 +202,11 @@ enum {
 };
 
 enum {
+    idModelBloomDrawableUBO = getEnumValue(drawableReservedUBOCount, drawableUBOStartId), // UBO
+    modelBloomUBOCount
+};
+
+enum {
     idCustomSymbolDrawableUBO = getEnumValue(idDrawableReservedVertexOnlyUBO, drawableUBOStartId), // UBO
     customSymbolUBOCount = getEnumValue(drawableReservedUBOCount, idCustomSymbolDrawableUBO + 1)
 };
@@ -304,6 +309,11 @@ enum {
 enum {
     idCustomGeometryTexture,
     customGeometryTextureCount
+};
+
+enum {
+    idModelBloomImageTexture,
+    modelBloomTextureCount
 };
 
 enum {
@@ -466,6 +476,11 @@ enum {
     idFillExtrusionPatternToVertexAttribute,
 
     fillExtrusionVertexAttributeCount
+};
+
+enum {
+    idModelBloomPosVertexAttribute,
+    modelBloomVertexAttributeCount
 };
 
 enum {
