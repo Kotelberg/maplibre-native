@@ -28,7 +28,7 @@ struct ShaderSource<BuiltIn::ShadowDepthShader, gfx::Backend::Type::Metal> {
     static constexpr auto vertexMainFunction = "vertexMain";
     static constexpr auto fragmentMainFunction = "fragmentMain";
 
-    static const std::array<AttributeInfo, 3> attributes;
+    static const std::array<AttributeInfo, 4> attributes;
     static constexpr std::array<AttributeInfo, 0> instanceAttributes{};
     static constexpr std::array<TextureInfo, 0> textures{};
 
@@ -36,9 +36,15 @@ struct ShaderSource<BuiltIn::ShadowDepthShader, gfx::Backend::Type::Metal> {
     static constexpr auto source = R"(
 
 struct VertexStage {
-    short2 pos    [[attribute(0)]];
-    float  base   [[attribute(1)]];
-    float  height [[attribute(2)]];
+    short2 pos [[attribute(0)]];
+    // Packed wall normal + edge distance; LSB of x is the top/bottom flag (matches FE).
+    short4 normal_ed [[attribute(1)]];
+#if !defined(HAS_UNIFORM_u_base)
+    float2 base [[attribute(2)]];
+#endif
+#if !defined(HAS_UNIFORM_u_height)
+    float2 height [[attribute(3)]];
+#endif
 };
 
 struct FragmentStage {
@@ -57,8 +63,19 @@ float4 packDepth(float depth) {
 
 FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
                                 device const ShadowDepthDrawableUBO& drawable [[buffer(idShadowDepthDrawableUBO)]]) {
-    // Extrude to the top of the building (matches the non-pattern FE vertex z = max(height, base)).
-    const float z = max(vertx.height, vertx.base);
+#if defined(HAS_UNIFORM_u_base)
+    const float base = 0.0;
+#else
+    const float base = max(unpack_mix_float(vertx.base, 0.0), 0.0);
+#endif
+#if defined(HAS_UNIFORM_u_height)
+    const float height = 0.0;
+#else
+    const float height = max(unpack_mix_float(vertx.height, 0.0), 0.0);
+#endif
+    // Match the FE vertex: t (top/bottom flag) selects height vs base for z.
+    const float t = float(vertx.normal_ed.x & 1);
+    const float z = (t > 0.0) ? height : base;
     return { .position = drawable.light_matrix * float4(float2(vertx.pos), z, 1.0) };
 }
 

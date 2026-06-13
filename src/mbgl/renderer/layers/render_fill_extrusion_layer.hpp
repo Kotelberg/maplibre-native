@@ -7,6 +7,8 @@
 
 namespace mbgl {
 
+class ShadowMap;
+
 class RenderFillExtrusionLayer final : public RenderLayer {
 public:
     explicit RenderFillExtrusionLayer(Immutable<style::FillExtrusionLayer::Impl>);
@@ -40,6 +42,15 @@ private:
 
     gfx::ShaderGroupPtr fillExtrusionGroup;
     gfx::ShaderGroupPtr fillExtrusionPatternGroup;
+
+#if MLN_RENDER_BACKEND_METAL
+    // Directional-shadow path (S1, iOS/Metal-only). Gated at runtime by the 3D-enhancements
+    // flag; when off, none of this is created and the stock FE path is used unchanged.
+    void markLayerRenderable(bool willRender, UniqueChangeRequestVec&) override;
+    std::unique_ptr<ShadowMap> shadowMap;
+    gfx::ShaderGroupPtr fillExtrusionShadowGroup;
+    gfx::ShaderGroupPtr shadowDepthGroup;
+#endif
 
 #if MLN_USE_FILL_EXTRUSION_INSTANCING
     gfx::ShaderGroupPtr fillExtrusionInstancedGroup;

@@ -26,6 +26,15 @@
 #include <mbgl/shaders/fill_extrusion_layer_ubo.hpp>
 #include <mbgl/shaders/shader_program_base.hpp>
 
+#if MLN_RENDER_BACKEND_METAL
+#include <mbgl/renderer/change_request.hpp>
+#include <mbgl/renderer/shadows/shadow_map.hpp>
+#include <mbgl/renderer/shadows/shadow_tweakers.hpp>
+#include <mbgl/shaders/shader_defines.hpp>
+#include <cstdlib>
+#include <string_view>
+#endif
+
 namespace mbgl {
 
 using namespace style;
@@ -38,6 +47,27 @@ inline const FillExtrusionLayer::Impl& impl_cast(const Immutable<style::Layer::I
     return static_cast<const FillExtrusionLayer::Impl&>(*impl);
 }
 
+#if MLN_RENDER_BACKEND_METAL
+// Master runtime gate for the directional-shadow path. Default ON, but force-checked here
+// against the env override. (Defaults to off in the unverified S1 state — see project notes —
+// flip the default to true once on-sim-verified.)
+bool shadowsEnabled() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("MLN_RENDER_3D_ENHANCEMENTS");
+        return v && std::string_view(v) == "1"; // opt-in until on-sim-verified
+    }();
+    return enabled;
+}
+
+uint32_t shadowMapSize() {
+    static const uint32_t size = [] {
+        const char* v = std::getenv("MLN_SHADOW_MAP_SIZE");
+        return v ? static_cast<uint32_t>(std::atoi(v)) : 1024u;
+    }();
+    return size;
+}
+#endif
+
 } // namespace
 
 RenderFillExtrusionLayer::RenderFillExtrusionLayer(Immutable<style::FillExtrusionLayer::Impl> _impl)
@@ -47,6 +77,19 @@ RenderFillExtrusionLayer::RenderFillExtrusionLayer(Immutable<style::FillExtrusio
 }
 
 RenderFillExtrusionLayer::~RenderFillExtrusionLayer() = default;
+
+#if MLN_RENDER_BACKEND_METAL
+void RenderFillExtrusionLayer::markLayerRenderable(bool willRender, UniqueChangeRequestVec& changes) {
+    RenderLayer::markLayerRenderable(willRender, changes);
+    if (shadowMap && shadowMap->target()) {
+        if (willRender) {
+            changes.emplace_back(std::make_unique<AddRenderTargetRequest>(shadowMap->target()));
+        } else {
+            changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(shadowMap->target()));
+        }
+    }
+}
+#endif
 
 void RenderFillExtrusionLayer::transition(const TransitionParameters& parameters) {
     unevaluated = impl_cast(baseImpl).paint.transitioned(parameters, std::move(unevaluated));
@@ -121,8 +164,37 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         }
     }
 
+    bool useShadows = false;
+#if MLN_RENDER_BACKEND_METAL
+    useShadows = shadowsEnabled();
+    if (useShadows && !shadowMap) {
+        shadowMap = std::make_unique<ShadowMap>(shadowMapSize());
+        shadowMap->ensure(context, getID());
+        if (auto* casters = shadowMap->casterGroup()) {
+            casters->addLayerTweaker(
+                std::make_shared<ShadowDepthTweaker>(getID(), evaluatedProperties, shadowMapSize()));
+        }
+        if (isRenderable && shadowMap->target()) {
+            changes.emplace_back(std::make_unique<AddRenderTargetRequest>(shadowMap->target()));
+        }
+        if (!shadowDepthGroup) {
+            shadowDepthGroup = shaders.getShaderGroup("ShadowDepthShader");
+        }
+        if (!fillExtrusionShadowGroup) {
+            fillExtrusionShadowGroup = shaders.getShaderGroup("FillExtrusionShadowShader");
+        }
+    }
+#endif
+
     if (!layerTweaker) {
-        layerTweaker = std::make_shared<FillExtrusionLayerTweaker>(getID(), evaluatedProperties);
+#if MLN_RENDER_BACKEND_METAL
+        if (useShadows) {
+            layerTweaker = std::make_shared<FillExtrusionShadowTweaker>(getID(), evaluatedProperties, shadowMapSize());
+        } else
+#endif
+        {
+            layerTweaker = std::make_shared<FillExtrusionLayerTweaker>(getID(), evaluatedProperties);
+        }
         layerGroup->addLayerTweaker(layerTweaker);
     }
 
@@ -132,6 +204,12 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
     if (!fillExtrusionPatternGroup) {
         fillExtrusionPatternGroup = shaders.getShaderGroup("FillExtrusionPatternShader");
     }
+#if MLN_RENDER_BACKEND_METAL
+    // Non-pattern buildings receive shadows: use the shadow-receiving shader group + texture.
+    if (useShadows && fillExtrusionShadowGroup) {
+        fillExtrusionGroup = fillExtrusionShadowGroup;
+    }
+#endif
 
     auto* tileLayerGroup = static_cast<TileLayerGroup*>(layerGroup.get());
 
@@ -292,6 +370,11 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                 if (tweaker) {
                     builder->addTweaker(tweaker);
                 }
+#if MLN_RENDER_BACKEND_METAL
+                if (useShadows && shadowMap) {
+                    builder->setTexture(shadowMap->texture(), idFillExtrusionShadowTexture);
+                }
+#endif
                 depthBuilder = std::move(builder);
             }
         }
@@ -307,6 +390,11 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                 if (tweaker) {
                     builder->addTweaker(tweaker);
                 }
+#if MLN_RENDER_BACKEND_METAL
+                if (useShadows && shadowMap) {
+                    builder->setTexture(shadowMap->texture(), idFillExtrusionShadowTexture);
+                }
+#endif
                 colorBuilder = std::move(builder);
             }
         }
@@ -361,6 +449,12 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             depthBuilder->setVertexAttributes(vertexAttrs);
         }
 
+#if MLN_RENDER_BACKEND_METAL
+        // Keep a reference to the (shared) vertex attributes for the shadow caster before
+        // the color builder takes ownership.
+        auto casterAttrs = useShadows ? vertexAttrs : decltype(vertexAttrs){};
+#endif
+
         colorBuilder->setEnableStencil(doDepthPass);
         colorBuilder->setRawVertices({}, vertexCount, gfx::AttributeDataType::Short2);
         colorBuilder->setVertexAttributes(std::move(vertexAttrs));
@@ -391,6 +485,39 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             finish(*depthBuilder);
         }
         finish(*colorBuilder);
+
+#if MLN_RENDER_BACKEND_METAL
+        // Build a depth-only caster drawable from the same geometry into the shadow map's
+        // caster group (rendered from the sun's POV by the shadow RenderTarget).
+        if (useShadows && shadowMap && shadowDepthGroup && casterAttrs && bucket.sharedTriangles->elements()) {
+            if (auto* casterGroup = shadowMap->casterGroup()) {
+                if (const auto casterShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
+                        shadowDepthGroup->getOrCreateShader(context, propertiesAsUniforms))) {
+                    if (auto casterBuilder = context.createDrawableBuilder(layerPrefix + "shadowCaster")) {
+                        casterBuilder->setShader(casterShader);
+                        casterBuilder->setIs3D(true);
+                        casterBuilder->setEnableColor(true);
+                        casterBuilder->setRenderPass(RenderPass::Opaque);
+                        casterBuilder->setCullFaceMode(gfx::CullFaceMode::backCCW());
+                        casterBuilder->setRawVertices({}, vertexCount, gfx::AttributeDataType::Short2);
+                        casterBuilder->setVertexAttributes(std::move(casterAttrs));
+                        casterBuilder->setSegments(gfx::Triangles(),
+                                                   bucket.sharedTriangles,
+                                                   bucket.triangleSegments.data(),
+                                                   bucket.triangleSegments.size());
+                        casterBuilder->flush(context);
+                        for (auto& drawable : casterBuilder->clearDrawables()) {
+                            drawable->setTileID(tileID);
+                            drawable->setBinders(renderData.bucket, &binders);
+                            drawable->setRenderTile(renderTilesOwner, &tile);
+                            casterGroup->addDrawable(RenderPass::Opaque, tileID, std::move(drawable));
+                            ++stats.drawablesAdded;
+                        }
+                    }
+                }
+            }
+        }
+#endif
 
 #if MLN_USE_FILL_EXTRUSION_INSTANCING
         if (doDepthPass && !instancedDepthBuilder) {
