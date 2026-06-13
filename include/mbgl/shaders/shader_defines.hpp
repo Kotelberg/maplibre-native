@@ -421,7 +421,6 @@ enum {
 enum {
     idCustomGeometryPosVertexAttribute,
     idCustomGeometryTexVertexAttribute,
-    idCustomGeometryNormalVertexAttribute,
     customGeometryVertexAttributeCount
 };
 

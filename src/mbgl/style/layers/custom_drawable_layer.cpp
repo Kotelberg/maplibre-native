@@ -433,9 +433,7 @@ public:
         }
 
         CustomGeometryDrawableUBO drawableUBO = {/* .matrix = */ .matrix = util::cast<float>(options.matrix),
-                                                 /* .color = */ .color = options.color,
-                                                 /* .highlight = */ .highlight = options.highlight,
-                                                 /* .viewAxis = */ .viewAxis = options.viewAxis};
+                                                 /* .color = */ .color = options.color};
 
         auto& drawableUniforms = drawable.mutableUniformBuffers();
         drawableUniforms.createOrUpdate(idCustomGeometryDrawableUBO, &drawableUBO, parameters.context);
@@ -734,14 +732,6 @@ util::SimpleIdentity CustomDrawableLayerHost::Interface::addGeometry(
                                /*vertexOffset=*/0,
                                sizeof(GeometryVertex),
                                gfx::AttributeDataType::Float2);
-    }
-
-    if (const auto& attr = attrs->set(idCustomGeometryNormalVertexAttribute)) {
-        attr->setSharedRawData(vertices,
-                               offsetof(GeometryVertex, normal),
-                               /*vertexOffset=*/0,
-                               sizeof(GeometryVertex),
-                               gfx::AttributeDataType::Float3);
     }
 
     builder->setVertexAttributes(std::move(attrs));
