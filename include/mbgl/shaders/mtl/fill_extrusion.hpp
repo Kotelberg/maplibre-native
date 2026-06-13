@@ -69,7 +69,7 @@ struct ShaderSource<BuiltIn::FillExtrusionShader, gfx::Backend::Type::Metal> {
     static constexpr auto vertexMainFunction = "vertexMain";
     static constexpr auto fragmentMainFunction = "fragmentMain";
 
-    static const std::array<AttributeInfo, 4> attributes;
+    static const std::array<AttributeInfo, 5> attributes;
     static constexpr std::array<AttributeInfo, 0> instanceAttributes{};
     static const std::array<TextureInfo, 0> textures;
 
@@ -78,15 +78,18 @@ struct ShaderSource<BuiltIn::FillExtrusionShader, gfx::Backend::Type::Metal> {
 
 struct VertexStage {
     short2 pos [[attribute(0)]];
+    // Packed wall normal (xyz * 2^13 * 2) + edge distance; the LSB of x is the
+    // top/bottom flag `t`. (Non-instanced path: per-vertex, like GLES.)
+    short4 normal_ed [[attribute(1)]];
 
 #if !defined(HAS_UNIFORM_u_color)
-    float4 color [[attribute(1)]];
+    float4 color [[attribute(2)]];
 #endif
 #if !defined(HAS_UNIFORM_u_base)
-    float base [[attribute(2)]];
+    float2 base [[attribute(3)]];
 #endif
 #if !defined(HAS_UNIFORM_u_height)
-    float height [[attribute(3)]];
+    float2 height [[attribute(4)]];
 #endif
 };
 
@@ -118,9 +121,12 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const auto height = max(unpack_mix_float(vertx.height, drawable.height_t), 0.0);
 #endif
 
-    const float3 normal = float3(0.0, 0.0, 1.0);
-    const float t = 1.0;
-    const float z = (t != 0.0) ? height : base;     // TODO: This would come out wrong on GL for negative values, check it...
+    // Unpack the per-vertex wall normal (matches the GLES non-instanced path):
+    // raw components are nx,ny,nz * 16384 (+ the t flag in x's LSB). The unit
+    // normal drives directional shading; t selects top (height) vs bottom (base).
+    const float t = float(vertx.normal_ed.x & 1);
+    const float3 normal = float3(vertx.normal_ed.xyz) / 16384.0;
+    const float z = (t > 0.0) ? height : base;
     const float4 position = drawable.matrix * float4(float2(vertx.pos), z, 1);
 
 #if defined(OVERDRAW_INSPECTOR)
@@ -203,10 +209,10 @@ struct VertexStage {
     float4 color [[attribute(3)]];
 #endif
 #if !defined(HAS_UNIFORM_u_base)
-    float base [[attribute(4)]];
+    float2 base [[attribute(4)]];
 #endif
 #if !defined(HAS_UNIFORM_u_height)
-    float height [[attribute(5)]];
+    float2 height [[attribute(5)]];
 #endif
 };
 
@@ -342,10 +348,10 @@ struct VertexStage {
     short2 pos [[attribute(0)]];
 
 #if !defined(HAS_UNIFORM_u_base)
-    float base [[attribute(1)]];
+    float2 base [[attribute(1)]];
 #endif
 #if !defined(HAS_UNIFORM_u_height)
-    float height [[attribute(2)]];
+    float2 height [[attribute(2)]];
 #endif
 #if !defined(HAS_UNIFORM_u_pattern_from)
     ushort4 pattern_from [[attribute(3)]];
@@ -524,10 +530,10 @@ struct VertexStage {
     short2 pos [[attribute(0)]];
 
 #if !defined(HAS_UNIFORM_u_base)
-    float base [[attribute(3)]];
+    float2 base [[attribute(3)]];
 #endif
 #if !defined(HAS_UNIFORM_u_height)
-    float height [[attribute(4)]];
+    float2 height [[attribute(4)]];
 #endif
 #if !defined(HAS_UNIFORM_u_pattern_from)
     ushort4 pattern_from [[attribute(5)]];

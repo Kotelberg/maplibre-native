@@ -31,21 +31,30 @@ layout (std140) uniform ModelBloomDrawableUBO {
 };
 
 void main() {
-    float mask = texture(u_image, v_uv).a;
-    // Wide two-ring disk blur of the silhouette coverage.
+    // The offscreen target clears to opaque black (0,0,0,1) and the silhouette
+    // is drawn solid white, so coverage lives in the RED channel (alpha is 1
+    // everywhere because of the clear — see RenderTarget::render).
+    float mask = texture(u_image, v_uv).r;
+    // Wide three-ring disk blur of the silhouette coverage for a soft,
+    // atmospheric falloff.
     float blur = 0.0;
     for (int i = 0; i < 16; i++) {
-        float a = (float(i) / 16.0) * 6.2831853;
-        vec2 d = vec2(cos(a), sin(a)) * u_texel * u_radius;
-        blur += texture(u_image, v_uv + d).a;
-        blur += texture(u_image, v_uv + d * 0.55).a;
+        float ang = (float(i) / 16.0) * 6.2831853;
+        vec2 dir = vec2(cos(ang), sin(ang)) * u_texel * u_radius;
+        blur += texture(u_image, v_uv + dir).r;
+        blur += texture(u_image, v_uv + dir * 0.66).r;
+        blur += texture(u_image, v_uv + dir * 0.33).r;
     }
-    blur /= 32.0;
-    // Outward halo only: the blurred coverage minus the solid silhouette,
-    // amplified so the soft outer falloff actually reads.
-    float halo = clamp((blur - mask) * 1.6, 0.0, 1.0);
-    halo = pow(halo, 0.7);
-    fragColor = vec4(u_color.rgb, 1.0) * (halo * u_color.a);
+    blur /= 48.0;
+    // Outer glow that HUGS the silhouette: blurred coverage gated to outside
+    // the geometry. Multiplicative gating (vs. blur - mask) leaves no dead-band
+    // between the model edge and the glow, and never tints the model itself.
+    float halo = clamp(blur * (1.0 - mask) * 1.9, 0.0, 1.0);
+    halo = pow(halo, 0.9);
+    // Premultiplied-alpha output: the halo TINTS the scene toward the glow
+    // colour (visible on a bright basemap) instead of merely brightening it.
+    float a = halo * u_color.a;
+    fragColor = vec4(u_color.rgb * a, a);
 
 #ifdef OVERDRAW_INSPECTOR
     fragColor = vec4(0.0);

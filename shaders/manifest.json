@@ -145,6 +145,13 @@
         "uses_ubos": true
     },
     {
+        "name": "ModelBloomShader",
+        "header": "model_bloom",
+        "glsl_vert": "model_bloom.vertex.glsl",
+        "glsl_frag": "model_bloom.fragment.glsl",
+        "uses_ubos": true
+    },
+    {
         "name": "HillshadePrepareShader",
         "header": "hillshade_prepare",
         "glsl_vert": "hillshade_prepare.vertex.glsl",

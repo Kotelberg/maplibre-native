@@ -83,6 +83,7 @@ std::shared_ptr<PremultipliedImage> makeContactShadowImage() {
 // applies to fill-extrusion-height — so they rise in sync with the buildings
 // around them (a full-size model fading in over half-grown buildings read as
 // unsynced).
+//
 inline float zoomGrow(double zoom) {
     return static_cast<float>(std::clamp(zoom - 15.0, 0.0, 1.0));
 }
@@ -94,10 +95,10 @@ inline float zoomFade(double zoom) {
 }
 
 // ── Bloom tuning ────────────────────────────────────────────────────
-constexpr float kBloomIntensity = 0.85f;     // peak halo opacity
-constexpr float kBloomPulseAmp = 0.18f;       // gentle breath around the peak
-constexpr float kBloomPulsePeriod = 2.2f;     // seconds
-constexpr float kBloomRadiusTexels = 10.0f;   // blur radius (in mask texels)
+constexpr float kBloomIntensity = 0.62f;      // peak halo opacity
+constexpr float kBloomPulseAmp = 0.34f;       // slow, clearly-visible breath
+constexpr float kBloomPulsePeriod = 4.0f;     // seconds (slow)
+constexpr float kBloomRadiusTexels = 7.0f;    // blur radius (in mask texels)
 constexpr float kBloomColor[3] = {0.992f, 0.725f, 0.071f}; // #FDB912
 
 struct BloomQuadVertex {
@@ -581,7 +582,9 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         const auto& baked = meshCache.at(selected->first);
         const Instance& inst = selected->second;
         const Size viewport = state.getSize();
-        const Size maskSize{std::max(1u, viewport.width / 4u), std::max(1u, viewport.height / 4u)};
+        // Half-res mask: enough detail to hug the silhouette (quarter-res
+        // dilation left a visible gap above the roofline) while staying cheap.
+        const Size maskSize{std::max(1u, viewport.width / 2u), std::max(1u, viewport.height / 2u)};
 
         if (!bloomShader) {
             bloomShader = context.getGenericShader(shaders, "ModelBloomShader");
@@ -693,7 +696,10 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                 auto cbuilder = context.createDrawableBuilder("modelBloomComposite");
                 cbuilder->setShader(bloomShader);
                 cbuilder->setEnableDepth(false);
-                cbuilder->setColorMode(gfx::ColorMode::additive());
+                // Premultiplied alpha: the halo tints the scene toward the glow
+                // colour, which reads on a bright basemap (additive only
+                // brightens already-bright pixels toward white → invisible).
+                cbuilder->setColorMode(gfx::ColorMode::alphaBlended());
                 cbuilder->setCullFaceMode(gfx::CullFaceMode::disabled());
                 cbuilder->setRenderPass(RenderPass::Translucent);
                 cbuilder->setVertexAttributes(std::move(qattrs));

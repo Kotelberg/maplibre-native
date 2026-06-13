@@ -72,7 +72,16 @@ enum {
 };
 
 #define MLN_UBO_CONSOLIDATION (MLN_RENDER_BACKEND_METAL || MLN_RENDER_BACKEND_VULKAN || MLN_RENDER_BACKEND_WEBGPU)
-#define MLN_USE_FILL_EXTRUSION_INSTANCING (MLN_RENDER_BACKEND_METAL || MLN_RENDER_BACKEND_VULKAN)
+// Fork: Metal uses the NON-instancing fill-extrusion path (same as GLES/Android).
+// The instancing path rebuilds per-instance building geometry on tile/zoom
+// changes rather than per frame, so 3D buildings "snap" between heights under
+// continuous zoom while the zoom-interpolated model glides — visibly out of sync
+// on iOS. The non-instancing path interpolates height smoothly per frame (the path
+// Android runs in sync) and carries the crease-aware smooth curved-facade normals
+// (which were #if !INSTANCING). Trade-off: no fill-extrusion instancing memory
+// optimization on Metal, acceptable at this building density. (The non-instanced
+// Metal wall shader was completed in mtl/fill_extrusion.hpp for this.)
+#define MLN_USE_FILL_EXTRUSION_INSTANCING (MLN_RENDER_BACKEND_VULKAN)
 
 } // namespace shaders
 } // namespace mbgl

@@ -9,18 +9,23 @@ namespace shaders {
 
 using FillExtrusionShaderSource = ShaderSource<BuiltIn::FillExtrusionShader, gfx::Backend::Type::Metal>;
 
-const std::array<AttributeInfo, 4> FillExtrusionShaderSource::attributes = {
+const std::array<AttributeInfo, 5> FillExtrusionShaderSource::attributes = {
     AttributeInfo{0, gfx::AttributeDataType::Short2, fillExtrusionUBOCount + 0, idFillExtrusionPosVertexAttribute},
+    // Per-vertex packed wall normal + edge distance, interleaved with pos in the
+    // layout-vertex buffer (same buffer index as pos).
+    AttributeInfo{1, gfx::AttributeDataType::Short4, fillExtrusionUBOCount + 0, idFillExtrusionNormalEdVertexAttribute},
 
     // Data driven
-    AttributeInfo{1, gfx::AttributeDataType::Float4, fillExtrusionUBOCount + 1, idFillExtrusionColorVertexAttribute},
-    AttributeInfo{2, gfx::AttributeDataType::Float, fillExtrusionUBOCount + 1, idFillExtrusionBaseVertexAttribute},
-    AttributeInfo{3, gfx::AttributeDataType::Float, fillExtrusionUBOCount + 1, idFillExtrusionHeightVertexAttribute},
+    AttributeInfo{2, gfx::AttributeDataType::Float4, fillExtrusionUBOCount + 1, idFillExtrusionColorVertexAttribute},
+    AttributeInfo{3, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 1, idFillExtrusionBaseVertexAttribute},
+    AttributeInfo{4, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 1, idFillExtrusionHeightVertexAttribute},
 };
 const std::array<TextureInfo, 0> FillExtrusionShaderSource::textures = {};
 
 //
-// Fill extrusion instanced
+// Fill extrusion instanced (only when the instancing path is enabled; the
+// non-instancing build omits these, mirroring the GL backend).
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
 
 using FillExtrusionInstancedShaderSource =
     ShaderSource<BuiltIn::FillExtrusionInstancedShader, gfx::Backend::Type::Metal>;
@@ -34,10 +39,12 @@ const std::array<AttributeInfo, 5> FillExtrusionInstancedShaderSource::instanceA
 
     // Data driven
     AttributeInfo{3, gfx::AttributeDataType::Float4, fillExtrusionUBOCount + 2, idFillExtrusionColorVertexAttribute},
-    AttributeInfo{4, gfx::AttributeDataType::Float, fillExtrusionUBOCount + 2, idFillExtrusionBaseVertexAttribute},
-    AttributeInfo{5, gfx::AttributeDataType::Float, fillExtrusionUBOCount + 2, idFillExtrusionHeightVertexAttribute},
+    AttributeInfo{4, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 2, idFillExtrusionBaseVertexAttribute},
+    AttributeInfo{5, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 2, idFillExtrusionHeightVertexAttribute},
 };
 const std::array<TextureInfo, 0> FillExtrusionInstancedShaderSource::textures = {};
+
+#endif // MLN_USE_FILL_EXTRUSION_INSTANCING
 
 //
 // Fill extrusion pattern
@@ -48,8 +55,8 @@ const std::array<AttributeInfo, 5> FillExtrusionPatternShaderSource::attributes 
     AttributeInfo{0, gfx::AttributeDataType::Short2, fillExtrusionUBOCount + 0, idFillExtrusionPosVertexAttribute},
 
     // Data driven
-    AttributeInfo{1, gfx::AttributeDataType::Float, fillExtrusionUBOCount + 1, idFillExtrusionBaseVertexAttribute},
-    AttributeInfo{2, gfx::AttributeDataType::Float, fillExtrusionUBOCount + 1, idFillExtrusionHeightVertexAttribute},
+    AttributeInfo{1, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 1, idFillExtrusionBaseVertexAttribute},
+    AttributeInfo{2, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 1, idFillExtrusionHeightVertexAttribute},
     AttributeInfo{
         3, gfx::AttributeDataType::UShort4, fillExtrusionUBOCount + 1, idFillExtrusionPatternFromVertexAttribute},
     AttributeInfo{
@@ -60,7 +67,8 @@ const std::array<TextureInfo, 1> FillExtrusionPatternShaderSource::textures = {
 };
 
 //
-// Fill extrusion pattern instanced
+// Fill extrusion pattern instanced (only when the instancing path is enabled).
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
 
 using FillExtrusionPatternInstancedShaderSource =
     ShaderSource<BuiltIn::FillExtrusionPatternInstancedShader, gfx::Backend::Type::Metal>;
@@ -73,8 +81,8 @@ const std::array<AttributeInfo, 6> FillExtrusionPatternInstancedShaderSource::in
     AttributeInfo{2, gfx::AttributeDataType::UShort2, fillExtrusionUBOCount + 1, idFillExtrusionEdDiscardAttribute},
 
     // Data driven
-    AttributeInfo{3, gfx::AttributeDataType::Float, fillExtrusionUBOCount + 2, idFillExtrusionBaseVertexAttribute},
-    AttributeInfo{4, gfx::AttributeDataType::Float, fillExtrusionUBOCount + 2, idFillExtrusionHeightVertexAttribute},
+    AttributeInfo{3, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 2, idFillExtrusionBaseVertexAttribute},
+    AttributeInfo{4, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 2, idFillExtrusionHeightVertexAttribute},
     AttributeInfo{
         5, gfx::AttributeDataType::UShort4, fillExtrusionUBOCount + 2, idFillExtrusionPatternFromVertexAttribute},
     AttributeInfo{
@@ -83,6 +91,8 @@ const std::array<AttributeInfo, 6> FillExtrusionPatternInstancedShaderSource::in
 const std::array<TextureInfo, 1> FillExtrusionPatternInstancedShaderSource::textures = {
     TextureInfo{0, idFillExtrusionImageTexture},
 };
+
+#endif // MLN_USE_FILL_EXTRUSION_INSTANCING
 
 } // namespace shaders
 } // namespace mbgl
