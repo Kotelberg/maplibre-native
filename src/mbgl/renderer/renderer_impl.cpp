@@ -428,15 +428,39 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         }
     };
 
+    // Per-pass CPU (command-encoding) timing, gated by MLN_PERF_LOG, to attribute frame cost
+    // empirically (3D/render-targets/opaque/translucent). Pairs with renderingStats (draw
+    // calls + present time). Zero overhead when off.
+    static const bool perfLog = [] {
+        const char* v = std::getenv("MLN_PERF_LOG");
+        return v && std::string_view(v) != "0";
+    }();
+    const auto tNow = [] { return util::MonotonicTimer::now().count() * 1000.0; }; // ms
+    double msPass3D = 0, msTargets = 0, msOpaque = 0, msTranslucent = 0;
+
     if (parameters.staticData.has3D) {
+        const auto t = tNow();
         common3DPass();
         drawable3DPass();
+        msPass3D = tNow() - t;
     }
-    drawableTargetsPass();
+    {
+        const auto t = tNow();
+        drawableTargetsPass();
+        msTargets = tNow() - t;
+    }
     commonClearPass();
     context.bindGlobalUniformBuffers(*parameters.renderPass);
-    drawableOpaquePass();
-    drawableTranslucentPass();
+    {
+        const auto t = tNow();
+        drawableOpaquePass();
+        msOpaque = tNow() - t;
+    }
+    {
+        const auto t = tNow();
+        drawableTranslucentPass();
+        msTranslucent = tNow() - t;
+    }
     drawableDebugOverlays();
 
     // Give the layers a chance to do cleanup
@@ -468,6 +492,17 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
 #endif // MLN_RENDER_BACKEND_METAL
 
     context.renderingStats().encodingTime = renderTree.getElapsedTime() - context.renderingStats().renderingTime;
+
+    if (perfLog) {
+        const auto& s = context.renderingStats();
+        Log::Warning(Event::General,
+                     "[perf] enc=" + std::to_string(s.encodingTime * 1000.0) +
+                         "ms present=" + std::to_string(s.renderingTime * 1000.0) + "ms | 3d=" +
+                         std::to_string(msPass3D) + " targets=" + std::to_string(msTargets) +
+                         " opaque=" + std::to_string(msOpaque) + " translucent=" + std::to_string(msTranslucent) +
+                         " | draws=" + std::to_string(s.numDrawCalls) + " has3D=" +
+                         (parameters.staticData.has3D ? "1" : "0"));
+    }
 
     observer->onDidFinishRenderingFrame(
         renderTreeParameters.loaded ? RendererObserver::RenderMode::Full : RendererObserver::RenderMode::Partial,
