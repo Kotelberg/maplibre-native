@@ -30,7 +30,7 @@ struct alignas(16) FillExtrusionShadowPropsUBO {
     /* 64 */ float shadow_intensity;
     /* 68 */ float shadow_texel_size; // 1.0 / shadow map size
     /* 72 */ float shadow_bias;
-    /* 76 */ float pad2;
+    /* 76 */ float shadow_slope_bias; // extra bias scaled by (1 - n·L); kills self-shadowing
     /* 80 */
 };
 static_assert(sizeof(FillExtrusionShadowPropsUBO) == 5 * 16);

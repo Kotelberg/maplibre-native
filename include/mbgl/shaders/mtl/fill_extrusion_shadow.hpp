@@ -40,7 +40,7 @@ struct alignas(16) FillExtrusionShadowPropsUBO {
     /* 64 */ float shadow_intensity;
     /* 68 */ float shadow_texel_size;
     /* 72 */ float shadow_bias;
-    /* 76 */ float pad2;
+    /* 76 */ float shadow_slope_bias; // extra bias scaled by (1 - n·L); kills self-shadowing
     /* 80 */
 };
 static_assert(sizeof(FillExtrusionShadowPropsUBO) == 5 * 16, "wrong size");
@@ -79,6 +79,10 @@ struct FragmentStage {
     float4 position [[position, invariant]];
     half4 color;
     float4 shadow_pos;
+    // (1 - n·L): 0 on sun-facing faces, →1 on faces turned away from the sun. Scales the
+    // depth bias so a building never shadows its OWN away-faces (the directional lighting
+    // already darkens those); only a neighbour's cast shadow falling across it darkens it.
+    float slope;
 };
 
 struct FragmentOutput {
@@ -135,6 +139,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .position = position,
         .color    = half4(vcolor * props.opacity),
         .shadow_pos = drawable.light_matrix * worldLocal,
+        .slope = 1.0 - directionalFraction,
     };
 }
 
@@ -149,7 +154,11 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     constexpr sampler shadowSampler(coord::normalized, filter::nearest, address::clamp_to_edge);
     const float3 ndc = in.shadow_pos.xyz / in.shadow_pos.w;
     const float2 uv = ndc.xy * 0.5 + 0.5;
-    const float current = ndc.z - props.shadow_bias;
+    // Slope-scaled bias: away-from-sun faces get a large bias so they never self-shadow
+    // (their shading is the directional light's job); sun-facing faces keep the small base
+    // bias so a neighbour's cast shadow still lands on them. Result: building shadows read as
+    // "the ground shadow extended up where another building occludes it", not per-face grey.
+    const float current = ndc.z - (props.shadow_bias + in.slope * props.shadow_slope_bias);
     float lit = 1.0;
     if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
         lit = 0.0;

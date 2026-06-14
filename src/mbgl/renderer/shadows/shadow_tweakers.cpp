@@ -140,7 +140,7 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
         .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
         .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
-        .pad2 = 0.0f};
+        .shadow_slope_bias = envFloat("MLN_SHADOW_SLOPE_BIAS", 0.04f)};
     auto& layerUniforms = layerGroup.mutableUniformBuffers();
     layerUniforms.createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
 
