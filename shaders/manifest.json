@@ -152,6 +152,20 @@
         "uses_ubos": true
     },
     {
+        "name": "ShadowDepthShader",
+        "header": "shadow_depth",
+        "glsl_vert": "_empty.glsl",
+        "glsl_frag": "_empty.glsl",
+        "uses_ubos": true
+    },
+    {
+        "name": "FillExtrusionShadowShader",
+        "header": "fill_extrusion_shadow",
+        "glsl_vert": "_empty.glsl",
+        "glsl_frag": "_empty.glsl",
+        "uses_ubos": true
+    },
+    {
         "name": "HillshadePrepareShader",
         "header": "hillshade_prepare",
         "glsl_vert": "hillshade_prepare.vertex.glsl",
