@@ -168,21 +168,22 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
     const double cx = footprintCenter.x;
     const double cy = footprintCenter.y;
 
-    // Coverage radius: size the light frustum so it reaches the farthest visible tile, i.e.
-    // the whole on-screen ground is shadow-mapped. A FIXED radius leaves the top of a wide or
-    // pitched view with no shadow data — the diagonal "shadows only in the bottom half" cutoff.
-    // Keep the box CENTERED on the aligned focal point (so the UV stays centred) and grow only
-    // the half-extent. Clamp the upper end so the texel size (radius/mapSize) stays usable and
-    // high-pitch horizon tiles don't blow the frustum up. MLN_SHADOW_RADIUS forces it (debug).
-    // Coverage radius: size the light frustum to the CAMERA'S on-screen ground view so the whole
-    // visible map is shadow-mapped (a fixed radius leaves the far/top of a wide or pitched view
-    // with no shadow data — the "shadows only in the bottom half" diagonal cutoff). Derive it from
-    // STATE ONLY (the viewport projected to world), never from per-group loaded tiles — otherwise
-    // the caster group and the receiver groups, which carry different tile sets, would fit DIFFERENT
-    // frustums and the cast shadows would land misregistered. Sampling a screen grid and taking the
-    // farthest below-horizon hit gives the needed half-extent; above-horizon samples are clamped.
+    // Coverage radius: size the light frustum so the WHOLE on-screen map is shadow-mapped. A fixed
+    // radius (or one fit only to a few viewport corners, which under-shoot at pitch where the top
+    // samples land near the horizon) leaves the far/top of the view with no shadow data — the
+    // "shadows only in the bottom half" diagonal cutoff. Take the max of two coverage sources:
+    //   (a) every loaded building tile — guarantees every visible building is reached;
+    //   (b) the camera viewport projected to world — covers ground beyond the loaded tiles.
+    // Keep the box CENTRED on the aligned focal point (UV stays centred); grow only the half-extent.
+    // Clamp the top so the shadow-map texel size stays usable. MLN_SHADOW_RADIUS forces it (debug).
+    // NOTE: all three shadow layer groups (caster / FE receiver / ground quad) are built from the
+    // same fill-extrusion tiles, so the tile-extent term is the same across them — the caster and
+    // the receivers still fit the SAME frustum (no cross-group misregistration).
     const double radiusMax = static_cast<double>(envFloat("MLN_SHADOW_RADIUS_MAX", 4000.0f));
     double coverRadius = 0.0;
+    for (const auto& p : ground) {
+        coverRadius = std::max({coverRadius, std::abs(p[0] - cx), std::abs(p[1] - cy)});
+    }
     {
         const Size sz = state.getSize();
         const double xs[5] = {0.0, 0.25 * sz.width, 0.5 * sz.width, 0.75 * sz.width, static_cast<double>(sz.width)};
