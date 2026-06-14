@@ -66,20 +66,22 @@ vec3 tileCornerToWorld(const mat4& tileWorld, double x, double y) {
     return {out[0] / out[3], out[1] / out[3], out[2] / out[3]};
 }
 
-vec3 centerPixelToWorld(const TransformState& state, uint8_t tileZoom) {
-    const Size size = state.getSize();
-    const ScreenCoordinate centerPixel = {0.5 * size.width, 0.5 * size.height};
-    const TileCoordinate centerCoord = state.screenCoordinateToTileCoordinate(centerPixel, tileZoom);
-
-    const auto tileX = static_cast<int64_t>(std::floor(centerCoord.p.x));
-    const auto tileY = static_cast<int64_t>(std::floor(centerCoord.p.y));
-    const double localX = (centerCoord.p.x - static_cast<double>(tileX)) * util::EXTENT;
-    const double localY = (centerCoord.p.y - static_cast<double>(tileY)) * util::EXTENT;
+vec3 screenPixelToWorld(const TransformState& state, uint8_t tileZoom, double px, double py) {
+    const TileCoordinate coord = state.screenCoordinateToTileCoordinate({px, py}, tileZoom);
+    const auto tileX = static_cast<int64_t>(std::floor(coord.p.x));
+    const auto tileY = static_cast<int64_t>(std::floor(coord.p.y));
+    const double localX = (coord.p.x - static_cast<double>(tileX)) * util::EXTENT;
+    const double localY = (coord.p.y - static_cast<double>(tileY)) * util::EXTENT;
     const UnwrappedTileID tileID(tileZoom, tileX, tileY);
 
     mat4 tileWorld;
     state.matrixFor(tileWorld, tileID);
     return tileCornerToWorld(tileWorld, localX, localY);
+}
+
+vec3 centerPixelToWorld(const TransformState& state, uint8_t tileZoom) {
+    const Size size = state.getSize();
+    return screenPixelToWorld(state, tileZoom, 0.5 * size.width, 0.5 * size.height);
 }
 
 Point<double> heightCompensatedFootprintCenter(const vec3& focalCenter, const vec3& sunDir, double maxHeightWorld) {
@@ -165,7 +167,41 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
     const Point<double> footprintCenter = heightCompensatedFootprintCenter(focalCenter, sunDir, maxHeightWorld);
     const double cx = footprintCenter.x;
     const double cy = footprintCenter.y;
-    const double radius = envFloat("MLN_SHADOW_RADIUS", 700.0f);
+
+    // Coverage radius: size the light frustum so it reaches the farthest visible tile, i.e.
+    // the whole on-screen ground is shadow-mapped. A FIXED radius leaves the top of a wide or
+    // pitched view with no shadow data — the diagonal "shadows only in the bottom half" cutoff.
+    // Keep the box CENTERED on the aligned focal point (so the UV stays centred) and grow only
+    // the half-extent. Clamp the upper end so the texel size (radius/mapSize) stays usable and
+    // high-pitch horizon tiles don't blow the frustum up. MLN_SHADOW_RADIUS forces it (debug).
+    // Coverage radius: size the light frustum to the CAMERA'S on-screen ground view so the whole
+    // visible map is shadow-mapped (a fixed radius leaves the far/top of a wide or pitched view
+    // with no shadow data — the "shadows only in the bottom half" diagonal cutoff). Derive it from
+    // STATE ONLY (the viewport projected to world), never from per-group loaded tiles — otherwise
+    // the caster group and the receiver groups, which carry different tile sets, would fit DIFFERENT
+    // frustums and the cast shadows would land misregistered. Sampling a screen grid and taking the
+    // farthest below-horizon hit gives the needed half-extent; above-horizon samples are clamped.
+    const double radiusMax = static_cast<double>(envFloat("MLN_SHADOW_RADIUS_MAX", 4000.0f));
+    double coverRadius = 0.0;
+    {
+        const Size sz = state.getSize();
+        const double xs[5] = {0.0, 0.25 * sz.width, 0.5 * sz.width, 0.75 * sz.width, static_cast<double>(sz.width)};
+        const double ys[5] = {0.0, 0.25 * sz.height, 0.5 * sz.height, 0.75 * sz.height, static_cast<double>(sz.height)};
+        for (double sx : xs) {
+            for (double sy : ys) {
+                const vec3 w = screenPixelToWorld(state, focalZoom, sx, sy);
+                const double d = std::max(std::abs(w[0] - cx), std::abs(w[1] - cy));
+                if (std::isfinite(d)) {
+                    coverRadius = std::max(coverRadius, std::min(d, radiusMax));
+                }
+            }
+        }
+    }
+    const double radius = std::getenv("MLN_SHADOW_RADIUS")
+                              ? static_cast<double>(envFloat("MLN_SHADOW_RADIUS", 700.0f))
+                              : std::clamp(coverRadius,
+                                           static_cast<double>(envFloat("MLN_SHADOW_RADIUS_MIN", 350.0f)),
+                                           radiusMax);
 
     if (std::getenv("MLN_SHADOW_DBG")) {
         const double oldDx = tileMeanX - focalCenter[0];
