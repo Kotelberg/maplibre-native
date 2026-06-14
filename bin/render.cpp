@@ -19,9 +19,11 @@
 
 #include <args.hxx>
 
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <fstream>
+#include <optional>
 
 int main(int argc, char* argv[]) {
     args::ArgumentParser argumentParser("MapLibre Native render tool");
@@ -215,20 +217,44 @@ int main(int argc, char* argv[]) {
         };
     }
 
+    // Optional camera edge insets, to reproduce the app's asymmetric CAMERA_PADDING
+    // headlessly. The device sets {bottom,top,left,right} padding (points) on its MapView;
+    // mbgl-render otherwise leaves the edge insets flush, so the perspective center sits at
+    // the geometric screen center and the shadow frustum focal point differs from device.
+    // Format: MLN_RENDER_PADDING="top,right,bottom,left" (CSS order, same as the RN
+    // CAMERA_PADDING object). All values in the same units as -w/-h (pixels at ratio 1).
+    std::optional<EdgeInsets> renderPadding;
+    if (const char* p = getenv("MLN_RENDER_PADDING")) {
+        double t = 0, r = 0, b = 0, l = 0;
+        if (std::sscanf(p, "%lf,%lf,%lf,%lf", &t, &r, &b, &l) == 4) {
+            // EdgeInsets ctor order is (top, left, bottom, right).
+            renderPadding = EdgeInsets(t, l, b, r);
+            std::cerr << "MLN_RENDER_PADDING applied: top=" << t << " right=" << r << " bottom=" << b
+                      << " left=" << l << std::endl;
+        } else {
+            std::cerr << "MLN_RENDER_PADDING ignored (need 4 comma-separated values: top,right,bottom,left)"
+                      << std::endl;
+        }
+    }
+
     map.getStyle().loadURL(style);
     std::vector<double> bounds = args::get(boundsValue);
     if (bounds.size() == 4) {
         LatLngBounds boundingBox = LatLngBounds::hull(LatLng(bounds[0], bounds[1]), LatLng(bounds[2], bounds[3]));
-        map.jumpTo(map.cameraForLatLngBounds(boundingBox, EdgeInsets(), bearing, pitch));
+        map.jumpTo(map.cameraForLatLngBounds(boundingBox, renderPadding.value_or(EdgeInsets()), bearing, pitch));
     } else {
-        map.jumpTo(CameraOptions()
-                       .withCenter(LatLng{lat, lon})
-                       .withCenterAltitude(alt)
-                       .withZoom(zoom)
-                       .withBearing(bearing)
-                       .withPitch(pitch)
-                       .withRoll(roll)
-                       .withFov(fov));
+        CameraOptions cam = CameraOptions()
+                                .withCenter(LatLng{lat, lon})
+                                .withCenterAltitude(alt)
+                                .withZoom(zoom)
+                                .withBearing(bearing)
+                                .withPitch(pitch)
+                                .withRoll(roll)
+                                .withFov(fov);
+        if (renderPadding) {
+            cam.withPadding(renderPadding);
+        }
+        map.jumpTo(cam);
     }
 
     if (debug) {

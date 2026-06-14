@@ -117,6 +117,59 @@ uint8_t cameraFocalZoom(const TransformState& state) {
     return std::min(state.getIntegerZoom(), util::DEFAULT_MAX_ZOOM);
 }
 
+// View-depth fade bounds for the ground receiver, in clip-space w (= perspective view-distance
+// from the camera, in world/mercator-px units). The ground vertex outputs clip.w = the tile->clip
+// (perspective) w of the ground point; we fade the cast shadow from full at `start` to none at
+// `end`. Both are expressed as multiples of a per-frame reference distance so they track zoom and
+// pitch automatically:
+//
+//   refViewW ~= cameraToCenterDistance (screen px) * worldPerPixel (world units / screen px at the
+//               focal ground point) = the view-w of the look-at ground point.
+//
+// Empirically (Phase-1 repro, p60 tall + device insets) the screen-center ground point sits at
+// ~1x ref and the far/top rows that drop out sit a few x ref further; starting the fade and ending
+// it a few x ref out makes the far thin smoothly with no hard line while leaving the entire near
+// field (w < ref) untouched. Disabled when the multipliers collapse (end<=start) or at low pitch.
+struct DepthFadeBounds {
+    float start = 0.0f; // view-w where the fade begins (full shadow at/below this)
+    float end = 0.0f;   // view-w where the shadow has fully faded (0 at/above this); <=0 disables
+};
+
+DepthFadeBounds computeDepthFadeBounds(const TransformState& state, uint8_t focalZoom) {
+    DepthFadeBounds b;
+    // Gate by pitch: the view-depth fade only addresses the steep-pitch far cut-off. At low pitch
+    // the whole ground is at a similar (small) depth, the cut-off does not occur, and a depth fade
+    // would only erode coverage — so disable it below MLN_SHADOW_DEPTH_FADE_PITCH (default 30°,
+    // below the app's ~50° 3D pitch). Set the multipliers' end<=start to disable entirely.
+    const double pitchDeg = util::rad2deg(state.getPitch());
+    const double fadePitch = static_cast<double>(envFloat("MLN_SHADOW_DEPTH_FADE_PITCH", 30.0f));
+    // Multipliers of refViewW (= cameraToCenterDistance * worldPerPixel = the view-w of the look-at
+    // ground point). start=1.3 keeps the entire near/mid field (view_w < 1.3x ref, which in the p60
+    // device-inset repro is bands 3..near, the abundant-shadow region incl. the mid peak) at full
+    // strength; end=2.6 fully fades by the far frustum edge so the far quarter — where the live
+    // steep-pitch cut-off appears — always reads as a graceful taper, never a hard horizontal line.
+    // Empirically calibrated against the Phase-1 WITH-insets p60 tall repro (near field byte-identical
+    // to no-fade; far bands 0..2 taper smoothly). end<=start or end<=0 disables.
+    const float startMul = envFloat("MLN_SHADOW_DEPTH_FADE_START", 1.3f);
+    const float endMul = envFloat("MLN_SHADOW_DEPTH_FADE_END", 2.6f);
+    if (pitchDeg < fadePitch || endMul <= startMul || endMul <= 0.0f) {
+        return b; // disabled (end stays 0)
+    }
+
+    // world-per-pixel at the geometric screen center (matches the radius-cap derivation).
+    const Size sz = state.getSize();
+    const vec3 cWorld = screenPixelToWorld(state, focalZoom, 0.5 * sz.width, 0.5 * sz.height);
+    const vec3 cWorldDx = screenPixelToWorld(state, focalZoom, 0.5 * sz.width + 1.0, 0.5 * sz.height);
+    const double worldPerPixel = std::hypot(cWorldDx[0] - cWorld[0], cWorldDx[1] - cWorld[1]);
+    const double refViewW = state.getCameraToCenterDistance() * worldPerPixel;
+    if (!std::isfinite(refViewW) || refViewW <= 0.0) {
+        return b;
+    }
+    b.start = static_cast<float>(refViewW) * startMul;
+    b.end = static_cast<float>(refViewW) * endMul;
+    return b;
+}
+
 Point<double> heightCompensatedFootprintCenter(const vec3& focalCenter, const vec3& sunDir, double maxHeightWorld) {
     const mat4 lightView = ShadowFrustum::lightView(sunDir);
     const double a = lightView[0];
@@ -375,6 +428,8 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
 
     const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
 
+    const DepthFadeBounds depthFade = computeDepthFadeBounds(state, cameraFocalZoom(state));
+
     const GroundShadowPropsUBO propsUBO = {.shadow_color = Color::black(),
                                            // Fade ground cast shadows out at flat/top-down pitch
                                            // (they have no 3D depth cue there and clutter the map).
@@ -382,9 +437,16 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
                                                                pitchShadowFade(state),
                                            .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
                                            .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
-                                           // Fade over the outer 15% of the frustum by default;
-                                           // MLN_SHADOW_FADE_START=1.0 disables the fade.
-                                           .shadow_fade_start = envFloat("MLN_SHADOW_FADE_START", 0.85f)};
+                                           // UV-radial frustum-rim fade. With the primary view-depth
+                                           // fade now carrying the near→far softening, only trim the
+                                           // very edge (default 0.92); MLN_SHADOW_FADE_START=1.0 off.
+                                           .shadow_fade_start = envFloat("MLN_SHADOW_FADE_START", 0.92f),
+                                           // Primary near→far view-depth fade (camera distance), in
+                                           // clip-space w. Gated to steep pitch; 0/0 = disabled.
+                                           .depth_fade_start = depthFade.start,
+                                           .depth_fade_end = depthFade.end,
+                                           .pad0 = 0.0f,
+                                           .pad1 = 0.0f};
 
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         // CRITICAL: only touch the ground-shadow quads (which have no paint binders). The

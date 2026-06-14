@@ -28,9 +28,13 @@ struct alignas(16) GroundShadowPropsUBO {
     /* 20 */ float shadow_texel_size;
     /* 24 */ float shadow_bias;
     /* 28 */ float shadow_fade_start;
-    /* 32 */
+    /* 32 */ float depth_fade_start;
+    /* 36 */ float depth_fade_end;
+    /* 40 */ float pad0;
+    /* 44 */ float pad1;
+    /* 48 */
 };
-static_assert(sizeof(GroundShadowPropsUBO) == 2 * 16, "wrong size");
+static_assert(sizeof(GroundShadowPropsUBO) == 3 * 16, "wrong size");
 
 )";
 
@@ -54,6 +58,11 @@ struct VertexStage {
 struct FragmentStage {
     float4 position [[position, invariant]];
     float4 shadow_pos;
+    // Clip-space w of this ground fragment = perspective view-distance from the camera
+    // (world/mercator-px units). Used for the near→far view-depth fade. Interpolated
+    // perspective-correctly by the rasterizer (it carries 1/w in the standard varying path,
+    // so passing w directly is fine for a monotonic fade weight).
+    float view_w;
 };
 
 struct FragmentOutput {
@@ -63,14 +72,29 @@ struct FragmentOutput {
 FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
                                 device const GroundShadowDrawableUBO& drawable [[buffer(idGroundShadowDrawableUBO)]]) {
     const float4 worldLocal = float4(float2(vertx.pos), 0.0, 1.0);
+    const float4 clip = drawable.matrix * worldLocal;
     return {
-        .position = drawable.matrix * worldLocal,
+        .position = clip,
         .shadow_pos = drawable.light_matrix * worldLocal,
+        .view_w = clip.w,
     };
 }
 
 float ground_unpackShadowDepth(float4 rgba) {
     return dot(rgba, float4(1.0, 1.0/255.0, 1.0/65025.0, 1.0/16581375.0));
+}
+
+// View-depth fade weight: 1 in the near field, ramping to 0 as the ground fragment's
+// camera distance (clip-space w) crosses [depth_fade_start, depth_fade_end]. This is the
+// primary far-fade: it turns ANY far deficit (frustum edge, caster-tile horizon, or the
+// padding-miscentered grazing top rows at steep pitch) into a smooth near→far fade with no
+// hard line, while leaving the near field (small w) at full strength. Disabled (returns 1)
+// when depth_fade_end<=0 so the low-pitch / off path is unaffected.
+float ground_depthFade(float view_w, float fade_start, float fade_end) {
+    if (fade_end <= 0.0 || fade_end <= fade_start) {
+        return 1.0;
+    }
+    return 1.0 - smoothstep(fade_start, fade_end, view_w);
 }
 
 fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
@@ -79,17 +103,29 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     constexpr sampler shadowSampler(coord::normalized, filter::nearest, address::clamp_to_edge);
     const float3 ndc = in.shadow_pos.xyz / in.shadow_pos.w;
     const float2 uv = ndc.xy * 0.5 + 0.5;
+    // UV-radial (frustum-edge) fade + view-depth (camera-distance) fade. The view-depth fade is
+    // the primary near→far softener; the UV-radial fade only trims the very frustum rim.
+    const float r = max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0; // 0 at center, 1 at frustum edge
+    const float uvFade = 1.0 - smoothstep(props.shadow_fade_start, 1.0, r);
+    const float depthFade = ground_depthFade(in.view_w, props.depth_fade_start, props.depth_fade_end);
+    const float fade = uvFade * depthFade;
+
     // VIZ debug (toggle via MLN_SHADOW_INTENSITY > 1.5): paint frustum + caster coverage so the
     // live render reveals the cutoff cause (text logs don't surface in the RN host). blue = UV
-    // outside the light frustum (no coverage); red = in frustum + a caster wrote depth (shadowed);
-    // green = in frustum, no caster (lit ground).
+    // outside the light frustum (no coverage); red = in frustum + a caster wrote depth (shadowed),
+    // its intensity scaled by the SAME fade as the real shadow (so a band's red% reads the
+    // EFFECTIVE shadow after the fade — faded shadow goes red→green, the lit color); green = in
+    // frustum, no caster (lit ground).
     if (props.shadow_intensity > 1.5) {
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
             return {half4(0.0, 0.0, 1.0, 0.55)};
         }
         const float occlV = ground_unpackShadowDepth(shadowTexture.sample(shadowSampler, uv));
         if (occlV < 0.99) {
-            return {half4(1.0, 0.0, 0.0, 0.6)};
+            // red where the (post-fade) shadow is meaningful; ramp red→green as it fades so the
+            // per-band red% reflects the effective shadow gradient, not raw caster coverage.
+            const half3 vizColor = mix(half3(0.0, 1.0, 0.0), half3(1.0, 0.0, 0.0), half(fade));
+            return {half4(vizColor, 0.6)};
         }
         return {half4(0.0, 1.0, 0.0, 0.35)};
     }
@@ -107,12 +143,6 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
         lit /= 9.0;
     }
 
-    // Soft far-edge fade: with the centered, texel-snapped frustum the UV-radial distance from
-    // center maps to world distance, so fade the cast shadow to lit over the outer rim. This
-    // turns the bounded far edge (and the point where loaded caster tiles run out) into a
-    // graceful distance fade instead of a hard horizontal line. fade_start=1.0 => no fade.
-    const float r = max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0; // 0 at center, 1 at frustum edge
-    const float fade = 1.0 - smoothstep(props.shadow_fade_start, 1.0, r);
     return {half4(half3(props.shadow_color.rgb), half((1.0 - lit) * props.shadow_intensity * fade))};
 }
 )";
