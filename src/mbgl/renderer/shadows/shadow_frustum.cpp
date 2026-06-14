@@ -93,19 +93,21 @@ mat4 ShadowFrustum::fit(const vec3& sunDir,
         box.max[2] += zPad;
     }
 
+    const double invX = 1.0 / (box.max[0] - box.min[0]);
+    const double invY = 1.0 / (box.max[1] - box.min[1]);
+    const double invZ = 1.0 / (box.max[2] - box.min[2]);
+
     mat4 ortho;
-    matrix::ortho(ortho, box.min[0], box.max[0], box.min[1], box.max[1], box.min[2], box.max[2]);
+    matrix::identity(ortho);
+    ortho[0] = 2.0 * invX;
+    ortho[5] = 2.0 * invY;
+    ortho[10] = invZ;
+    ortho[12] = -(box.max[0] + box.min[0]) * invX;
+    ortho[13] = -(box.max[1] + box.min[1]) * invY;
+    ortho[14] = -box.min[2] * invZ;
 
     mat4 out;
     matrix::multiply(out, ortho, view);
-
-    // matrix::ortho yields GL-convention clip depth [-1,1]; the Metal shadow map (and the
-    // receiver's ndc.z) need [0,1]. Premultiply the standard z-remap z' = 0.5*z + 0.5*w,
-    // which only rewrites the z row (column-major indices 2/6/10/14 vs 3/7/11/15).
-    out[2] = 0.5 * out[2] + 0.5 * out[3];
-    out[6] = 0.5 * out[6] + 0.5 * out[7];
-    out[10] = 0.5 * out[10] + 0.5 * out[11];
-    out[14] = 0.5 * out[14] + 0.5 * out[15];
     return out;
 }
 

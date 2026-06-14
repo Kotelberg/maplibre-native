@@ -49,6 +49,11 @@ struct VertexStage {
 
 struct FragmentStage {
     float4 position [[position, invariant]];
+    // The light-clip position, passed through so the fragment can pack ndc.z = z/w —
+    // the SAME metric the receiver computes (shadow_pos.z/shadow_pos.w). Packing
+    // [[position]].z instead would store window-space depth (remapped through the
+    // viewport depth range), which the receiver does not undo → systematic mismatch.
+    float4 lightClip;
 };
 
 float4 packDepth(float depth) {
@@ -76,12 +81,14 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     // Match the FE vertex: t (top/bottom flag) selects height vs base for z.
     const float t = float(vertx.normal_ed.x & 1);
     const float z = (t > 0.0) ? height : base;
-    return { .position = drawable.light_matrix * float4(float2(vertx.pos), z, 1.0) };
+    const float4 clip = drawable.light_matrix * float4(float2(vertx.pos), z, 1.0);
+    return { .position = clip, .lightClip = clip };
 }
 
 half4 fragment fragmentMain(FragmentStage in [[stage_in]]) {
-    // in.position.z is the post-projection light-clip depth in [0,1] (Metal NDC).
-    return half4(packDepth(in.position.z));
+    // Pack ndc.z = z/w — the exact metric the receiver compares against. (Using
+    // [[position]].z would be window-space depth, viewport-remapped, and mismatch.)
+    return half4(packDepth(in.lightClip.z / in.lightClip.w));
 }
 )";
 };

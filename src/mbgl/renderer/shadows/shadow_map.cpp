@@ -13,13 +13,15 @@ void ShadowMap::ensure(gfx::Context& context, const std::string& layerID) {
     if (renderTarget) {
         return;
     }
-    // NOTE: withDepth=false for now — enabling the depth attachment silently breaks the color
-    // write in the RenderTarget pipeline (mbgl plumbing gap), and color-only is needed so the
-    // caster's packed depth lands in the map. Consequence: no hardware depth test, so the caster
-    // is last-write-wins rather than nearest — inter-building occlusion is unreliable until the
-    // depth-attachment path is fixed (or a single-channel min-blend approach is used). See notes.
+    // withDepth=true: the caster group runs as is3D drawables (see render_fill_extrusion_layer),
+    // so mtl::TileLayerGroup::render applies the group-level depthModeFor3D() (LessEqual + write)
+    // against this target's Float32 depth attachment. That makes the NEAREST-to-light caster's
+    // packed-depth color survive (hardware depth test) instead of last-write-wins — which is what
+    // makes inter-building occlusion reliable. RenderTarget clears color to white (packed far) and
+    // depth to 1.0. The earlier "depth breaks color" was the pre-[0,1] z-remap era: with depth
+    // testing live, Metal clips NDC z outside [0,1]; ShadowFrustum::fit now remaps to [0,1].
     renderTarget = std::make_shared<RenderTarget>(
-        context, Size{mapSize, mapSize}, gfx::TextureChannelDataType::UnsignedByte, /*withDepth=*/false);
+        context, Size{mapSize, mapSize}, gfx::TextureChannelDataType::UnsignedByte, /*withDepth=*/true);
     renderTarget->addLayerGroup(context.createTileLayerGroup(0, /*initialCapacity=*/64, layerID + "-shadow-casters"),
                                 /*replace=*/true);
 }

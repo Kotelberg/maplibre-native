@@ -495,12 +495,24 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                         shadowDepthGroup->getOrCreateShader(context, propertiesAsUniforms))) {
                     if (auto casterBuilder = context.createDrawableBuilder(layerPrefix + "shadowCaster")) {
                         casterBuilder->setShader(casterShader);
-                        casterBuilder->setIs3D(false); // RenderTarget renders plain opaque/translucent, not a 3D pass
+                        // is3D + enableDepth route the caster through mtl::TileLayerGroup's
+                        // group-level depthModeFor3D() (LessEqual + write) against the shadow
+                        // target's Float32 depth attachment (ShadowMap withDepth=true). Drawable::draw
+                        // skips depth-stencil setup for is3D, so the layer group owns it; with no
+                        // stencil enabled it takes the depth-only state (the target has no stencil).
+                        // Result: the nearest-to-light caster's packed depth survives = real occlusion.
+                        casterBuilder->setIs3D(true);
                         casterBuilder->setEnableColor(true);
                         casterBuilder->setColorMode(gfx::ColorMode::unblended()); // write packed depth (replace)
-                        casterBuilder->setEnableDepth(false); // no depth attachment yet (see ShadowMap note)
+                        casterBuilder->setEnableDepth(true);
                         casterBuilder->setRenderPass(RenderPass::Opaque);
-                        casterBuilder->setCullFaceMode(gfx::CullFaceMode::backCCW());
+                        // Render BACK faces (cull front) into the shadow map: storing each
+                        // building's far-from-light surface pushes the depth comparison past
+                        // the lit front faces, eliminating self-shadow acne (the standard
+                        // second-depth / front-face-cull shadow technique).
+                        casterBuilder->setCullFaceMode({.enabled = true,
+                                                        .side = gfx::CullFaceSideType::Front,
+                                                        .winding = gfx::CullFaceWindingType::CounterClockwise});
                         casterBuilder->setRawVertices({}, vertexCount, gfx::AttributeDataType::Short2);
                         casterBuilder->setVertexAttributes(std::move(casterAttrs));
                         casterBuilder->setSegments(gfx::Triangles(),
