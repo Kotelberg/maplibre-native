@@ -1,5 +1,11 @@
 # Learnings
 
+## Metal ground-shadow frustum registration
+
+- What we learned: the shadow caster, building receiver, and ground receiver must use one shared `worldToLightClip` per rendered frame. Computing it independently per `TileLayerGroup` is fragile because the groups can contain different drawables while tiles stream in; the caster group also lived outside normal fill-extrusion cleanup, so stale caster drawables could survive tile-cover changes.
+- Why it matters: ground-shadow viz can show full frustum coverage while red caster coverage is sparse. In that state the ground quad is sampling valid UVs, but not necessarily the same shadow-map registration the caster used, or not a caster set that matches the current visible tiles.
+- How to apply it: keep frustum fitting camera-state-only in `src/mbgl/renderer/shadows/shadow_tweakers.cpp`, cache it in `ShadowFrustumState` by `PaintParameters::frameCount`, and pass the same state into `ShadowDepthTweaker`, `FillExtrusionShadowTweaker`, and `GroundShadowTweaker`. In `src/mbgl/renderer/layers/render_fill_extrusion_layer.cpp`, prune `shadowMap->casterGroup()` anywhere building/ground drawables are pruned, and recreate a tile when required shadow sidecar drawables are missing.
+
 ## Metal ground-shadow caster cull (THE fix — supersedes the height-scale theory below)
 
 - What we learned: the broken ground shadows (8× over-sized detached blobs at z16/p35, then thin road-tracing acne after the height-scale change) were caused by the shadow **caster** using FRONT-face culling. The "second-depth / render-back-faces" trick assumes a CLOSED mesh, but fill-extrusion buildings are OPEN (walls + roof, no floor). Front-cull drops the roof — the actual nearest-to-light occluder — leaving only thin far-wall slivers, so the shadow map has almost no solid content. Switching the caster to render FRONT faces (cull BACK = roof + sun-facing walls, the true occluder) produces solid, correctly-sized, attached cast shadows. Verified headless: top-down z17/p0 shadow mask ≈ 1.4× footprint area (vs 6.9× with the front-cull bug), shadow length ≈ building height at the style's 45° sun, buildings stay acne-free (receiver `shadow_bias` handles the mild self-shadow risk).

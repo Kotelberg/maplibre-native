@@ -5,9 +5,12 @@
 #include <mbgl/style/layers/fill_extrusion_layer_impl.hpp>
 #include <mbgl/style/layers/fill_extrusion_layer_properties.hpp>
 
+#include <memory>
+
 namespace mbgl {
 
 class ShadowMap;
+struct ShadowFrustumState;
 
 class RenderFillExtrusionLayer final : public RenderLayer {
 public:
@@ -52,6 +55,7 @@ private:
     std::size_t removeTile(RenderPass, const OverscaledTileID&) override;
     std::size_t removeAllDrawables() override;
     std::unique_ptr<ShadowMap> shadowMap;
+    std::shared_ptr<ShadowFrustumState> shadowFrustumState;
     TileLayerGroupPtr groundShadowLayerGroup;
     gfx::ShaderGroupPtr fillExtrusionShadowGroup;
     gfx::ShaderGroupPtr groundShadowGroup;

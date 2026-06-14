@@ -66,6 +66,10 @@ uint32_t shadowMapSize() {
     }();
     return size;
 }
+
+TileLayerGroup* shadowCasterGroup(const std::unique_ptr<ShadowMap>& shadowMap) {
+    return shadowMap ? shadowMap->casterGroup() : nullptr;
+}
 #endif
 
 } // namespace
@@ -116,6 +120,9 @@ std::size_t RenderFillExtrusionLayer::removeTile(RenderPass renderPass, const Ov
     if (groundShadowLayerGroup) {
         stats.drawablesRemoved += groundShadowLayerGroup->removeDrawables(renderPass, tileID).size();
     }
+    if (auto* casterGroup = shadowCasterGroup(shadowMap)) {
+        stats.drawablesRemoved += casterGroup->removeDrawables(RenderPass::Opaque, tileID).size();
+    }
     return stats.drawablesRemoved - oldValue;
 }
 
@@ -128,6 +135,10 @@ std::size_t RenderFillExtrusionLayer::removeAllDrawables() {
     if (groundShadowLayerGroup) {
         stats.drawablesRemoved += groundShadowLayerGroup->getDrawableCount();
         groundShadowLayerGroup->clearDrawables();
+    }
+    if (auto* casterGroup = shadowCasterGroup(shadowMap)) {
+        stats.drawablesRemoved += casterGroup->getDrawableCount();
+        casterGroup->clearDrawables();
     }
     return stats.drawablesRemoved - oldValue;
 }
@@ -205,11 +216,15 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
     bool useShadows = false;
 #if MLN_RENDER_BACKEND_METAL
     useShadows = shadowsEnabled();
+    if (useShadows && !shadowFrustumState) {
+        shadowFrustumState = std::make_shared<ShadowFrustumState>();
+    }
     if (useShadows && !shadowMap) {
         shadowMap = std::make_unique<ShadowMap>(shadowMapSize());
         shadowMap->ensure(context, getID());
         if (auto* casters = shadowMap->casterGroup()) {
-            shadowCasterTweaker = std::make_shared<ShadowDepthTweaker>(getID(), evaluatedProperties, shadowMapSize());
+            shadowCasterTweaker =
+                std::make_shared<ShadowDepthTweaker>(getID(), evaluatedProperties, shadowMapSize(), shadowFrustumState);
             casters->addLayerTweaker(shadowCasterTweaker);
         }
         if (shadowMap->target()) {
@@ -236,7 +251,8 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             }
         }
         if (groundShadowLayerGroup && !groundShadowTweaker) {
-            groundShadowTweaker = std::make_shared<GroundShadowTweaker>(getID(), evaluatedProperties, shadowMapSize());
+            groundShadowTweaker =
+                std::make_shared<GroundShadowTweaker>(getID(), evaluatedProperties, shadowMapSize(), shadowFrustumState);
             groundShadowLayerGroup->addLayerTweaker(groundShadowTweaker);
         }
     } else if (groundShadowLayerGroup) {
@@ -260,7 +276,8 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
     if (!layerTweaker) {
 #if MLN_RENDER_BACKEND_METAL
         if (useShadows) {
-            layerTweaker = std::make_shared<FillExtrusionShadowTweaker>(getID(), evaluatedProperties, shadowMapSize());
+            layerTweaker = std::make_shared<FillExtrusionShadowTweaker>(
+                getID(), evaluatedProperties, shadowMapSize(), shadowFrustumState);
         } else
 #endif
         {
@@ -301,6 +318,12 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         stats.drawablesRemoved += groundShadowLayerGroup->removeDrawablesIf([&](gfx::Drawable& drawable) {
             const auto& tileID = drawable.getTileID();
             return !(drawable.getRenderPass() & drawPass) || (tileID && !hasRenderTile(*tileID));
+        });
+    }
+    if (auto* casterGroup = shadowCasterGroup(shadowMap)) {
+        stats.drawablesRemoved += casterGroup->removeDrawablesIf([&](gfx::Drawable& drawable) {
+            const auto& tileID = drawable.getTileID();
+            return !(drawable.getRenderPass() & RenderPass::Opaque) || (tileID && !hasRenderTile(*tileID));
         });
     }
 #endif
@@ -389,6 +412,22 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             }
             return true;
         };
+#if MLN_RENDER_BACKEND_METAL
+        bool missingShadowSidecar = false;
+        if (useGroundShadows && groundShadowLayerGroup &&
+            groundShadowLayerGroup->getDrawableCount(drawPass, tileID) == 0) {
+            missingShadowSidecar = true;
+        }
+        if (useShadows && shadowDepthGroup && bucket.sharedTriangles->elements()) {
+            if (auto* casterGroup = shadowCasterGroup(shadowMap);
+                casterGroup && casterGroup->getDrawableCount(RenderPass::Opaque, tileID) == 0) {
+                missingShadowSidecar = true;
+            }
+        }
+        if (missingShadowSidecar) {
+            removeTile(drawPass, tileID);
+        }
+#endif
         if (updateTile(drawPass, tileID, std::move(updateExisting))) {
             continue;
         }
@@ -643,6 +682,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                         casterBuilder->flush(context);
                         for (auto& drawable : casterBuilder->clearDrawables()) {
                             drawable->setTileID(tileID);
+                            drawable->setLayerTweaker(shadowCasterTweaker);
                             drawable->setBinders(renderData.bucket, &binders);
                             drawable->setRenderTile(renderTilesOwner, &tile);
                             casterGroup->addDrawable(RenderPass::Opaque, tileID, std::move(drawable));

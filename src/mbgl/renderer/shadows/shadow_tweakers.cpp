@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <vector>
 
 namespace mbgl {
@@ -49,6 +50,10 @@ double tileWorldZScale(const TransformState&, const OverscaledTileID&) {
     // The real cause of the old over-long ground shadows was the caster front-face cull
     // dropping the roof (see render_fill_extrusion_layer.cpp), not the height scale.
     // Kept env-tunable (MLN_SHADOW_ZSCALE) only for on-device length dialing.
+    return envFloat("MLN_SHADOW_ZSCALE", 1.0f);
+}
+
+double shadowWorldZScale() {
     return envFloat("MLN_SHADOW_ZSCALE", 1.0f);
 }
 
@@ -85,6 +90,10 @@ vec3 centerPixelToWorld(const TransformState& state, uint8_t tileZoom) {
     return screenPixelToWorld(state, tileZoom, 0.5 * size.width, 0.5 * size.height);
 }
 
+uint8_t cameraFocalZoom(const TransformState& state) {
+    return std::min(state.getIntegerZoom(), util::DEFAULT_MAX_ZOOM);
+}
+
 Point<double> heightCompensatedFootprintCenter(const vec3& focalCenter, const vec3& sunDir, double maxHeightWorld) {
     const mat4 lightView = ShadowFrustum::lightView(sunDir);
     const double a = lightView[0];
@@ -103,83 +112,51 @@ Point<double> heightCompensatedFootprintCenter(const vec3& focalCenter, const ve
     return {focalCenter[0] + dx, focalCenter[1] + dy};
 }
 
+const mat4& worldToLightClipForFrame(ShadowFrustumState& frustumState,
+                                     const PaintParameters& parameters,
+                                     uint32_t mapSize) {
+    if (!frustumState.valid || frustumState.frameCount != parameters.frameCount || frustumState.mapSize != mapSize) {
+        frustumState.worldToLightClip = computeWorldToLightClip(parameters, mapSize);
+        frustumState.frameCount = parameters.frameCount;
+        frustumState.mapSize = mapSize;
+        frustumState.valid = true;
+    }
+    return frustumState.worldToLightClip;
+}
+
 } // namespace
 
-mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& parameters, uint32_t mapSize) {
+mat4 computeWorldToLightClip(const PaintParameters& parameters, uint32_t mapSize) {
     const auto& state = parameters.state;
     const vec3 sunDir = ShadowSun::direction(parameters.evaluatedLight.get<LightPosition>(),
                                              parameters.evaluatedLight.get<LightAnchor>(),
                                              static_cast<float>(state.getBearing()));
 
-    // Footprint = the world-space rects of every tile currently drawn in this layer group.
-    std::vector<vec3> ground;
-    double maxLightHeightScale = 0.0;
-    visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
-        const auto& tileID = drawable.getTileID();
-        if (!tileID) {
-            return;
-        }
-        const UnwrappedTileID unwrapped = tileID->toUnwrapped();
-        mat4 tileWorld;
-        state.matrixFor(tileWorld, unwrapped);
-        maxLightHeightScale = std::max(maxLightHeightScale, tileWorldZScale(state, *tileID));
-        ground.push_back(tileCornerToWorld(tileWorld, 0.0, 0.0));
-        ground.push_back(tileCornerToWorld(tileWorld, util::EXTENT, 0.0));
-        ground.push_back(tileCornerToWorld(tileWorld, 0.0, util::EXTENT));
-        ground.push_back(tileCornerToWorld(tileWorld, util::EXTENT, util::EXTENT));
-    });
-
-    if (ground.empty()) {
-        mat4 identity;
-        matrix::identity(identity);
-        return identity;
-    }
-
-    uint8_t focalZoom = 0;
-    bool hasFocalZoom = false;
-    visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
-        if (hasFocalZoom) {
-            return;
-        }
-        const auto& tileID = drawable.getTileID();
-        if (!tileID) {
-            return;
-        }
-        focalZoom = tileID->canonical.z;
-        hasFocalZoom = true;
-    });
-
-    // Tighten the footprint to a bounded box around the map center. The full tile-cover
-    // footprint stretches toward the horizon at high pitch, and its mean drifts away from
-    // the focal buildings. Derive the focal point through TransformState::matrixFor(), the
-    // same tile-local-to-world path used by the fitted tile corners and per-tile light_matrix.
+    // Tighten the footprint to a bounded box around the map center. Derive the focal point
+    // through TransformState::matrixFor(), the same tile-local-to-world path used by the
+    // per-tile light_matrix, but choose the zoom from camera state rather than layer-group
+    // drawable order. The caster, building receiver, and ground receiver may contain different
+    // drawable sets while tiles stream in; the light frustum must not depend on those sets.
+    const uint8_t focalZoom = cameraFocalZoom(state);
     const LatLng cameraCenter = state.getLatLng(LatLng::Unwrapped);
     const Point<double> projectedCenter = Projection::project(cameraCenter, state.getScale());
     const vec3 focalCenter = centerPixelToWorld(state, focalZoom);
     const double maxHeightRaw = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f);
-    const double maxHeightWorld = maxHeightRaw * maxLightHeightScale;
+    const double maxHeightWorld = maxHeightRaw * shadowWorldZScale();
     const Point<double> footprintCenter = heightCompensatedFootprintCenter(focalCenter, sunDir, maxHeightWorld);
     const double cx = footprintCenter.x;
     const double cy = footprintCenter.y;
 
-    // Coverage radius: size the light frustum so the WHOLE on-screen map is shadow-mapped. A fixed
-    // radius (or one fit only to a few viewport corners, which under-shoot at pitch where the top
-    // samples land near the horizon) leaves the far/top of the view with no shadow data — the
-    // "shadows only in the bottom half" diagonal cutoff. Take the max of two coverage sources:
-    //   (a) every loaded building tile — guarantees every visible building is reached;
-    //   (b) the camera viewport projected to world — covers ground beyond the loaded tiles.
-    // Keep the box CENTRED on the aligned focal point (UV stays centred); grow only the half-extent.
+    // Coverage radius: size the light frustum so the whole on-screen map is shadow-mapped. A fixed
+    // radius (or one fit only to a few viewport corners, which under-shoots at pitch where the top
+    // samples land near the horizon) leaves the far/top of the view with no shadow data. Keep the
+    // box centered on the aligned focal point (UV stays centered); grow only the half-extent.
     // Clamp the top so the shadow-map texel size stays usable. MLN_SHADOW_RADIUS forces it (debug).
     //
-    // CRITICAL: derive the radius from STATE ONLY (the camera viewport projected to world), NOT from
-    // the per-layer-group loaded tiles. The caster, FE receiver, and ground-quad tweakers each call
-    // this on a DIFFERENT layer group; a tile-extent term computed per group can differ between them
-    // (different/lagging tile sets), so the caster would render its depth into one frustum while the
-    // ground samples a DIFFERENT one — the shadow map is then misregistered and the ground reads
-    // mostly-empty (no cast shadow) except where the two frustums happen to overlap near the camera
-    // = the "shadows only in the bottom half" cutoff. A viewport-derived radius is identical across
-    // all three groups, so they fit the SAME frustum. It also covers exactly the visible map with a
-    // tighter (crisper) shadow map. A denser screen grid keeps coverage robust under pitch.
+    // Critical: derive the frustum from camera state only, not from the per-layer-group loaded tiles.
+    // A tile term computed per group can differ between caster and receivers, so the caster would
+    // render depth into one frustum while the ground samples another. A denser screen grid keeps
+    // coverage robust under pitch.
     const double radiusMax = static_cast<double>(envFloat("MLN_SHADOW_RADIUS_MAX", 4000.0f));
     const Size sz = state.getSize();
     double screenExtent = 0.0;
@@ -205,11 +182,11 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
     if (std::getenv("MLN_SHADOW_DBG")) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
-                      "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f size=%dx%d tiles=%zu "
+                      "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f focalZoom=%u size=%dx%d "
                       "focal=(%.1f,%.1f) projCenter=(%.1f,%.1f) footCenter=(%.1f,%.1f) "
                       "focalVsProj=(%.1f,%.1f) screenExtent=%.1f radius=%.1f",
                       util::rad2deg(state.getPitch()), state.getZoom(),
-                      sz.width, sz.height, ground.size(),
+                      focalZoom, sz.width, sz.height,
                       focalCenter[0], focalCenter[1], projectedCenter.x, projectedCenter.y,
                       footprintCenter.x, footprintCenter.y,
                       focalCenter[0] - projectedCenter.x, focalCenter[1] - projectedCenter.y,
@@ -233,7 +210,7 @@ void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
         return;
     }
     auto& context = parameters.context;
-    const mat4 worldToLightClip = computeWorldToLightClip(layerGroup, parameters, mapSize);
+    const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
 
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         const auto& tileID = drawable.getTileID();
@@ -258,7 +235,7 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
     const auto& state = parameters.state;
     const auto& evaluated = static_cast<const FillExtrusionLayerProperties&>(*evaluatedProperties).evaluated;
 
-    const mat4 worldToLightClip = computeWorldToLightClip(layerGroup, parameters, mapSize);
+    const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
 
     // Per-layer props (shared across drawables).
     const auto lightColor = FillExtrusionBucket::lightColor(parameters.evaluatedLight);
@@ -324,7 +301,7 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
     const auto& state = parameters.state;
     const auto& evaluated = static_cast<const FillExtrusionLayerProperties&>(*evaluatedProperties).evaluated;
 
-    const mat4 worldToLightClip = computeWorldToLightClip(layerGroup, parameters, mapSize);
+    const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
 
     const GroundShadowPropsUBO propsUBO = {.shadow_color = Color::black(),
                                            .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
