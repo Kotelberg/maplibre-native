@@ -968,6 +968,15 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
     std::vector<std::unique_ptr<ChangeRequest>> changes;
     changes.reserve(items.size() * 3);
 
+    // Per-layer update (drawable-build) timing, gated by MLN_PERF_LOG, to find which layer
+    // dominates the per-frame CPU "pre-pass" cost. Zero overhead when off.
+    static const bool perfLog = [] {
+        const char* v = std::getenv("MLN_PERF_LOG");
+        return v && std::string_view(v) != "0";
+    }();
+    double totalUpdMs = 0.0, slowestMs = 0.0;
+    std::string slowestId;
+
     for (const auto& item : items) {
         auto& renderLayer = item.layer.get();
 #if MLN_RENDER_BACKEND_OPENGL
@@ -978,10 +987,26 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
         }
 #endif
         try {
-            renderLayer.update(shaders, context, state, updateParameters, renderTree, changes);
+            if (perfLog) {
+                const auto t0 = util::MonotonicTimer::now().count();
+                renderLayer.update(shaders, context, state, updateParameters, renderTree, changes);
+                const double ms = (util::MonotonicTimer::now().count() - t0) * 1000.0;
+                totalUpdMs += ms;
+                if (ms > slowestMs) {
+                    slowestMs = ms;
+                    slowestId = renderLayer.getID();
+                }
+            } else {
+                renderLayer.update(shaders, context, state, updateParameters, renderTree, changes);
+            }
         } catch (...) {
             observer->onRenderError(std::current_exception());
         }
+    }
+    if (perfLog) {
+        Log::Warning(Event::General,
+                     "[perf-update] total=" + std::to_string(totalUpdMs) + "ms slowest=" + slowestId + " " +
+                         std::to_string(slowestMs) + "ms layers=" + std::to_string(items.size()));
     }
     addChanges(changes);
 }
