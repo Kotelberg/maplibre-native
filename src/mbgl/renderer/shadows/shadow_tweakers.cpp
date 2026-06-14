@@ -42,12 +42,13 @@ float envFloat(const char* name, float fallback) {
     return fallback;
 }
 
-double tileWorldZScale(const TransformState& state, const OverscaledTileID& tileID) {
-    if (!std::getenv("MLN_GROUND_SHADOWS")) {
-        return 1.0;
-    }
-    const uint64_t tileScale = 1ull << tileID.overscaledZ;
-    return Projection::worldSize(state.getScale()) / static_cast<double>(tileScale) / util::EXTENT;
+double tileWorldZScale(const TransformState&, const OverscaledTileID&) {
+    // The fill-extrusion height vertex is already in the same world units as the x/y
+    // footprint (mercator pixels), so matrixFor's z-scale of 1 is isotropic and correct.
+    // The real cause of the old over-long ground shadows was the caster front-face cull
+    // dropping the roof (see render_fill_extrusion_layer.cpp), not the height scale.
+    // Kept env-tunable (MLN_SHADOW_ZSCALE) only for on-device length dialing.
+    return envFloat("MLN_SHADOW_ZSCALE", 1.0f);
 }
 
 void matrixForLightTileWorld(mat4& tileWorld, const TransformState& state, const OverscaledTileID& tileID) {

@@ -617,13 +617,23 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                         casterBuilder->setColorMode(gfx::ColorMode::unblended()); // write packed depth (replace)
                         casterBuilder->setEnableDepth(true);
                         casterBuilder->setRenderPass(RenderPass::Opaque);
-                        // Render BACK faces (cull front) into the shadow map: storing each
-                        // building's far-from-light surface pushes the depth comparison past
-                        // the lit front faces, eliminating self-shadow acne (the standard
-                        // second-depth / front-face-cull shadow technique).
-                        casterBuilder->setCullFaceMode({.enabled = true,
-                                                        .side = gfx::CullFaceSideType::Front,
-                                                        .winding = gfx::CullFaceWindingType::CounterClockwise});
+                        // Render FRONT faces (cull back) into the shadow map: the nearest-to-light
+                        // surface — the ROOF and sun-facing walls — is the true occluder. The
+                        // earlier front-cull (second-depth technique) assumes a CLOSED mesh; fill-
+                        // extrusion buildings are OPEN (walls + roof, no floor), so culling front
+                        // dropped the roof and left only thin far-wall slivers → thin, edge-tracing
+                        // ground shadows. Rendering the roof gives solid, correctly-sized cast
+                        // shadows; receiver-side shadow_bias handles the mild self-shadow risk.
+                        // MLN_SHADOW_CULL (debug): 0=none 1=front 2=back(default).
+                        gfx::CullFaceMode casterCull{.enabled = true,
+                                                     .side = gfx::CullFaceSideType::Back,
+                                                     .winding = gfx::CullFaceWindingType::CounterClockwise};
+                        if (const char* cm = std::getenv("MLN_SHADOW_CULL")) {
+                            const int v = std::atoi(cm);
+                            if (v == 0) casterCull.enabled = false;
+                            else if (v == 1) casterCull.side = gfx::CullFaceSideType::Front;
+                        }
+                        casterBuilder->setCullFaceMode(casterCull);
                         casterBuilder->setRawVertices({}, vertexCount, gfx::AttributeDataType::Short2);
                         casterBuilder->setVertexAttributes(std::move(casterAttrs));
                         casterBuilder->setSegments(gfx::Triangles(),

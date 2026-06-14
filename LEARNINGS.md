@@ -1,16 +1,22 @@
 # Learnings
 
-## Metal ground-shadow height scale
+## Metal ground-shadow caster cull (THE fix — supersedes the height-scale theory below)
+
+- What we learned: the broken ground shadows (8× over-sized detached blobs at z16/p35, then thin road-tracing acne after the height-scale change) were caused by the shadow **caster** using FRONT-face culling. The "second-depth / render-back-faces" trick assumes a CLOSED mesh, but fill-extrusion buildings are OPEN (walls + roof, no floor). Front-cull drops the roof — the actual nearest-to-light occluder — leaving only thin far-wall slivers, so the shadow map has almost no solid content. Switching the caster to render FRONT faces (cull BACK = roof + sun-facing walls, the true occluder) produces solid, correctly-sized, attached cast shadows. Verified headless: top-down z17/p0 shadow mask ≈ 1.4× footprint area (vs 6.9× with the front-cull bug), shadow length ≈ building height at the style's 45° sun, buildings stay acne-free (receiver `shadow_bias` handles the mild self-shadow risk).
+- Why it matters: this is a geometry/topology issue, not a scale issue. With the roof casting, `matrixFor`'s native z-scale of 1 is already correct/isotropic (the FE height vertex is in the same world units as the x/y footprint), so NO ground-specific height rescale is needed.
+- How to apply it: in `src/mbgl/renderer/layers/render_fill_extrusion_layer.cpp` set the shadow caster `CullFaceMode` to `side = Back` (render front faces). `MLN_SHADOW_CULL` (0/1/2) is kept as a debug knob. Height scale stays at `matrixFor` default (`MLN_SHADOW_ZSCALE` defaults to 1.0, tunable only for on-device length dialing).
+- SUPERSEDED: the "height scale" entry below (commit c763b70) shrank the symptom by making buildings nearly flat in light space — that produced thin acne lines, not solid shadows. It was a wrong diagnosis (cull was the real cause). Kept for history only.
+
+## Metal ground-shadow height scale (SUPERSEDED — see caster-cull entry above)
 
 - What we learned: the ground-shadow light path must scale fill-extrusion Z by the drawable's `OverscaledTileID::overscaledZ` tile scale when `MLN_GROUND_SHADOWS` is enabled. In the Kyiv z17 render, vector data is z14 canonical but the drawable represents z17, so using `tileID.toUnwrapped().canonical.z` gives `0.5` and only halves the oversized shadows; using `overscaledZ` gives `512 / 8192 = 0.0625`, reducing the top-down shadow mask from ~21.3k px to ~2.8k px.
 - Why it matters: `toUnwrapped()` intentionally drops overzoom information for tile positioning, but the shadow height scale needs render-zoom units. Mixing canonical source zoom with render zoom leaves ground shadows over-scaled.
-- How to apply it: in `src/mbgl/renderer/shadows/shadow_tweakers.cpp`, compute the gated ground-shadow Z scale from `Projection::worldSize(state.getScale()) / (1 << tileID.overscaledZ) / util::EXTENT`, and keep the `env -u MLN_GROUND_SHADOWS` path at `zScale=1` for building receiver regression checks.
+- CAVEAT: this only shrank the over-sized symptom into thin acne lines; the real cause was the caster front-face cull (see above). The z-scale is now back to 1.0.
 
-## Metal ground-shadow caster experiments
+## Metal ground-shadow caster experiments (REVISED conclusion)
 
-- What we learned: changing the shadow caster to front-face depth, or trying top-cap-only depth with culling disabled, brings back large detached ground blocks in the z16/p35 Kyiv view. Top-cap-only with the existing front-face cull removes the ground shadows entirely.
-- Why it matters: the detached ground artifacts are not fixed by swapping caster culling; the useful narrow fix is the gated light-space height scale.
-- How to apply it: leave the caster cull mode in `src/mbgl/renderer/layers/render_fill_extrusion_layer.cpp` on the existing front-cull/back-face shadow-map path unless a future change introduces a separate ground-only shadow map.
+- What we learned: the earlier note here claimed cull changes don't help and only the height scale does — that conclusion was WRONG. The earlier "detached blocks from front-face depth" observation was front-face casting combined with the still-unfixed (over-large) height, never tested together with the correct z-scale. Full front-face casting (roof + near walls, cull BACK) WITH z-scale 1.0 gives correct solid shadows. (Top-cap-only WOULD detach — the gap from base to the offset roof shadow — because only the roof casts; full front faces include the near walls that fill that gap.)
+- How to apply it: render front faces (cull back). See the caster-cull entry above.
 
 ## macOS env unset ordering for mbgl-render
 
