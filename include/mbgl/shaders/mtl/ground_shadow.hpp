@@ -93,8 +93,7 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
         lit /= 9.0;
     }
 
-    const float shadow = (1.0 - lit) * props.shadow_intensity;
-    return {half4(half3(props.shadow_color.rgb), half(shadow))};
+    return {half4(half3(props.shadow_color.rgb), half((1.0 - lit) * props.shadow_intensity))};
 }
 )";
 };

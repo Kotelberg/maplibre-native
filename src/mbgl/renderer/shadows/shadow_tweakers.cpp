@@ -20,6 +20,7 @@
 #include <mbgl/util/constants.hpp>
 #include <mbgl/util/mat4.hpp>
 #include <mbgl/util/projection.hpp>
+#include <mbgl/util/tile_coordinate.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -45,6 +46,40 @@ vec3 tileCornerToWorld(const mat4& tileWorld, double x, double y) {
     vec4 out;
     matrix::transformMat4(out, vec4{{x, y, 0.0, 1.0}}, tileWorld);
     return {out[0] / out[3], out[1] / out[3], out[2] / out[3]};
+}
+
+vec3 centerPixelToWorld(const TransformState& state, uint8_t tileZoom) {
+    const Size size = state.getSize();
+    const ScreenCoordinate centerPixel = {0.5 * size.width, 0.5 * size.height};
+    const TileCoordinate centerCoord = state.screenCoordinateToTileCoordinate(centerPixel, tileZoom);
+
+    const auto tileX = static_cast<int64_t>(std::floor(centerCoord.p.x));
+    const auto tileY = static_cast<int64_t>(std::floor(centerCoord.p.y));
+    const double localX = (centerCoord.p.x - static_cast<double>(tileX)) * util::EXTENT;
+    const double localY = (centerCoord.p.y - static_cast<double>(tileY)) * util::EXTENT;
+    const UnwrappedTileID tileID(tileZoom, tileX, tileY);
+
+    mat4 tileWorld;
+    state.matrixFor(tileWorld, tileID);
+    return tileCornerToWorld(tileWorld, localX, localY);
+}
+
+Point<double> heightCompensatedFootprintCenter(const vec3& focalCenter, const vec3& sunDir, double maxHeightWorld) {
+    const mat4 lightView = ShadowFrustum::lightView(sunDir);
+    const double a = lightView[0];
+    const double b = lightView[4];
+    const double c = lightView[1];
+    const double d = lightView[5];
+    const double det = a * d - b * c;
+    if (std::abs(det) < 1e-9) {
+        return {focalCenter[0], focalCenter[1]};
+    }
+
+    const double rhsX = -0.5 * maxHeightWorld * lightView[8];
+    const double rhsY = -0.5 * maxHeightWorld * lightView[9];
+    const double dx = (rhsX * d - b * rhsY) / det;
+    const double dy = (a * rhsY - rhsX * c) / det;
+    return {focalCenter[0] + dx, focalCenter[1] + dy};
 }
 
 } // namespace
@@ -77,42 +112,64 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
     }
 
     double tileMeanX = 0.0, tileMeanY = 0.0;
+    uint8_t focalZoom = 0;
+    bool hasFocalZoom = false;
     for (const auto& p : ground) {
         tileMeanX += p[0];
         tileMeanY += p[1];
     }
     tileMeanX /= static_cast<double>(ground.size());
     tileMeanY /= static_cast<double>(ground.size());
+    visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
+        if (hasFocalZoom) {
+            return;
+        }
+        const auto& tileID = drawable.getTileID();
+        if (!tileID) {
+            return;
+        }
+        focalZoom = tileID->canonical.z;
+        hasFocalZoom = true;
+    });
 
     // Tighten the footprint to a bounded box around the map center. The full tile-cover
     // footprint stretches toward the horizon at high pitch, and its mean drifts away from
-    // the focal buildings. Projection::project() returns the same current-scale world-pixel
-    // coordinates that TransformState::matrixFor() uses for tile corners.
+    // the focal buildings. Derive the focal point through TransformState::matrixFor(), the
+    // same tile-local-to-world path used by the fitted tile corners and per-tile light_matrix.
     const LatLng cameraCenter = state.getLatLng(LatLng::Unwrapped);
-    const Point<double> focalCenter = Projection::project(cameraCenter, state.getScale());
-    const double cx = focalCenter.x;
-    const double cy = focalCenter.y;
+    const Point<double> projectedCenter = Projection::project(cameraCenter, state.getScale());
+    const vec3 focalCenter = centerPixelToWorld(state, focalZoom);
+    const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f);
+    const Point<double> footprintCenter = heightCompensatedFootprintCenter(focalCenter, sunDir, maxHeightWorld);
+    const double cx = footprintCenter.x;
+    const double cy = footprintCenter.y;
     const double radius = envFloat("MLN_SHADOW_RADIUS", 700.0f);
 
     if (std::getenv("MLN_SHADOW_DBG")) {
-        const double oldDx = tileMeanX - focalCenter.x;
-        const double oldDy = tileMeanY - focalCenter.y;
+        const double oldDx = tileMeanX - focalCenter[0];
+        const double oldDy = tileMeanY - focalCenter[1];
         std::fprintf(stderr,
                      "MLN_SHADOW_DBG shadow_footprint pitch=%.2f zoom=%.2f points=%zu "
-                     "old_centroid=(%.3f,%.3f) new_focal=(%.3f,%.3f) "
-                     "camera_center=(%.8f,%.8f) camera_center_world=(%.3f,%.3f) "
-                     "old_to_camera=%.3f new_to_camera=0.000 radius=%.3f\n",
+                     "old_centroid=(%.3f,%.3f) focal_world=(%.3f,%.3f) footprint_center=(%.3f,%.3f) "
+                     "projected_center=(%.3f,%.3f) camera_center=(%.8f,%.8f) "
+                     "focal_delta=(%.3f,%.3f) footprint_delta=(%.3f,%.3f) old_to_camera=%.3f radius=%.3f\n",
                      util::rad2deg(state.getPitch()),
                      state.getZoom(),
                      ground.size(),
                      tileMeanX,
                      tileMeanY,
-                     focalCenter.x,
-                     focalCenter.y,
+                     focalCenter[0],
+                     focalCenter[1],
+                     footprintCenter.x,
+                     footprintCenter.y,
+                     projectedCenter.x,
+                     projectedCenter.y,
                      cameraCenter.latitude(),
                      cameraCenter.longitude(),
-                     focalCenter.x,
-                     focalCenter.y,
+                     focalCenter[0] - projectedCenter.x,
+                     focalCenter[1] - projectedCenter.y,
+                     footprintCenter.x - focalCenter[0],
+                     footprintCenter.y - focalCenter[1],
                      std::hypot(oldDx, oldDy),
                      radius);
     }
@@ -121,7 +178,6 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
         {cx - radius, cy - radius, 0.0}, {cx + radius, cy - radius, 0.0},
         {cx - radius, cy + radius, 0.0}, {cx + radius, cy + radius, 0.0}};
 
-    const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f);
     const std::vector<vec3> pts = ShadowFrustum::heightExpand(footprint, maxHeightWorld);
     // Texel-snap the light frustum so the shadow-map sampling grid is stable in world space as
     // the camera pans/zooms/rotates — otherwise the shadow texels crawl ("shadow swimming") and

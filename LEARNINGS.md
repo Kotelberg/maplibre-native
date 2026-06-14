@@ -1,5 +1,11 @@
 # Learnings
 
+## Metal shadow focal UV alignment
+
+- What we learned: for the z16 Kyiv test view, `Projection::project(state.getLatLng(LatLng::Unwrapped), state.getScale())` and a center-pixel point derived through `screenCoordinateToTileCoordinate(...)->matrixFor(...)->tileCornerToWorld(...)` land in the same `matrixFor` world space; the remaining center UV offset came from `ShadowFrustum::heightExpand()` adding caster height into the light-space X/Y AABB.
+- Why it matters: a height-expanded light-space AABB shifts the ground focal point by half of the projected max-height vector, so the screen-center ground point can read away from `(0.5, 0.5)` even when the ground footprint is centered on the right world point.
+- How to apply it: in `src/mbgl/renderer/shadows/shadow_tweakers.cpp`, derive the focal point through the tile-local `matrixFor` path, then offset the fitted footprint center by the inverse light-space projection of `0.5 * MLN_SHADOW_MAX_HEIGHT`. When verifying UV with `include/mbgl/shaders/mtl/ground_shadow.hpp`, use an opaque debug return or CPU `MLN_SHADOW_DBG` focal UV logs because non-premultiplied UV debug RGB is alpha-blended over the style color.
+
 ## Metal shadow frustum depth mapping
 
 - What we learned: `matrix::ortho()` uses GL-style near/far depth semantics and is not safe for projecting an arbitrary light-space AABB directly into a Metal shadow map.
