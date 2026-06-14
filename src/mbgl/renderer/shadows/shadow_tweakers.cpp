@@ -9,6 +9,7 @@
 #include <mbgl/gfx/context.hpp>
 #include <mbgl/gfx/drawable.hpp>
 #include <mbgl/map/transform_state.hpp>
+#include <mbgl/math/angles.hpp>
 #include <mbgl/renderer/layer_group.hpp>
 #include <mbgl/renderer/render_tile.hpp>
 #include <mbgl/renderer/paint_parameters.hpp>
@@ -18,7 +19,10 @@
 #include <mbgl/style/layers/fill_extrusion_layer_properties.hpp>
 #include <mbgl/util/constants.hpp>
 #include <mbgl/util/mat4.hpp>
+#include <mbgl/util/projection.hpp>
 
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <vector>
 
@@ -72,18 +76,47 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
         return identity;
     }
 
-    // Tighten the footprint to a bounded box around its centroid. The full tile-cover footprint
-    // is far larger than the visible buildings; a tilted light then rotates that ground spread
-    // into the depth axis and crushes building-height depth precision. Clamp to a modest radius
-    // (world units; env-tunable) so the shadow map's depth range is dominated by buildings.
-    double cx = 0.0, cy = 0.0;
+    double tileMeanX = 0.0, tileMeanY = 0.0;
     for (const auto& p : ground) {
-        cx += p[0];
-        cy += p[1];
+        tileMeanX += p[0];
+        tileMeanY += p[1];
     }
-    cx /= static_cast<double>(ground.size());
-    cy /= static_cast<double>(ground.size());
+    tileMeanX /= static_cast<double>(ground.size());
+    tileMeanY /= static_cast<double>(ground.size());
+
+    // Tighten the footprint to a bounded box around the map center. The full tile-cover
+    // footprint stretches toward the horizon at high pitch, and its mean drifts away from
+    // the focal buildings. Projection::project() returns the same current-scale world-pixel
+    // coordinates that TransformState::matrixFor() uses for tile corners.
+    const LatLng cameraCenter = state.getLatLng(LatLng::Unwrapped);
+    const Point<double> focalCenter = Projection::project(cameraCenter, state.getScale());
+    const double cx = focalCenter.x;
+    const double cy = focalCenter.y;
     const double radius = envFloat("MLN_SHADOW_RADIUS", 700.0f);
+
+    if (std::getenv("MLN_SHADOW_DBG")) {
+        const double oldDx = tileMeanX - focalCenter.x;
+        const double oldDy = tileMeanY - focalCenter.y;
+        std::fprintf(stderr,
+                     "MLN_SHADOW_DBG shadow_footprint pitch=%.2f zoom=%.2f points=%zu "
+                     "old_centroid=(%.3f,%.3f) new_focal=(%.3f,%.3f) "
+                     "camera_center=(%.8f,%.8f) camera_center_world=(%.3f,%.3f) "
+                     "old_to_camera=%.3f new_to_camera=0.000 radius=%.3f\n",
+                     util::rad2deg(state.getPitch()),
+                     state.getZoom(),
+                     ground.size(),
+                     tileMeanX,
+                     tileMeanY,
+                     focalCenter.x,
+                     focalCenter.y,
+                     cameraCenter.latitude(),
+                     cameraCenter.longitude(),
+                     focalCenter.x,
+                     focalCenter.y,
+                     std::hypot(oldDx, oldDy),
+                     radius);
+    }
+
     const std::vector<vec3> footprint = {
         {cx - radius, cy - radius, 0.0}, {cx + radius, cy - radius, 0.0},
         {cx - radius, cy + radius, 0.0}, {cx + radius, cy + radius, 0.0}};
