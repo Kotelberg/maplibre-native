@@ -140,7 +140,10 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
         .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
         .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
-        .shadow_slope_bias = envFloat("MLN_SHADOW_SLOPE_BIAS", 0.04f)};
+        // Default 0: let buildings self-shadow their away-from-sun faces (the crisp per-face
+        // look the user wants — Mapbox does this). The slope term stays env-tunable
+        // (MLN_SHADOW_SLOPE_BIAS) to suppress acne if a build ever needs it.
+        .shadow_slope_bias = envFloat("MLN_SHADOW_SLOPE_BIAS", 0.0f)};
     auto& layerUniforms = layerGroup.mutableUniformBuffers();
     layerUniforms.createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
 
