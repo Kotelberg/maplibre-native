@@ -48,13 +48,14 @@ inline const FillExtrusionLayer::Impl& impl_cast(const Immutable<style::Layer::I
 }
 
 #if MLN_RENDER_BACKEND_METAL
-// Master runtime gate for the directional-shadow path. Default ON, but force-checked here
-// against the env override. (Defaults to off in the unverified S1 state — see project notes —
-// flip the default to true once on-sim-verified.)
+// Master runtime gate for the directional-shadow path. Default ON (on-sim-verified 2026-06-14:
+// building + ground cast shadows render correctly across the full pitched view, no cutoff).
+// MLN_RENDER_3D_ENHANCEMENTS=0 force-disables for the byte-identical-off check and per-device
+// benchmark gating (S-BENCH).
 bool shadowsEnabled() {
     static const bool enabled = [] {
         const char* v = std::getenv("MLN_RENDER_3D_ENHANCEMENTS");
-        return v && std::string_view(v) == "1"; // opt-in until on-sim-verified
+        return !(v && std::string_view(v) == "0");
     }();
     return enabled;
 }
@@ -241,7 +242,11 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         }
     }
 
-    const bool useGroundShadows = useShadows && groundShadowGroup && std::getenv("MLN_GROUND_SHADOWS");
+    // Ground cast shadows default ON (gated by the master useShadows above); MLN_GROUND_SHADOWS=0
+    // force-disables (e.g. to isolate building-only shadows).
+    const char* groundShadowEnv = std::getenv("MLN_GROUND_SHADOWS");
+    const bool useGroundShadows =
+        useShadows && groundShadowGroup && !(groundShadowEnv && std::string_view(groundShadowEnv) == "0");
     if (useGroundShadows) {
         if (!groundShadowLayerGroup) {
             groundShadowLayerGroup =

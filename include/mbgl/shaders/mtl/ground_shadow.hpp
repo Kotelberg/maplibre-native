@@ -79,6 +79,20 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     constexpr sampler shadowSampler(coord::normalized, filter::nearest, address::clamp_to_edge);
     const float3 ndc = in.shadow_pos.xyz / in.shadow_pos.w;
     const float2 uv = ndc.xy * 0.5 + 0.5;
+    // VIZ debug (toggle via MLN_SHADOW_INTENSITY > 1.5): paint frustum + caster coverage so the
+    // live render reveals the cutoff cause (text logs don't surface in the RN host). blue = UV
+    // outside the light frustum (no coverage); red = in frustum + a caster wrote depth (shadowed);
+    // green = in frustum, no caster (lit ground).
+    if (props.shadow_intensity > 1.5) {
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+            return {half4(0.0, 0.0, 1.0, 0.55)};
+        }
+        const float occlV = ground_unpackShadowDepth(shadowTexture.sample(shadowSampler, uv));
+        if (occlV < 0.99) {
+            return {half4(1.0, 0.0, 0.0, 0.6)};
+        }
+        return {half4(0.0, 1.0, 0.0, 0.35)};
+    }
     float lit = 1.0;
     if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
         const float current = ndc.z - props.shadow_bias;
