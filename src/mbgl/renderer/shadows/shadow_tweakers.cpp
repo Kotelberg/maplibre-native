@@ -18,6 +18,7 @@
 #include <mbgl/renderer/paint_property_binder.hpp>
 #include <mbgl/style/layers/fill_extrusion_layer_properties.hpp>
 #include <mbgl/util/constants.hpp>
+#include <mbgl/util/logging.hpp>
 #include <mbgl/util/mat4.hpp>
 #include <mbgl/util/projection.hpp>
 #include <mbgl/util/tile_coordinate.hpp>
@@ -134,15 +135,8 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
         return identity;
     }
 
-    double tileMeanX = 0.0, tileMeanY = 0.0;
     uint8_t focalZoom = 0;
     bool hasFocalZoom = false;
-    for (const auto& p : ground) {
-        tileMeanX += p[0];
-        tileMeanY += p[1];
-    }
-    tileMeanX /= static_cast<double>(ground.size());
-    tileMeanY /= static_cast<double>(ground.size());
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         if (hasFocalZoom) {
             return;
@@ -176,28 +170,32 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
     //   (b) the camera viewport projected to world — covers ground beyond the loaded tiles.
     // Keep the box CENTRED on the aligned focal point (UV stays centred); grow only the half-extent.
     // Clamp the top so the shadow-map texel size stays usable. MLN_SHADOW_RADIUS forces it (debug).
-    // NOTE: all three shadow layer groups (caster / FE receiver / ground quad) are built from the
-    // same fill-extrusion tiles, so the tile-extent term is the same across them — the caster and
-    // the receivers still fit the SAME frustum (no cross-group misregistration).
+    //
+    // CRITICAL: derive the radius from STATE ONLY (the camera viewport projected to world), NOT from
+    // the per-layer-group loaded tiles. The caster, FE receiver, and ground-quad tweakers each call
+    // this on a DIFFERENT layer group; a tile-extent term computed per group can differ between them
+    // (different/lagging tile sets), so the caster would render its depth into one frustum while the
+    // ground samples a DIFFERENT one — the shadow map is then misregistered and the ground reads
+    // mostly-empty (no cast shadow) except where the two frustums happen to overlap near the camera
+    // = the "shadows only in the bottom half" cutoff. A viewport-derived radius is identical across
+    // all three groups, so they fit the SAME frustum. It also covers exactly the visible map with a
+    // tighter (crisper) shadow map. A denser screen grid keeps coverage robust under pitch.
     const double radiusMax = static_cast<double>(envFloat("MLN_SHADOW_RADIUS_MAX", 4000.0f));
-    double coverRadius = 0.0;
-    for (const auto& p : ground) {
-        coverRadius = std::max({coverRadius, std::abs(p[0] - cx), std::abs(p[1] - cy)});
-    }
+    const Size sz = state.getSize();
+    double screenExtent = 0.0;
     {
-        const Size sz = state.getSize();
-        const double xs[5] = {0.0, 0.25 * sz.width, 0.5 * sz.width, 0.75 * sz.width, static_cast<double>(sz.width)};
-        const double ys[5] = {0.0, 0.25 * sz.height, 0.5 * sz.height, 0.75 * sz.height, static_cast<double>(sz.height)};
-        for (double sx : xs) {
-            for (double sy : ys) {
-                const vec3 w = screenPixelToWorld(state, focalZoom, sx, sy);
+        const double fr[6] = {0.0, 0.2, 0.4, 0.6, 0.8, 1.0};
+        for (double fx : fr) {
+            for (double fy : fr) {
+                const vec3 w = screenPixelToWorld(state, focalZoom, fx * sz.width, fy * sz.height);
                 const double d = std::max(std::abs(w[0] - cx), std::abs(w[1] - cy));
-                if (std::isfinite(d)) {
-                    coverRadius = std::max(coverRadius, std::min(d, radiusMax));
+                if (std::isfinite(d) && d > 0.0) {
+                    screenExtent = std::max(screenExtent, std::min(d, radiusMax));
                 }
             }
         }
     }
+    const double coverRadius = screenExtent;
     const double radius = std::getenv("MLN_SHADOW_RADIUS")
                               ? static_cast<double>(envFloat("MLN_SHADOW_RADIUS", 700.0f))
                               : std::clamp(coverRadius,
@@ -205,37 +203,18 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
                                            radiusMax);
 
     if (std::getenv("MLN_SHADOW_DBG")) {
-        const double oldDx = tileMeanX - focalCenter[0];
-        const double oldDy = tileMeanY - focalCenter[1];
-        std::fprintf(stderr,
-                     "MLN_SHADOW_DBG shadow_footprint pitch=%.2f zoom=%.2f points=%zu "
-                     "old_centroid=(%.3f,%.3f) focal_world=(%.3f,%.3f) footprint_center=(%.3f,%.3f) "
-                     "projected_center=(%.3f,%.3f) camera_center=(%.8f,%.8f) "
-                     "focal_delta=(%.3f,%.3f) footprint_delta=(%.3f,%.3f) old_to_camera=%.3f radius=%.3f\n",
-                     util::rad2deg(state.getPitch()),
-                     state.getZoom(),
-                     ground.size(),
-                     tileMeanX,
-                     tileMeanY,
-                     focalCenter[0],
-                     focalCenter[1],
-                     footprintCenter.x,
-                     footprintCenter.y,
-                     projectedCenter.x,
-                     projectedCenter.y,
-                     cameraCenter.latitude(),
-                     cameraCenter.longitude(),
-                     focalCenter[0] - projectedCenter.x,
-                     focalCenter[1] - projectedCenter.y,
-                     footprintCenter.x - focalCenter[0],
-                     footprintCenter.y - focalCenter[1],
-                     std::hypot(oldDx, oldDy),
-                     radius);
-        std::fprintf(stderr,
-                     "MLN_SHADOW_DBG shadow_height raw=%.3f z_scale=%.6f world=%.3f\n",
-                     maxHeightRaw,
-                     maxLightHeightScale,
-                     maxHeightWorld);
+        char buf[512];
+        std::snprintf(buf, sizeof(buf),
+                      "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f size=%dx%d tiles=%zu "
+                      "focal=(%.1f,%.1f) projCenter=(%.1f,%.1f) footCenter=(%.1f,%.1f) "
+                      "focalVsProj=(%.1f,%.1f) screenExtent=%.1f radius=%.1f",
+                      util::rad2deg(state.getPitch()), state.getZoom(),
+                      sz.width, sz.height, ground.size(),
+                      focalCenter[0], focalCenter[1], projectedCenter.x, projectedCenter.y,
+                      footprintCenter.x, footprintCenter.y,
+                      focalCenter[0] - projectedCenter.x, focalCenter[1] - projectedCenter.y,
+                      screenExtent, radius);
+        Log::Warning(Event::General, buf);
     }
 
     const std::vector<vec3> footprint = {
