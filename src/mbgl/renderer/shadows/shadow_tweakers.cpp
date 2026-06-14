@@ -57,6 +57,29 @@ double shadowWorldZScale() {
     return envFloat("MLN_SHADOW_ZSCALE", 1.0f);
 }
 
+// Directional cast shadows are a 3D-view effect. At a flat / top-down camera they have no
+// depth cue and, in dense areas, the (correct, full-length) ground shadows lie flat and
+// clutter the map into a dark mess. Fade the cast-shadow strength out as the camera flattens
+// — matching the app's pitch-gated 3D-building reveal — so a top-down view stays clean and
+// shadows fade in smoothly as you tilt. Full strength by MLN_SHADOW_PITCH_FADE_HI (default
+// 35°, well below the app's ~50° 3D pitch). Set LO>=HI or LO<0 to disable.
+float pitchShadowFade(const TransformState& state) {
+    const double deg = util::rad2deg(state.getPitch());
+    const double lo = static_cast<double>(envFloat("MLN_SHADOW_PITCH_FADE_LO", 12.0f));
+    const double hi = static_cast<double>(envFloat("MLN_SHADOW_PITCH_FADE_HI", 35.0f));
+    if (lo < 0.0 || hi <= lo) {
+        return 1.0f;
+    }
+    if (deg <= lo) {
+        return 0.0f;
+    }
+    if (deg >= hi) {
+        return 1.0f;
+    }
+    const double t = (deg - lo) / (hi - lo);
+    return static_cast<float>(t * t * (3.0 - 2.0 * t)); // smoothstep
+}
+
 void matrixForLightTileWorld(mat4& tileWorld, const TransformState& state, const OverscaledTileID& tileID) {
     state.matrixFor(tileWorld, tileID.toUnwrapped());
     const double zScale = tileWorldZScale(state, tileID);
@@ -295,7 +318,10 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         .light_intensity = FillExtrusionBucket::lightIntensity(parameters.evaluatedLight),
         .vertical_gradient = evaluated.get<FillExtrusionVerticalGradient>() ? 1.0f : 0.0f,
         .opacity = evaluated.get<FillExtrusionOpacity>(),
-        .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
+        // Fade the cast-shadow strength out as the camera flattens (top-down has no 3D depth
+        // cue; flat shadows clutter the map). Face shading uses light_intensity, not this, so
+        // the buildings keep their directional shading at any pitch.
+        .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f) * pitchShadowFade(state),
         .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
         .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
         // Default 0: let buildings self-shadow their away-from-sun faces (the crisp per-face
@@ -350,7 +376,10 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
     const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
 
     const GroundShadowPropsUBO propsUBO = {.shadow_color = Color::black(),
-                                           .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
+                                           // Fade ground cast shadows out at flat/top-down pitch
+                                           // (they have no 3D depth cue there and clutter the map).
+                                           .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f) *
+                                                               pitchShadowFade(state),
                                            .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
                                            .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
                                            // Fade over the outer 15% of the frustum by default;
