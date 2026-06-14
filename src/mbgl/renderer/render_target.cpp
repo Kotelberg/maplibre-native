@@ -7,6 +7,10 @@
 #include <mbgl/renderer/layer_tweaker.hpp>
 #include <mbgl/renderer/paint_parameters.hpp>
 #include <mbgl/renderer/render_tree.hpp>
+#include <mbgl/util/image.hpp>
+
+#include <cstdlib>
+#include <fstream>
 
 namespace mbgl {
 
@@ -117,6 +121,31 @@ void RenderTarget::render(RenderOrchestrator& orchestrator, const RenderTree& re
     parameters.encoder->present(*offscreenTexture);
 
     parameters.scissorRect = prevScissorRect;
+
+    // DEBUG (env-gated, no effect on the byte-identical off path): dump the shadow-map RGBA8
+    // (packed-depth) texture to a PNG so the caster-depth coverage/registration is observable in
+    // headless mbgl-render. Only fires when MLN_SHADOW_DUMP names a file prefix AND this target
+    // owns a depth attachment (i.e. it is the shadow map, not some other render target).
+    if (withDepth) {
+        if (const char* prefix = std::getenv("MLN_SHADOW_DUMP")) {
+            static int dumpCounter = 0;
+            const PremultipliedImage img = offscreenTexture->readStillImage();
+            // Quick coverage probe: count non-(255,255,255) pixels (cleared white == far == no caster).
+            size_t covered = 0;
+            const size_t npx = static_cast<size_t>(img.size.width) * img.size.height;
+            for (size_t i = 0; i < npx; ++i) {
+                const uint8_t* p = img.data.get() + i * 4;
+                if (!(p[0] == 255 && p[1] == 255 && p[2] == 255)) ++covered;
+            }
+            const std::string png = encodePNG(img);
+            const std::string path = std::string(prefix) + "_" + std::to_string(dumpCounter) + ".png";
+            std::ofstream out(path, std::ios::binary);
+            out.write(png.data(), static_cast<std::streamsize>(png.size()));
+            fprintf(stderr, "MLN_SHADOW_DUMP frame=%d coverage=%.2f%% -> %s\n",
+                    dumpCounter, 100.0 * static_cast<double>(covered) / static_cast<double>(npx), path.c_str());
+            ++dumpCounter;
+        }
+    }
 }
 
 } // namespace mbgl

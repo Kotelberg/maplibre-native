@@ -16,9 +16,13 @@ enum {
 
 struct alignas(16) ShadowDepthDrawableUBO {
     /*  0 */ float4x4 light_matrix;
-    /* 64 */
+    /* 64 */ float base_t;
+    /* 68 */ float height_t;
+    /* 72 */ float u_base;
+    /* 76 */ float u_height;
+    /* 80 */
 };
-static_assert(sizeof(ShadowDepthDrawableUBO) == 4 * 16, "wrong size");
+static_assert(sizeof(ShadowDepthDrawableUBO) == 5 * 16, "wrong size");
 
 )";
 
@@ -68,15 +72,18 @@ float4 packDepth(float depth) {
 
 FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
                                 device const ShadowDepthDrawableUBO& drawable [[buffer(idShadowDepthDrawableUBO)]]) {
+    // Match the visible FE / receiver vertex EXACTLY so the caster co-locates with the
+    // building you see: same constant in the uniform branch, same per-vertex
+    // interpolation factor (NOT a hardcoded 0.0) in the data-driven branch.
 #if defined(HAS_UNIFORM_u_base)
-    const float base = 0.0;
+    const float base = max(drawable.u_base, 0.0);
 #else
-    const float base = max(unpack_mix_float(vertx.base, 0.0), 0.0);
+    const float base = max(unpack_mix_float(vertx.base, drawable.base_t), 0.0);
 #endif
 #if defined(HAS_UNIFORM_u_height)
-    const float height = 0.0;
+    const float height = max(drawable.u_height, 0.0);
 #else
-    const float height = max(unpack_mix_float(vertx.height, 0.0), 0.0);
+    const float height = max(unpack_mix_float(vertx.height, drawable.height_t), 0.0);
 #endif
     // Match the FE vertex: t (top/bottom flag) selects height vs base for z.
     const float t = float(vertx.normal_ed.x & 1);

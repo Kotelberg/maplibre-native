@@ -27,7 +27,7 @@ struct alignas(16) GroundShadowPropsUBO {
     /* 16 */ float shadow_intensity;
     /* 20 */ float shadow_texel_size;
     /* 24 */ float shadow_bias;
-    /* 28 */ float pad1;
+    /* 28 */ float shadow_fade_start;
     /* 32 */
 };
 static_assert(sizeof(GroundShadowPropsUBO) == 2 * 16, "wrong size");
@@ -107,7 +107,13 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
         lit /= 9.0;
     }
 
-    return {half4(half3(props.shadow_color.rgb), half((1.0 - lit) * props.shadow_intensity))};
+    // Soft far-edge fade: with the centered, texel-snapped frustum the UV-radial distance from
+    // center maps to world distance, so fade the cast shadow to lit over the outer rim. This
+    // turns the bounded far edge (and the point where loaded caster tiles run out) into a
+    // graceful distance fade instead of a hard horizontal line. fade_start=1.0 => no fade.
+    const float r = max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0; // 0 at center, 1 at frustum edge
+    const float fade = 1.0 - smoothstep(props.shadow_fade_start, 1.0, r);
+    return {half4(half3(props.shadow_color.rgb), half((1.0 - lit) * props.shadow_intensity * fade))};
 }
 )";
 };

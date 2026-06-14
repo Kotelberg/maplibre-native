@@ -172,7 +172,30 @@ mat4 computeWorldToLightClip(const PaintParameters& parameters, uint32_t mapSize
             }
         }
     }
-    const double coverRadius = screenExtent;
+    // Distance cap (Mapbox-v3 technique): bound the shadow volume to a multiple of the
+    // camera-to-center distance instead of letting the screen grid reach the horizon. At
+    // steep pitch the top screen rows graze the horizon and screenExtent balloons (~630 at
+    // p35 -> ~2043 at p60), packing the loaded casters into a small shadow-map fraction and
+    // extending the frustum past the loaded tiles -> the far/top of the view has no caster
+    // depth -> a hard cut-off line. The cap keeps casters texel-dense. It only bites at steep
+    // pitch (where screenExtent >> cap); at low pitch the cap is large so the near-field
+    // radius is unchanged (no near-field regression). Convert cameraToCenterDistance (screen
+    // px) to world units via the local world-per-pixel scale at the focal center.
+    const vec3 cWorld = screenPixelToWorld(state, focalZoom, 0.5 * sz.width, 0.5 * sz.height);
+    const vec3 cWorldDx = screenPixelToWorld(state, focalZoom, 0.5 * sz.width + 1.0, 0.5 * sz.height);
+    const double worldPerPixel = std::hypot(cWorldDx[0] - cWorld[0], cWorldDx[1] - cWorld[1]);
+    // ~1.0 * cameraToCenterDistance (world units) is the sweet spot: it leaves the low-pitch
+    // near-field radius (p0~537, p35~630) untouched (cap ~889 > those) and caps the steep-pitch
+    // balloon (p55~1411, p60~2043) back to a texel-dense ~889. Matches the empirically-verified
+    // good-coverage radius and Mapbox-v3's cameraToCenter-bounded shadow volume.
+    const double distFactor = static_cast<double>(envFloat("MLN_SHADOW_DIST_FACTOR", 1.0f));
+    const double distCapWorld = state.getCameraToCenterDistance() * distFactor * worldPerPixel;
+    // distCap = end of the shadow volume in world units. (Avoid the name `far`: it is a
+    // legacy reserved macro in some toolchains.)
+    const double distCap = std::isfinite(distCapWorld) && distCapWorld > 0.0
+                               ? std::min(distCapWorld, radiusMax)
+                               : radiusMax;
+    const double coverRadius = std::min(screenExtent, distCap);
     const double radius = std::getenv("MLN_SHADOW_RADIUS")
                               ? static_cast<double>(envFloat("MLN_SHADOW_RADIUS", 700.0f))
                               : std::clamp(coverRadius,
@@ -184,13 +207,13 @@ mat4 computeWorldToLightClip(const PaintParameters& parameters, uint32_t mapSize
         std::snprintf(buf, sizeof(buf),
                       "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f focalZoom=%u size=%dx%d "
                       "focal=(%.1f,%.1f) projCenter=(%.1f,%.1f) footCenter=(%.1f,%.1f) "
-                      "focalVsProj=(%.1f,%.1f) screenExtent=%.1f radius=%.1f",
+                      "focalVsProj=(%.1f,%.1f) screenExtent=%.1f wpp=%.3f distCap=%.1f radius=%.1f",
                       util::rad2deg(state.getPitch()), state.getZoom(),
                       focalZoom, sz.width, sz.height,
                       focalCenter[0], focalCenter[1], projectedCenter.x, projectedCenter.y,
                       footprintCenter.x, footprintCenter.y,
                       focalCenter[0] - projectedCenter.x, focalCenter[1] - projectedCenter.y,
-                      screenExtent, radius);
+                      screenExtent, worldPerPixel, distCap, radius);
         Log::Warning(Event::General, buf);
     }
 
@@ -210,7 +233,16 @@ void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
         return;
     }
     auto& context = parameters.context;
+    const auto& state = parameters.state;
     const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
+
+    // Constant base/height fallbacks for caster drawables whose base/height is uniform
+    // (HAS_UNIFORM_u_base/u_height). These mirror the visible FE shader's
+    // props.light_position_base.w / props.height so the caster extrudes to the same height.
+    const auto& evaluated = static_cast<const FillExtrusionLayerProperties&>(*evaluatedProperties).evaluated;
+    const float constBase = evaluated.get<FillExtrusionBase>().constantOr(0.0f);
+    const float constHeight = evaluated.get<FillExtrusionHeight>().constantOr(0.0f);
+    const auto zoom = static_cast<float>(state.getZoom());
 
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         const auto& tileID = drawable.getTileID();
@@ -218,11 +250,25 @@ void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
             return;
         }
         mat4 tileWorld;
-        matrixForLightTileWorld(tileWorld, parameters.state, *tileID);
+        matrixForLightTileWorld(tileWorld, state, *tileID);
         mat4 lightMatrix;
         matrix::multiply(lightMatrix, worldToLightClip, tileWorld);
 
-        const ShadowDepthDrawableUBO ubo = {.light_matrix = util::cast<float>(lightMatrix)};
+        // Per-vertex interpolation factor for the data-driven base/height path: identical to
+        // the receiver (shadow_tweakers.cpp FillExtrusionShadowTweaker) and the visible FE
+        // layer tweaker, so caster height == visible building height at every fractional zoom.
+        float baseT = 0.0f;
+        float heightT = 0.0f;
+        if (auto* binders = static_cast<FillExtrusionBinders*>(drawable.getBinders())) {
+            baseT = std::get<0>(binders->get<FillExtrusionBase>()->interpolationFactor(zoom));
+            heightT = std::get<0>(binders->get<FillExtrusionHeight>()->interpolationFactor(zoom));
+        }
+
+        const ShadowDepthDrawableUBO ubo = {.light_matrix = util::cast<float>(lightMatrix),
+                                            .base_t = baseT,
+                                            .height_t = heightT,
+                                            .u_base = constBase,
+                                            .u_height = constHeight};
         drawable.mutableUniformBuffers().createOrUpdate(idShadowDepthDrawableUBO, &ubo, context);
     });
 }
@@ -307,7 +353,9 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
                                            .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
                                            .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
                                            .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
-                                           .pad1 = 0.0f};
+                                           // Fade over the outer 15% of the frustum by default;
+                                           // MLN_SHADOW_FADE_START=1.0 disables the fade.
+                                           .shadow_fade_start = envFloat("MLN_SHADOW_FADE_START", 0.85f)};
 
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         // CRITICAL: only touch the ground-shadow quads (which have no paint binders). The
