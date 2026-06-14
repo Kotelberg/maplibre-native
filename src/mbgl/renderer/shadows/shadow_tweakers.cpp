@@ -123,7 +123,10 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
 
     const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f);
     const std::vector<vec3> pts = ShadowFrustum::heightExpand(footprint, maxHeightWorld);
-    return ShadowFrustum::fit(sunDir, pts, mapSize, /*texelSnapEnabled=*/false);
+    // Texel-snap the light frustum so the shadow-map sampling grid is stable in world space as
+    // the camera pans/zooms/rotates — otherwise the shadow texels crawl ("shadow swimming") and
+    // the shadows look unanchored from the buildings. Requires a world-fixed sun (map anchor).
+    return ShadowFrustum::fit(sunDir, pts, mapSize, /*texelSnapEnabled=*/true);
 }
 
 void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParameters& parameters) {

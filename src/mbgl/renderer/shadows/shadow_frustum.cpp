@@ -72,10 +72,18 @@ mat4 ShadowFrustum::fit(const vec3& sunDir,
     Aabb box = lightSpaceAabb(sunDir, worldPoints);
 
     if (texelSnapEnabled && mapSize > 0) {
-        const double texelX = (box.max[0] - box.min[0]) / static_cast<double>(mapSize);
-        const double texelY = (box.max[1] - box.min[1]) / static_cast<double>(mapSize);
+        // Hold the box SIZE constant (it's a fixed-radius footprint under a world-fixed sun, so
+        // the light-space extent is the same every frame) and snap only the origin to the texel
+        // grid. Keeping the size fixed makes the world->texel scale identical frame-to-frame, so
+        // the snapped grid is truly stable — otherwise the texel size drifts and shadows crawl.
+        const double sizeX = box.max[0] - box.min[0];
+        const double sizeY = box.max[1] - box.min[1];
+        const double texelX = sizeX / static_cast<double>(mapSize);
+        const double texelY = sizeY / static_cast<double>(mapSize);
         box.min[0] = texelSnap(box.min[0], texelX);
         box.min[1] = texelSnap(box.min[1], texelY);
+        box.max[0] = box.min[0] + sizeX;
+        box.max[1] = box.min[1] + sizeY;
     }
 
     // Guard against a degenerate (zero-extent) range producing a singular projection.
