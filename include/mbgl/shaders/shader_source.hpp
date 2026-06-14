@@ -33,6 +33,7 @@ enum class BuiltIn {
     ModelBloomShader,
     ShadowDepthShader,
     FillExtrusionShadowShader,
+    GroundShadowShader,
     HillshadePrepareShader,
     ColorReliefShader,
     HillshadeShader,

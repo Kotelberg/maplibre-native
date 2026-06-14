@@ -80,7 +80,10 @@ RenderFillExtrusionLayer::~RenderFillExtrusionLayer() = default;
 
 #if MLN_RENDER_BACKEND_METAL
 void RenderFillExtrusionLayer::markLayerRenderable(bool willRender, UniqueChangeRequestVec& changes) {
-    RenderLayer::markLayerRenderable(willRender, changes);
+    isRenderable = willRender;
+
+    activateLayerGroup(groundShadowLayerGroup, willRender, changes);
+    activateLayerGroup(layerGroup, willRender, changes);
     if (shadowMap && shadowMap->target()) {
         if (willRender) {
             changes.emplace_back(std::make_unique<AddRenderTargetRequest>(shadowMap->target()));
@@ -88,6 +91,45 @@ void RenderFillExtrusionLayer::markLayerRenderable(bool willRender, UniqueChange
             changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(shadowMap->target()));
         }
     }
+}
+
+void RenderFillExtrusionLayer::layerRemoved(UniqueChangeRequestVec& changes) {
+    removeAllDrawables();
+    activateLayerGroup(groundShadowLayerGroup, false, changes);
+    activateLayerGroup(layerGroup, false, changes);
+    if (shadowMap && shadowMap->target()) {
+        changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(shadowMap->target()));
+    }
+}
+
+void RenderFillExtrusionLayer::layerIndexChanged(int32_t newLayerIndex, UniqueChangeRequestVec& changes) {
+    layerIndex = newLayerIndex;
+    changeLayerIndex(groundShadowLayerGroup, newLayerIndex, changes);
+    changeLayerIndex(layerGroup, newLayerIndex, changes);
+}
+
+std::size_t RenderFillExtrusionLayer::removeTile(RenderPass renderPass, const OverscaledTileID& tileID) {
+    const auto oldValue = stats.drawablesRemoved;
+    if (const auto tileGroup = static_cast<TileLayerGroup*>(layerGroup.get())) {
+        stats.drawablesRemoved += tileGroup->removeDrawables(renderPass, tileID).size();
+    }
+    if (groundShadowLayerGroup) {
+        stats.drawablesRemoved += groundShadowLayerGroup->removeDrawables(renderPass, tileID).size();
+    }
+    return stats.drawablesRemoved - oldValue;
+}
+
+std::size_t RenderFillExtrusionLayer::removeAllDrawables() {
+    const auto oldValue = stats.drawablesRemoved;
+    if (layerGroup) {
+        stats.drawablesRemoved += layerGroup->getDrawableCount();
+        layerGroup->clearDrawables();
+    }
+    if (groundShadowLayerGroup) {
+        stats.drawablesRemoved += groundShadowLayerGroup->getDrawableCount();
+        groundShadowLayerGroup->clearDrawables();
+    }
+    return stats.drawablesRemoved - oldValue;
 }
 #endif
 
@@ -111,6 +153,11 @@ void RenderFillExtrusionLayer::evaluate(const PropertyEvaluationParameters& para
     if (layerTweaker) {
         layerTweaker->updateProperties(evaluatedProperties);
     }
+#if MLN_RENDER_BACKEND_METAL
+    if (groundShadowTweaker) {
+        groundShadowTweaker->updateProperties(evaluatedProperties);
+    }
+#endif
 }
 
 bool RenderFillExtrusionLayer::hasTransition() const {
@@ -155,15 +202,6 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         return;
     }
 
-    // Set up a layer group
-    if (!layerGroup) {
-        if (auto layerGroup_ = context.createTileLayerGroup(layerIndex, /*initialCapacity=*/64, getID())) {
-            setLayerGroup(std::move(layerGroup_), changes);
-        } else {
-            return;
-        }
-    }
-
     bool useShadows = false;
 #if MLN_RENDER_BACKEND_METAL
     useShadows = shadowsEnabled();
@@ -183,8 +221,41 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         if (!fillExtrusionShadowGroup) {
             fillExtrusionShadowGroup = shaders.getShaderGroup("FillExtrusionShadowShader");
         }
+        if (!groundShadowGroup) {
+            groundShadowGroup = shaders.getShaderGroup("GroundShadowShader");
+        }
+    }
+
+    const bool useGroundShadows = useShadows && groundShadowGroup && std::getenv("MLN_GROUND_SHADOWS");
+    if (useGroundShadows) {
+        if (!groundShadowLayerGroup) {
+            groundShadowLayerGroup =
+                context.createTileLayerGroup(layerIndex, /*initialCapacity=*/64, getID() + "-ground-shadow");
+            if (groundShadowLayerGroup) {
+                activateLayerGroup(groundShadowLayerGroup, isRenderable, changes);
+            }
+        }
+        if (groundShadowLayerGroup && !groundShadowTweaker) {
+            groundShadowTweaker = std::make_shared<GroundShadowTweaker>(getID(), evaluatedProperties, shadowMapSize());
+            groundShadowLayerGroup->addLayerTweaker(groundShadowTweaker);
+        }
+    } else if (groundShadowLayerGroup) {
+        stats.drawablesRemoved += groundShadowLayerGroup->clearDrawables();
+        activateLayerGroup(groundShadowLayerGroup, false, changes);
+        groundShadowLayerGroup.reset();
+        groundShadowTweaker.reset();
     }
 #endif
+
+    // Set up the building layer group after the ground-shadow group so equal layer indexes
+    // render ground shadows first and buildings second.
+    if (!layerGroup) {
+        if (auto layerGroup_ = context.createTileLayerGroup(layerIndex, /*initialCapacity=*/64, getID())) {
+            setLayerGroup(std::move(layerGroup_), changes);
+        } else {
+            return;
+        }
+    }
 
     if (!layerTweaker) {
 #if MLN_RENDER_BACKEND_METAL
@@ -225,6 +296,14 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         }
         return false;
     });
+#if MLN_RENDER_BACKEND_METAL
+    if (groundShadowLayerGroup) {
+        stats.drawablesRemoved += groundShadowLayerGroup->removeDrawablesIf([&](gfx::Drawable& drawable) {
+            const auto& tileID = drawable.getTileID();
+            return !(drawable.getRenderPass() & drawPass) || (tileID && !hasRenderTile(*tileID));
+        });
+    }
+#endif
 
     const auto layerPrefix = getID() + "/";
     const auto hasPattern = !unevaluated.get<FillExtrusionPattern>().isUndefined();
@@ -487,6 +566,38 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         finish(*colorBuilder);
 
 #if MLN_RENDER_BACKEND_METAL
+        // Env toggle (diagnostic): MLN_GROUND_SHADOWS=1 enables the ground-shadow quads.
+        if (useGroundShadows && shadowMap && groundShadowLayerGroup) {
+            if (const auto groundShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
+                    groundShadowGroup->getOrCreateShader(context, {}))) {
+                if (auto groundBuilder = context.createDrawableBuilder(layerPrefix + "groundShadow")) {
+                    groundBuilder->setShader(groundShader);
+                    // Isolated in its own group: the quad is a pure alpha-blend ground overlay
+                    // drawn before the building group, while buildings keep their 3D state.
+                    groundBuilder->setIs3D(true);
+                    groundBuilder->setEnableColor(true);
+                    groundBuilder->setEnableDepth(false);
+                    groundBuilder->setEnableStencil(false);
+                    groundBuilder->setColorMode(gfx::ColorMode::alphaBlended());
+                    groundBuilder->setCullFaceMode(gfx::CullFaceMode::disabled());
+                    groundBuilder->setRenderPass(drawPass);
+                    groundBuilder->setDrawPriority(-1);
+                    groundBuilder->setVertexAttrId(idGroundShadowPosVertexAttribute);
+                    groundBuilder->setTexture(shadowMap->texture(), idGroundShadowTexture);
+                    groundBuilder->addQuad(0, 0, util::EXTENT, util::EXTENT);
+                    groundBuilder->flush(context);
+                    for (auto& drawable : groundBuilder->clearDrawables()) {
+                        drawable->setTileID(tileID);
+                        drawable->setLayerTweaker(groundShadowTweaker);
+                        drawable->setRenderTile(renderTilesOwner, &tile);
+
+                        groundShadowLayerGroup->addDrawable(drawPass, tileID, std::move(drawable));
+                        ++stats.drawablesAdded;
+                    }
+                }
+            }
+        }
+
         // Build a depth-only caster drawable from the same geometry into the shadow map's
         // caster group (rendered from the sun's POV by the shadow RenderTarget).
         if (useShadows && shadowMap && shadowDepthGroup && casterAttrs && bucket.sharedTriangles->elements()) {

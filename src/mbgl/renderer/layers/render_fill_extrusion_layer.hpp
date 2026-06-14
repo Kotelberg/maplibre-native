@@ -47,11 +47,18 @@ private:
     // Directional-shadow path (S1, iOS/Metal-only). Gated at runtime by the 3D-enhancements
     // flag; when off, none of this is created and the stock FE path is used unchanged.
     void markLayerRenderable(bool willRender, UniqueChangeRequestVec&) override;
+    void layerRemoved(UniqueChangeRequestVec&) override;
+    void layerIndexChanged(int32_t newLayerIndex, UniqueChangeRequestVec&) override;
+    std::size_t removeTile(RenderPass, const OverscaledTileID&) override;
+    std::size_t removeAllDrawables() override;
     std::unique_ptr<ShadowMap> shadowMap;
+    TileLayerGroupPtr groundShadowLayerGroup;
     gfx::ShaderGroupPtr fillExtrusionShadowGroup;
+    gfx::ShaderGroupPtr groundShadowGroup;
     gfx::ShaderGroupPtr shadowDepthGroup;
     // Strong ref — the caster group stores only a weak_ptr (runTweakers drops expired ones).
     LayerTweakerPtr shadowCasterTweaker;
+    LayerTweakerPtr groundShadowTweaker;
 #endif
 
 #if MLN_USE_FILL_EXTRUSION_INSTANCING

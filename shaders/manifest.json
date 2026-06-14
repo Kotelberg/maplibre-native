@@ -166,6 +166,13 @@
         "uses_ubos": true
     },
     {
+        "name": "GroundShadowShader",
+        "header": "ground_shadow",
+        "glsl_vert": "_empty.glsl",
+        "glsl_frag": "_empty.glsl",
+        "uses_ubos": true
+    },
+    {
         "name": "HillshadePrepareShader",
         "header": "hillshade_prepare",
         "glsl_vert": "hillshade_prepare.vertex.glsl",

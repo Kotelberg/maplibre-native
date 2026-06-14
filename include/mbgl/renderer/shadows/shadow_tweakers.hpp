@@ -42,4 +42,17 @@ private:
     uint32_t mapSize;
 };
 
+/// Tweaker for the z=0 ground-shadow receiver quads. Uses the same tile matrix and
+/// light-space matrix as the fill-extrusion shadow receiver.
+class GroundShadowTweaker : public LayerTweaker {
+public:
+    GroundShadowTweaker(std::string id_, Immutable<style::LayerProperties> props, uint32_t mapSize_)
+        : LayerTweaker(std::move(id_), std::move(props)),
+          mapSize(mapSize_) {}
+    void execute(LayerGroupBase&, const PaintParameters&) override;
+
+private:
+    uint32_t mapSize;
+};
+
 } // namespace mbgl

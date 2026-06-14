@@ -4,6 +4,7 @@
 #include <mbgl/renderer/shadows/shadow_frustum.hpp>
 #include <mbgl/shaders/shadow_depth_ubo.hpp>
 #include <mbgl/shaders/fill_extrusion_shadow_ubo.hpp>
+#include <mbgl/shaders/ground_shadow_ubo.hpp>
 #include <mbgl/shaders/shader_defines.hpp>
 #include <mbgl/gfx/context.hpp>
 #include <mbgl/gfx/drawable.hpp>
@@ -174,6 +175,62 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
             .color_t = std::get<0>(binders->get<FillExtrusionColor>()->interpolationFactor(zoom)),
             .pad1 = 0.0f};
         drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionShadowDrawableUBO, &ubo, context);
+    });
+}
+
+void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParameters& parameters) {
+    if (layerGroup.empty()) {
+        return;
+    }
+    auto& context = parameters.context;
+    const auto& state = parameters.state;
+    const auto& evaluated = static_cast<const FillExtrusionLayerProperties&>(*evaluatedProperties).evaluated;
+
+    const mat4 worldToLightClip = computeWorldToLightClip(layerGroup, parameters, mapSize);
+
+    const GroundShadowPropsUBO propsUBO = {.shadow_color = Color::black(),
+                                           .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
+                                           .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
+                                           .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
+                                           .pad1 = 0.0f};
+
+    visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
+        // CRITICAL: only touch the ground-shadow quads (which have no paint binders). The
+        // building drawables share this layer group, and the GroundShadow UBO ids ALIAS the
+        // FillExtrusionShadow UBO ids (each shader's UBOs start at the same per-shader base
+        // slot). Writing the ground UBOs onto a building drawable would clobber its
+        // FillExtrusionShadowDrawableUBO (losing base_t/height_t → buildings flatten) and its
+        // props. Buildings always carry FillExtrusionBinders; the quads never do.
+        if (drawable.getBinders()) {
+            return;
+        }
+        const auto& tileID = drawable.getTileID();
+        if (!tileID || !checkTweakDrawable(drawable)) {
+            return;
+        }
+
+        const auto& translation = evaluated.get<FillExtrusionTranslate>();
+        const auto anchor = evaluated.get<FillExtrusionTranslateAnchor>();
+        const mat4 matrix = getTileMatrix(tileID->toUnwrapped(),
+                                          parameters,
+                                          translation,
+                                          anchor,
+                                          /*nearClipped=*/true,
+                                          /*inViewportPixelUnits=*/false,
+                                          drawable);
+
+        mat4 tileWorld;
+        state.matrixFor(tileWorld, tileID->toUnwrapped());
+        mat4 lightMatrix;
+        matrix::multiply(lightMatrix, worldToLightClip, tileWorld);
+
+        const GroundShadowDrawableUBO ubo = {.matrix = util::cast<float>(matrix),
+                                             .light_matrix = util::cast<float>(lightMatrix)};
+        // Props set per-drawable (NOT on the shared group) so they don't collide with the
+        // FillExtrusionShadow group props at the aliased slot.
+        auto& uniforms = drawable.mutableUniformBuffers();
+        uniforms.createOrUpdate(idGroundShadowDrawableUBO, &ubo, context);
+        uniforms.createOrUpdate(idGroundShadowPropsUBO, &propsUBO, context);
     });
 }
 
