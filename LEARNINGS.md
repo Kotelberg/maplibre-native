@@ -1,5 +1,23 @@
 # Learnings
 
+## Metal ground-shadow height scale
+
+- What we learned: the ground-shadow light path must scale fill-extrusion Z by the drawable's `OverscaledTileID::overscaledZ` tile scale when `MLN_GROUND_SHADOWS` is enabled. In the Kyiv z17 render, vector data is z14 canonical but the drawable represents z17, so using `tileID.toUnwrapped().canonical.z` gives `0.5` and only halves the oversized shadows; using `overscaledZ` gives `512 / 8192 = 0.0625`, reducing the top-down shadow mask from ~21.3k px to ~2.8k px.
+- Why it matters: `toUnwrapped()` intentionally drops overzoom information for tile positioning, but the shadow height scale needs render-zoom units. Mixing canonical source zoom with render zoom leaves ground shadows over-scaled.
+- How to apply it: in `src/mbgl/renderer/shadows/shadow_tweakers.cpp`, compute the gated ground-shadow Z scale from `Projection::worldSize(state.getScale()) / (1 << tileID.overscaledZ) / util::EXTENT`, and keep the `env -u MLN_GROUND_SHADOWS` path at `zScale=1` for building receiver regression checks.
+
+## Metal ground-shadow caster experiments
+
+- What we learned: changing the shadow caster to front-face depth, or trying top-cap-only depth with culling disabled, brings back large detached ground blocks in the z16/p35 Kyiv view. Top-cap-only with the existing front-face cull removes the ground shadows entirely.
+- Why it matters: the detached ground artifacts are not fixed by swapping caster culling; the useful narrow fix is the gated light-space height scale.
+- How to apply it: leave the caster cull mode in `src/mbgl/renderer/layers/render_fill_extrusion_layer.cpp` on the existing front-cull/back-face shadow-map path unless a future change introduces a separate ground-only shadow map.
+
+## macOS env unset ordering for mbgl-render
+
+- What we learned: on macOS, `env -u NAME` must appear before environment assignments. `env MLN_RENDER_3D_ENHANCEMENTS=1 -u MLN_GROUND_SHADOWS ...` fails with `env: -u: No such file or directory`.
+- Why it matters: the ground-shadow gate checks `std::getenv("MLN_GROUND_SHADOWS")`, so setting it to `0` still enables the path, and failed unset commands can silently invalidate render comparisons.
+- How to apply it: use commands like `env -u MLN_GROUND_SHADOWS MLN_RENDER_3D_ENHANCEMENTS=1 ./build-macos-metal/bin/mbgl-render ...` for building-receiver-only comparisons.
+
 ## Metal shadow focal UV alignment
 
 - What we learned: for the z16 Kyiv test view, `Projection::project(state.getLatLng(LatLng::Unwrapped), state.getScale())` and a center-pixel point derived through `screenCoordinateToTileCoordinate(...)->matrixFor(...)->tileCornerToWorld(...)` land in the same `matrixFor` world space; the remaining center UV offset came from `ShadowFrustum::heightExpand()` adding caster height into the light-space X/Y AABB.

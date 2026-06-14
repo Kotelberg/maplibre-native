@@ -22,6 +22,7 @@
 #include <mbgl/util/projection.hpp>
 #include <mbgl/util/tile_coordinate.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -39,6 +40,22 @@ float envFloat(const char* name, float fallback) {
         return static_cast<float>(std::atof(v));
     }
     return fallback;
+}
+
+double tileWorldZScale(const TransformState& state, const OverscaledTileID& tileID) {
+    if (!std::getenv("MLN_GROUND_SHADOWS")) {
+        return 1.0;
+    }
+    const uint64_t tileScale = 1ull << tileID.overscaledZ;
+    return Projection::worldSize(state.getScale()) / static_cast<double>(tileScale) / util::EXTENT;
+}
+
+void matrixForLightTileWorld(mat4& tileWorld, const TransformState& state, const OverscaledTileID& tileID) {
+    state.matrixFor(tileWorld, tileID.toUnwrapped());
+    const double zScale = tileWorldZScale(state, tileID);
+    // Ground shadows need isotropic light space; the established building-only
+    // path keeps zScale=1 when MLN_GROUND_SHADOWS is unset.
+    matrix::scale(tileWorld, tileWorld, 1.0, 1.0, zScale);
 }
 
 // Transform a tile-local point (EXTENT units, z=0) into world space via the tile matrix.
@@ -92,13 +109,16 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
 
     // Footprint = the world-space rects of every tile currently drawn in this layer group.
     std::vector<vec3> ground;
+    double maxLightHeightScale = 0.0;
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         const auto& tileID = drawable.getTileID();
         if (!tileID) {
             return;
         }
+        const UnwrappedTileID unwrapped = tileID->toUnwrapped();
         mat4 tileWorld;
-        state.matrixFor(tileWorld, tileID->toUnwrapped());
+        state.matrixFor(tileWorld, unwrapped);
+        maxLightHeightScale = std::max(maxLightHeightScale, tileWorldZScale(state, *tileID));
         ground.push_back(tileCornerToWorld(tileWorld, 0.0, 0.0));
         ground.push_back(tileCornerToWorld(tileWorld, util::EXTENT, 0.0));
         ground.push_back(tileCornerToWorld(tileWorld, 0.0, util::EXTENT));
@@ -139,7 +159,8 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
     const LatLng cameraCenter = state.getLatLng(LatLng::Unwrapped);
     const Point<double> projectedCenter = Projection::project(cameraCenter, state.getScale());
     const vec3 focalCenter = centerPixelToWorld(state, focalZoom);
-    const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f);
+    const double maxHeightRaw = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f);
+    const double maxHeightWorld = maxHeightRaw * maxLightHeightScale;
     const Point<double> footprintCenter = heightCompensatedFootprintCenter(focalCenter, sunDir, maxHeightWorld);
     const double cx = footprintCenter.x;
     const double cy = footprintCenter.y;
@@ -172,6 +193,11 @@ mat4 computeWorldToLightClip(LayerGroupBase& layerGroup, const PaintParameters& 
                      footprintCenter.y - focalCenter[1],
                      std::hypot(oldDx, oldDy),
                      radius);
+        std::fprintf(stderr,
+                     "MLN_SHADOW_DBG shadow_height raw=%.3f z_scale=%.6f world=%.3f\n",
+                     maxHeightRaw,
+                     maxLightHeightScale,
+                     maxHeightWorld);
     }
 
     const std::vector<vec3> footprint = {
@@ -198,7 +224,7 @@ void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
             return;
         }
         mat4 tileWorld;
-        parameters.state.matrixFor(tileWorld, tileID->toUnwrapped());
+        matrixForLightTileWorld(tileWorld, parameters.state, *tileID);
         mat4 lightMatrix;
         matrix::multiply(lightMatrix, worldToLightClip, tileWorld);
 
@@ -258,7 +284,7 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
             /*inViewportPixelUnits=*/false, drawable);
 
         mat4 tileWorld;
-        state.matrixFor(tileWorld, tileID->toUnwrapped());
+        matrixForLightTileWorld(tileWorld, state, *tileID);
         mat4 lightMatrix;
         matrix::multiply(lightMatrix, worldToLightClip, tileWorld);
 
@@ -315,7 +341,7 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
                                           drawable);
 
         mat4 tileWorld;
-        state.matrixFor(tileWorld, tileID->toUnwrapped());
+        matrixForLightTileWorld(tileWorld, state, *tileID);
         mat4 lightMatrix;
         matrix::multiply(lightMatrix, worldToLightClip, tileWorld);
 
