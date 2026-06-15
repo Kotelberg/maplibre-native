@@ -57,29 +57,6 @@ double shadowWorldZScale() {
     return envFloat("MLN_SHADOW_ZSCALE", 1.0f);
 }
 
-// Directional cast shadows are a 3D-view effect. At a flat / top-down camera they have no
-// depth cue and, in dense areas, the (correct, full-length) ground shadows lie flat and
-// clutter the map into a dark mess. Fade the cast-shadow strength out as the camera flattens
-// — matching the app's pitch-gated 3D-building reveal — so a top-down view stays clean and
-// shadows fade in smoothly as you tilt. Full strength by MLN_SHADOW_PITCH_FADE_HI (default
-// 35°, well below the app's ~50° 3D pitch). Set LO>=HI or LO<0 to disable.
-float pitchShadowFade(const TransformState& state) {
-    const double deg = util::rad2deg(state.getPitch());
-    const double lo = static_cast<double>(envFloat("MLN_SHADOW_PITCH_FADE_LO", 12.0f));
-    const double hi = static_cast<double>(envFloat("MLN_SHADOW_PITCH_FADE_HI", 35.0f));
-    if (lo < 0.0 || hi <= lo) {
-        return 1.0f;
-    }
-    if (deg <= lo) {
-        return 0.0f;
-    }
-    if (deg >= hi) {
-        return 1.0f;
-    }
-    const double t = (deg - lo) / (hi - lo);
-    return static_cast<float>(t * t * (3.0 - 2.0 * t)); // smoothstep
-}
-
 void matrixForLightTileWorld(mat4& tileWorld, const TransformState& state, const OverscaledTileID& tileID) {
     state.matrixFor(tileWorld, tileID.toUnwrapped());
     const double zScale = tileWorldZScale(state, tileID);
@@ -117,59 +94,6 @@ uint8_t cameraFocalZoom(const TransformState& state) {
     return std::min(state.getIntegerZoom(), util::DEFAULT_MAX_ZOOM);
 }
 
-// View-depth fade bounds for the ground receiver, in clip-space w (= perspective view-distance
-// from the camera, in world/mercator-px units). The ground vertex outputs clip.w = the tile->clip
-// (perspective) w of the ground point; we fade the cast shadow from full at `start` to none at
-// `end`. Both are expressed as multiples of a per-frame reference distance so they track zoom and
-// pitch automatically:
-//
-//   refViewW ~= cameraToCenterDistance (screen px) * worldPerPixel (world units / screen px at the
-//               focal ground point) = the view-w of the look-at ground point.
-//
-// Empirically (Phase-1 repro, p60 tall + device insets) the screen-center ground point sits at
-// ~1x ref and the far/top rows that drop out sit a few x ref further; starting the fade and ending
-// it a few x ref out makes the far thin smoothly with no hard line while leaving the entire near
-// field (w < ref) untouched. Disabled when the multipliers collapse (end<=start) or at low pitch.
-struct DepthFadeBounds {
-    float start = 0.0f; // view-w where the fade begins (full shadow at/below this)
-    float end = 0.0f;   // view-w where the shadow has fully faded (0 at/above this); <=0 disables
-};
-
-DepthFadeBounds computeDepthFadeBounds(const TransformState& state, uint8_t focalZoom) {
-    DepthFadeBounds b;
-    // Gate by pitch: the view-depth fade only addresses the steep-pitch far cut-off. At low pitch
-    // the whole ground is at a similar (small) depth, the cut-off does not occur, and a depth fade
-    // would only erode coverage — so disable it below MLN_SHADOW_DEPTH_FADE_PITCH (default 30°,
-    // below the app's ~50° 3D pitch). Set the multipliers' end<=start to disable entirely.
-    const double pitchDeg = util::rad2deg(state.getPitch());
-    const double fadePitch = static_cast<double>(envFloat("MLN_SHADOW_DEPTH_FADE_PITCH", 30.0f));
-    // Multipliers of refViewW (= cameraToCenterDistance * worldPerPixel = the view-w of the look-at
-    // ground point). start=1.3 keeps the entire near/mid field (view_w < 1.3x ref, which in the p60
-    // device-inset repro is bands 3..near, the abundant-shadow region incl. the mid peak) at full
-    // strength; end=2.6 fully fades by the far frustum edge so the far quarter — where the live
-    // steep-pitch cut-off appears — always reads as a graceful taper, never a hard horizontal line.
-    // Empirically calibrated against the Phase-1 WITH-insets p60 tall repro (near field byte-identical
-    // to no-fade; far bands 0..2 taper smoothly). end<=start or end<=0 disables.
-    const float startMul = envFloat("MLN_SHADOW_DEPTH_FADE_START", 1.3f);
-    const float endMul = envFloat("MLN_SHADOW_DEPTH_FADE_END", 2.6f);
-    if (pitchDeg < fadePitch || endMul <= startMul || endMul <= 0.0f) {
-        return b; // disabled (end stays 0)
-    }
-
-    // world-per-pixel at the geometric screen center (matches the radius-cap derivation).
-    const Size sz = state.getSize();
-    const vec3 cWorld = screenPixelToWorld(state, focalZoom, 0.5 * sz.width, 0.5 * sz.height);
-    const vec3 cWorldDx = screenPixelToWorld(state, focalZoom, 0.5 * sz.width + 1.0, 0.5 * sz.height);
-    const double worldPerPixel = std::hypot(cWorldDx[0] - cWorld[0], cWorldDx[1] - cWorld[1]);
-    const double refViewW = state.getCameraToCenterDistance() * worldPerPixel;
-    if (!std::isfinite(refViewW) || refViewW <= 0.0) {
-        return b;
-    }
-    b.start = static_cast<float>(refViewW) * startMul;
-    b.end = static_cast<float>(refViewW) * endMul;
-    return b;
-}
-
 const mat4& worldToLightClipForFrame(ShadowFrustumState& frustumState,
                                      const PaintParameters& parameters,
                                      uint32_t mapSize) {
@@ -189,77 +113,57 @@ mat4 computeWorldToLightClip(const PaintParameters& parameters, uint32_t mapSize
     const vec3 sunDir = ShadowSun::direction(parameters.evaluatedLight.get<LightPosition>(),
                                              parameters.evaluatedLight.get<LightAnchor>(),
                                              static_cast<float>(state.getBearing()));
+    return computeWorldToLightClip(state, sunDir, mapSize);
+}
 
-    // Tighten the footprint to a bounded box around the map center. Derive the focal point
-    // through TransformState::matrixFor(), the same tile-local-to-world path used by the
-    // per-tile light_matrix, but choose the zoom from camera state rather than layer-group
-    // drawable order. The caster, building receiver, and ground receiver may contain different
-    // drawable sets while tiles stream in; the light frustum must not depend on those sets.
+mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, uint32_t mapSize) {
+    // WORLD-ANCHORED light frustum. A directional sun does not move with the camera, so the shadow
+    // map must cover the same world region regardless of camera PITCH (and bearing) — only the
+    // look-at point and zoom select WHICH region. We therefore fit the frustum to a fixed-radius
+    // square centered on the look-at ground point, NOT to the camera's view trapezoid.
+    //
+    // Why a fixed radius (not a view-frustum fit): the old per-frame view-fit made the shadow map's
+    // coverage and its world->texel scale change with pitch/zoom, which (a) made shadows appear
+    // pitch-dependent and (b) silently broke ShadowFrustum::fit's texel-snap (it assumes a constant
+    // box size), so shadows swam and detached from buildings. A constant footprint restores both:
+    // identical worldToLightClip across pitch (unit-tested) and a stable texel grid.
+    //
+    // World units here are TransformState::matrixFor() units == mercator screen-pixels at the current
+    // scale, so 1 world unit == 1 screen pixel at the map center (definitional, pitch-independent).
+    // Sizing the radius as a multiple of the on-screen extent therefore both (a) scales correctly
+    // with zoom and (b) is exactly pitch-invariant. We deliberately cover the near/mid field around
+    // the look-at point rather than the far horizon: far, barely-visible geometry should not consume
+    // shadow-map resolution (and the user explicitly does not want shadows drawn far away at pitch).
     const uint8_t focalZoom = cameraFocalZoom(state);
     const vec3 focalCenter = centerPixelToWorld(state, focalZoom);
-    const double maxHeightRaw = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f);
-    const double maxHeightWorld = maxHeightRaw * shadowWorldZScale();
+    const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f) * shadowWorldZScale();
 
-    // View-frustum fit: unproject a dense grid of screen pixels to the ground plane (z=0) and use
-    // those (clamped) world points directly as the light-frustum footprint, so ShadowFrustum::fit
-    // bounds the VISIBLE ground tightly — the forward trapezoid at pitch — instead of a symmetric
-    // box around screen-center. A symmetric box sized to the forward extent is huge in EVERY
-    // direction, so the casters land in a small wedge of the shadow map and the FAR/top ground
-    // samples empty shadow-map space -> the steep-pitch cut-off. The tight asymmetric fit makes the
-    // casters fill the map and the far ground gets covered. Each sample is clamped to a max shadow
-    // distance from the focal so horizon-grazing top rows (which unproject to enormous / non-finite
-    // distances) cannot blow the frustum up; the ground shader fades shadows out toward that edge.
-    // Camera-state-only (P0 invariant: one shared worldToLightClip per frame across all passes).
     const Size sz = state.getSize();
-    const double maxDist = static_cast<double>(envFloat("MLN_SHADOW_MAX_DIST", 2600.0f));
-    std::vector<vec3> footprint;
-    footprint.reserve(81);
-    double minX = focalCenter[0], maxX = focalCenter[0], minY = focalCenter[1], maxY = focalCenter[1];
-    {
-        const double fr[9] = {0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0};
-        for (double fy : fr) {
-            for (double fx : fr) {
-                const vec3 w = screenPixelToWorld(state, focalZoom, fx * sz.width, fy * sz.height);
-                double dx = w[0] - focalCenter[0];
-                double dy = w[1] - focalCenter[1];
-                const double dist = std::hypot(dx, dy);
-                if (!std::isfinite(dist)) {
-                    continue; // above the horizon: skip; clamped lower rows bound the far edge
-                }
-                if (dist > maxDist) {
-                    const double s = maxDist / dist;
-                    dx *= s;
-                    dy *= s;
-                }
-                const double px = focalCenter[0] + dx;
-                const double py = focalCenter[1] + dy;
-                footprint.push_back({px, py, 0.0});
-                minX = std::min(minX, px);
-                maxX = std::max(maxX, px);
-                minY = std::min(minY, py);
-                maxY = std::max(maxY, py);
-            }
-        }
-    }
-    if (footprint.empty()) {
-        footprint.push_back({focalCenter[0], focalCenter[1], 0.0});
-    }
+    const double screenExtent = 0.5 * std::hypot(static_cast<double>(sz.width), static_cast<double>(sz.height));
+    const double radius = static_cast<double>(envFloat("MLN_SHADOW_RADIUS", 1.5f)) * screenExtent;
+
+    const std::vector<vec3> footprint = {
+        {focalCenter[0] - radius, focalCenter[1] - radius, 0.0},
+        {focalCenter[0] + radius, focalCenter[1] - radius, 0.0},
+        {focalCenter[0] - radius, focalCenter[1] + radius, 0.0},
+        {focalCenter[0] + radius, focalCenter[1] + radius, 0.0},
+    };
 
     if (std::getenv("MLN_SHADOW_DBG")) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
                       "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f focalZoom=%u size=%dx%d focal=(%.1f,%.1f) "
-                      "fitAABB=[%.1f,%.1f]x[%.1f,%.1f] extent=(%.1f,%.1f) maxDist=%.1f pts=%zu",
+                      "radius=%.1f screenExtent=%.1f",
                       util::rad2deg(state.getPitch()), state.getZoom(), focalZoom, sz.width, sz.height,
-                      focalCenter[0], focalCenter[1], minX, maxX, minY, maxY, maxX - minX, maxY - minY,
-                      maxDist, footprint.size());
+                      focalCenter[0], focalCenter[1], radius, screenExtent);
         Log::Warning(Event::General, buf);
     }
 
     const std::vector<vec3> pts = ShadowFrustum::heightExpand(footprint, maxHeightWorld);
-    // Texel-snap the light frustum so the shadow-map sampling grid is stable in world space as
-    // the camera pans/zooms/rotates — otherwise the shadow texels crawl ("shadow swimming") and
-    // the shadows look unanchored from the buildings. Requires a world-fixed sun (map anchor).
+    // Texel-snap the light frustum so the shadow-map sampling grid is stable in world space as the
+    // camera pans/zooms — the constant box size above is what makes the snap actually anchor the
+    // grid (otherwise the texel size drifts and shadows crawl). Requires a world-fixed sun (map
+    // anchor); see the style's light.anchor.
     return ShadowFrustum::fit(sunDir, pts, mapSize, /*texelSnapEnabled=*/true);
 }
 
@@ -330,10 +234,11 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         .light_intensity = FillExtrusionBucket::lightIntensity(parameters.evaluatedLight),
         .vertical_gradient = evaluated.get<FillExtrusionVerticalGradient>() ? 1.0f : 0.0f,
         .opacity = evaluated.get<FillExtrusionOpacity>(),
-        // Fade the cast-shadow strength out as the camera flattens (top-down has no 3D depth
-        // cue; flat shadows clutter the map). Face shading uses light_intensity, not this, so
-        // the buildings keep their directional shading at any pitch.
-        .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f) * pitchShadowFade(state),
+        // World-anchored shadow strength: constant at every pitch. A directional light's shadows do
+        // not depend on the camera; the previous pitch-fade was a band-aid for a camera-coupled
+        // frustum that no longer exists. Far/barely-visible geometry simply falls outside the
+        // bounded light frustum (no coverage), so there is nothing to fade by pitch.
+        .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
         .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
         .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
         // Default 0: let buildings self-shadow their away-from-sun faces (the crisp per-face
@@ -387,23 +292,22 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
 
     const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
 
-    const DepthFadeBounds depthFade = computeDepthFadeBounds(state, cameraFocalZoom(state));
-
     const GroundShadowPropsUBO propsUBO = {.shadow_color = Color::black(),
-                                           // Fade ground cast shadows out at flat/top-down pitch
-                                           // (they have no 3D depth cue there and clutter the map).
-                                           .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f) *
-                                                               pitchShadowFade(state),
+                                           // World-anchored: constant strength at every pitch (see
+                                           // FillExtrusionShadowTweaker). No pitch fade.
+                                           .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
                                            .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
                                            .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
-                                           // UV-radial frustum-rim fade. With the primary view-depth
-                                           // fade now carrying the near→far softening, only trim the
-                                           // very edge (default 0.92); MLN_SHADOW_FADE_START=1.0 off.
+                                           // UV-radial frustum-rim fade: softens the hard edge of the
+                                           // bounded light frustum (a fixed WORLD radius around the
+                                           // look-at point) so coverage tapers out in world space, not
+                                           // by pitch. Default 0.92; MLN_SHADOW_FADE_START=1.0 to off.
                                            .shadow_fade_start = envFloat("MLN_SHADOW_FADE_START", 0.92f),
-                                           // Primary near→far view-depth fade (camera distance), in
-                                           // clip-space w. Gated to steep pitch; 0/0 = disabled.
-                                           .depth_fade_start = depthFade.start,
-                                           .depth_fade_end = depthFade.end,
+                                           // View-depth (camera-distance) fade removed — it was a
+                                           // pitch-gated band-aid. Disabled (0/0): the shader's
+                                           // ground_depthFade returns 1.0 when fade_end<=0.
+                                           .depth_fade_start = 0.0f,
+                                           .depth_fade_end = 0.0f,
                                            .pad0 = 0.0f,
                                            .pad1 = 0.0f};
 

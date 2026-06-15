@@ -159,8 +159,10 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     // bias so a neighbour's cast shadow still lands on them. Result: building shadows read as
     // "the ground shadow extended up where another building occludes it", not per-face grey.
     const float current = ndc.z - (props.shadow_bias + in.slope * props.shadow_slope_bias);
+    // Inside the light frustum in all three axes (see ground_shadow.hpp): the depth-range guard
+    // prevents fragments beyond the far/near plane (ndc.z outside [0,1]) from reading phantom shadow.
     float lit = 1.0;
-    if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+    if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && ndc.z >= 0.0 && ndc.z <= 1.0) {
         lit = 0.0;
         for (int dy = -1; dy <= 1; ++dy) {
             for (int dx = -1; dx <= 1; ++dx) {

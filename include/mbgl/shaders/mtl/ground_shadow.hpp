@@ -140,8 +140,14 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
         }
         return {half4(0.0, 1.0, 0.0, 0.35)};
     }
+    // Sample the shadow map only when this ground fragment is inside the light frustum in ALL THREE
+    // axes. The uv (xy) check alone is not enough: the ground quads span whole tiles that extend
+    // past the bounded light frustum's depth range, so far ground points get ndc.z > 1 (beyond the
+    // far plane) which exceeds the cleared depth (~1.0) and would falsely read as shadowed — a hard
+    // diagonal of phantom shadow along the far-plane boundary. Points outside [0,1] in depth have no
+    // possible occluder in the map, so they are lit. (Standard shadow-map receiver guard.)
     float lit = 1.0;
-    if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+    if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && ndc.z >= 0.0 && ndc.z <= 1.0) {
         const float current = ndc.z - props.shadow_bias;
         lit = 0.0;
         for (int dy = -1; dy <= 1; ++dy) {
