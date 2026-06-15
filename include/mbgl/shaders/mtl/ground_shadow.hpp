@@ -97,6 +97,22 @@ float ground_depthFade(float view_w, float fade_start, float fade_end) {
     return 1.0 - smoothstep(fade_start, fade_end, view_w);
 }
 
+// Bilinear percentage-closer filter (see fill_extrusion_shadow.hpp): compare the 4 texels around
+// `uv` then bilinearly blend the 0/1 results — the map is RGBA8-PACKED depth so we must compare
+// first, then blend. Smooths the per-texel staircase so complex shadow shapes (e.g. a building
+// ring self-shadowing its own courtyard floor) read as a smooth gradient, not hard blocky edges.
+float ground_pcfBilinear(texture2d<float, access::sample> tex, sampler s, float2 uv, float texel, float current) {
+    const float2 tc = uv / texel - 0.5;
+    const float2 base = floor(tc);
+    const float2 f = tc - base;
+    const float2 c00 = (base + 0.5) * texel;
+    const float s00 = (current <= ground_unpackShadowDepth(tex.sample(s, c00))) ? 1.0 : 0.0;
+    const float s10 = (current <= ground_unpackShadowDepth(tex.sample(s, c00 + float2(texel, 0.0)))) ? 1.0 : 0.0;
+    const float s01 = (current <= ground_unpackShadowDepth(tex.sample(s, c00 + float2(0.0, texel)))) ? 1.0 : 0.0;
+    const float s11 = (current <= ground_unpackShadowDepth(tex.sample(s, c00 + float2(texel, texel)))) ? 1.0 : 0.0;
+    return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+}
+
 fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
                                      device const GroundShadowPropsUBO& props [[buffer(idGroundShadowPropsUBO)]],
                                      texture2d<float, access::sample> shadowTexture [[texture(0)]]) {
@@ -126,15 +142,17 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     float lit = 1.0;
     if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && ndc.z >= 0.0 && ndc.z <= 1.0) {
         const float current = ndc.z - props.shadow_bias;
+        // 2x2 grid of bilinear-PCF taps: smooth, staircase-free penumbra (matches the building
+        // receiver) so courtyard / inter-building ground shadows aren't blocky.
         lit = 0.0;
-        for (int dy = -1; dy <= 1; ++dy) {
-            for (int dx = -1; dx <= 1; ++dx) {
-                const float occl = ground_unpackShadowDepth(
-                    shadowTexture.sample(shadowSampler, uv + float2(dx, dy) * props.shadow_texel_size));
-                lit += (current <= occl) ? 1.0 : 0.0;
+        for (int dy = 0; dy <= 1; ++dy) {
+            for (int dx = 0; dx <= 1; ++dx) {
+                lit += ground_pcfBilinear(shadowTexture, shadowSampler,
+                                          uv + (float2(dx, dy) - 0.5) * props.shadow_texel_size,
+                                          props.shadow_texel_size, current);
             }
         }
-        lit /= 9.0;
+        lit /= 4.0;
     }
 
     return {half4(half3(props.shadow_color.rgb), half((1.0 - lit) * props.shadow_intensity * fade))};
