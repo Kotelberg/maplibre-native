@@ -183,10 +183,12 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
 
     const Size sz = state.getSize();
     const double screenExtent = 0.5 * std::hypot(static_cast<double>(sz.width), static_cast<double>(sz.height));
-    // Floor: at flat pitch the visible field is ~the screen; keep at least this much coverage.
-    // Default 1.8 (#3: push the pitched far-cutoff further toward the horizon; the bilinear PCF keeps
-    // the resulting slightly-coarser texels smooth). MLN_SHADOW_MAP_SIZE=2048 restores texel density
-    // if the softening is noticeable on-device.
+    // Floor: at flat pitch the visible field is ~the screen; keep at least this much coverage. 1.8
+    // also pushes the pitched far-cutoff out (#3). The texel-density cost of this coverage is paid by
+    // the 2048 shadow map (MLN_SHADOW_MAP_SIZE): 2*radius/mapSize = ~0.76 world-px/texel here, 2x
+    // finer than the old 1024 map — which removes the staircased edges (#17/C/A) without trading away
+    // coverage (#3/B). (A still-finer near field + wider pitched coverage at once would need cascaded
+    // shadow maps; out of scope.)
     const double minRadius = static_cast<double>(envFloat("MLN_SHADOW_MIN_RADIUS", 1.8f)) * screenExtent;
     // Cap: world-distance ceiling on coverage (keeps resolution sane + drops the far horizon).
     const double maxDist = static_cast<double>(envFloat("MLN_SHADOW_MAX_DIST", 4000.0f));

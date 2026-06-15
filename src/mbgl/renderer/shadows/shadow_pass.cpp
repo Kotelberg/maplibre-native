@@ -20,7 +20,11 @@ bool shadowsEnabled() {
 uint32_t shadowMapSize() {
     static const uint32_t size = [] {
         const char* v = std::getenv("MLN_SHADOW_MAP_SIZE");
-        return v ? static_cast<uint32_t>(std::atoi(v)) : 1024u;
+        // 2048 default: at 1024 the casters fill only ~10% of the map (the frustum over-covers), so
+        // effective texel density on the buildings was coarse → staircased shadow edges. 2048 is the
+        // balanced midpoint (1024 staircased, 4096 crisp; 4x cheaper than 4096) and, with the tighter
+        // radius floor, restores crisp edges. iOS-Metal target handles it; env-override for low-end.
+        return v ? static_cast<uint32_t>(std::atoi(v)) : 2048u;
     }();
     return size;
 }
