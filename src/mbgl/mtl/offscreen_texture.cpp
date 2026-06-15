@@ -73,6 +73,18 @@ public:
             depthTexture->create();
             if (auto* depthTarget = renderPassDescriptor->depthAttachment()) {
                 depthTarget->setTexture(static_cast<Texture2D*>(depthTexture.get())->getMetalTexture());
+                // Clear the depth attachment to the far plane each time the target is bound.
+                // The offscreen depth texture is created once and PERSISTS across frames; without an
+                // explicit clear, Metal's default load action (DontCare) leaves stale/garbage depth,
+                // so a LessEqual depth test (e.g. the shadow-map caster pass, is3D + ReadWrite) runs
+                // against that garbage and rejects caster writes over a frame-stable spatial region —
+                // the "shadows only in part of the screen" bug. gfx::RenderPassDescriptor::clearDepth
+                // requests this (render_target.cpp), but the Metal RenderPass path only honours
+                // clearColor; clearing here covers every offscreen depth target. Depth is not sampled
+                // (only the packed-depth color is), so it need not be stored.
+                depthTarget->setLoadAction(MTL::LoadActionClear);
+                depthTarget->setClearDepth(1.0);
+                depthTarget->setStoreAction(MTL::StoreActionDontCare);
             }
         }
         if (stencilTexture) {

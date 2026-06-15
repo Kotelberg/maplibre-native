@@ -172,11 +172,31 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
     }
     const double radius = std::min(std::max(minRadius, reach * cornerFactor), maxDist);
 
+    // Footprint aligned to the SUN's GROUND axes, so that in light space it is an axis-aligned
+    // square that fills the whole shadow map. A WORLD-axis square (focalCenter ± radius in world x/y)
+    // becomes a 45°-rotated DIAMOND in light space once the sun rotates the light basis, so its
+    // light-space AABB is ~2x the diamond — the casters land in the inscribed diamond and the four
+    // uv-corner triangles are empty. Ground sampling those corners reads cleared/empty map and is
+    // (wrongly) lit. That wasted-half is the dominant cause of "shadows only in part of the screen".
+    // The two sun-ground axes are orthonormal: rightG ⊥ the sun's ground direction (matches
+    // ShadowFrustum::lightView's `right`), sunG = the sun's ground direction. A square of half-side
+    // `radius` along these axes still contains the full visible disk of radius `radius` (a square of
+    // half-side R contains the disk of radius R), so coverage is preserved while the map is filled.
+    const double fwdHyp = std::hypot(sunDir[0], sunDir[1]);
+    double rgx = 1.0, rgy = 0.0, sgx = 0.0, sgy = 1.0; // overhead-sun fallback: world axes
+    if (fwdHyp > 1e-4) {
+        // fwd = -sunDir; right = normalize(cross({0,0,1}, fwd)).xy = normalize(-fwd.y, fwd.x)
+        // = normalize(sunDir.y, -sunDir.x); sunG = normalize(fwd.xy) = normalize(-sunDir.xy).
+        rgx = sunDir[1] / fwdHyp;
+        rgy = -sunDir[0] / fwdHyp;
+        sgx = -sunDir[0] / fwdHyp;
+        sgy = -sunDir[1] / fwdHyp;
+    }
     const std::vector<vec3> footprint = {
-        {focalCenter[0] - radius, focalCenter[1] - radius, 0.0},
-        {focalCenter[0] + radius, focalCenter[1] - radius, 0.0},
-        {focalCenter[0] - radius, focalCenter[1] + radius, 0.0},
-        {focalCenter[0] + radius, focalCenter[1] + radius, 0.0},
+        {focalCenter[0] - radius * rgx - radius * sgx, focalCenter[1] - radius * rgy - radius * sgy, 0.0},
+        {focalCenter[0] + radius * rgx - radius * sgx, focalCenter[1] + radius * rgy - radius * sgy, 0.0},
+        {focalCenter[0] - radius * rgx + radius * sgx, focalCenter[1] - radius * rgy + radius * sgy, 0.0},
+        {focalCenter[0] + radius * rgx + radius * sgx, focalCenter[1] + radius * rgy + radius * sgy, 0.0},
     };
 
     if (std::getenv("MLN_SHADOW_DBG")) {
