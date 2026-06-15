@@ -997,6 +997,13 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
     double totalUpdMs = 0.0, slowestMs = 0.0;
     std::string slowestId;
 
+#if MLN_RENDER_BACKEND_METAL
+    // The first (lowest-index) fill-extrusion layer owns the single ground-shadow draw (ground-once;
+    // items iterate in layer-index order). Highlight layers above it cast into the shared map but
+    // draw no ground, so they never stack a second darkening pass over the same building.
+    bool shadowGroundOwnerAssigned = false;
+#endif
+
     for (const auto& item : items) {
         auto& renderLayer = item.layer.get();
 #if MLN_RENDER_BACKEND_OPENGL
@@ -1012,7 +1019,13 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
         // RTTI is off (-fno-rtti); identify the layer by its static type-info tag, like the rest of
         // the orchestrator, then static_cast.
         if (renderLayer.baseImpl->getTypeInfo() == style::FillExtrusionLayer::Impl::staticTypeInfo()) {
-            static_cast<RenderFillExtrusionLayer&>(renderLayer).setShadowPass(shadowPass.get());
+            auto& fe = static_cast<RenderFillExtrusionLayer&>(renderLayer);
+            fe.setShadowPass(shadowPass.get());
+            const bool groundOwner = (shadowPass != nullptr) && !shadowGroundOwnerAssigned;
+            fe.setShadowGroundOwner(groundOwner);
+            if (groundOwner) {
+                shadowGroundOwnerAssigned = true;
+            }
         }
 #endif
         try {

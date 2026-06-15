@@ -21,6 +21,12 @@ public:
     /// caster/receiver drawables into the shared pass instead of owning a per-layer ShadowMap. Set by
     /// RenderOrchestrator under the Metal + shadowsEnabled gate; null otherwise (stock FE path).
     void setShadowPass(ShadowPass* pass) { shadowPass = pass; }
+
+    /// Designate this layer as the single ground-shadow owner (ground-once). The orchestrator marks
+    /// the lowest fill-extrusion layer as owner; only the owner draws the z=0 ground-shadow quads,
+    /// so highlight layers (hover/listings/selected) cast into the shared map but never stack a
+    /// second darkening ground draw over the same building.
+    void setShadowGroundOwner(bool v) { shadowGroundOwner = v; }
 #endif
 
 private:
@@ -61,8 +67,13 @@ private:
     std::size_t removeTile(RenderPass, const OverscaledTileID&) override;
     std::size_t removeAllDrawables() override;
     // The shared shadow map + per-frame light frustum live on the renderer-owned ShadowPass (set
-    // via setShadowPass). This layer owns only its receiver/caster tweakers + its ground group.
+    // via setShadowPass). This layer owns only its receiver/caster tweakers + (when ground owner)
+    // its ground group. `shadowCasterGroup` caches this layer's slot in the pass's caster registry
+    // (owned by the pass; cached here so the lifecycle removeTile/removeAllDrawables can prune it
+    // without a gfx::Context). `shadowGroundOwner` gates the single ground draw (set by orchestrator).
     ShadowPass* shadowPass = nullptr;
+    TileLayerGroup* shadowCasterGroup = nullptr;
+    bool shadowGroundOwner = false;
     TileLayerGroupPtr groundShadowLayerGroup;
     gfx::ShaderGroupPtr fillExtrusionShadowGroup;
     gfx::ShaderGroupPtr groundShadowGroup;
