@@ -383,6 +383,34 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
                                                     }
                                                   }
                                                 }];
+
+  // Deterministic ground-shadow test harness (set MLN_SHADOW_TEST=1). Loads the HataHub 3D
+  // style and frames a dense Kyiv district at a fixed zoom/pitch so the cast-shadow work can
+  // be iterated on a CLEAN MLNMapView — no app camera-padding, no auto-pitch coupling, no
+  // navigation. MLN_SHADOW_TEST_PITCH (default 60), _ZOOM (default 16), _LAT/_LON override the
+  // frame. Shadows themselves are gated by MLN_RENDER_3D_ENHANCEMENTS (default on, Metal).
+  if (getenv("MLN_SHADOW_TEST")) {
+    const double testPitch = getenv("MLN_SHADOW_TEST_PITCH") ? atof(getenv("MLN_SHADOW_TEST_PITCH")) : 60.0;
+    const double testZoom = getenv("MLN_SHADOW_TEST_ZOOM") ? atof(getenv("MLN_SHADOW_TEST_ZOOM")) : 16.0;
+    const double testLat = getenv("MLN_SHADOW_TEST_LAT") ? atof(getenv("MLN_SHADOW_TEST_LAT")) : 50.4470;
+    const double testLon = getenv("MLN_SHADOW_TEST_LON") ? atof(getenv("MLN_SHADOW_TEST_LON")) : 30.5235;
+    self.mapView.maximumPitch = MAX(60.0, testPitch);
+    self.mapView.styleURL = [NSURL URLWithString:@"https://map.hatahub.com.ua/style/light.json"];
+    // MLN_SHADOW_TEST_PAD=1 replicates the HataHub app's asymmetric CAMERA_PADDING
+    // {bottom:130,top:88,left:24,right:24} so we can test whether the live edge insets are what
+    // produce the device's stark steep-pitch cutoff (the headless static repro could not).
+    const BOOL testPad = getenv("MLN_SHADOW_TEST_PAD") != NULL;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+      if (testPad) {
+        self.mapView.contentInset = UIEdgeInsetsMake(88, 24, 130, 24);
+      }
+      [self.mapView setCenterCoordinate:CLLocationCoordinate2DMake(testLat, testLon)
+                              zoomLevel:testZoom
+                              direction:0
+                               animated:NO];
+      self.mapView.camera = [self.mapView cameraByTiltingToPitch:testPitch];
+    });
+  }
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
