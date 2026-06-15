@@ -81,4 +81,12 @@ void ShadowPass::releaseCasterGroup(const std::string& layerID) {
     casterGroups_.erase(it);
 }
 
+void ShadowPass::clearCasters() {
+    for (auto& entry : casterGroups_) {
+        if (auto* group = static_cast<TileLayerGroup*>(entry.second.get())) {
+            group->clearDrawables();
+        }
+    }
+}
+
 } // namespace mbgl

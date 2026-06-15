@@ -75,6 +75,11 @@ public:
     /// Drop a layer's caster group (layer removed). Removes it from the shared RenderTarget.
     void releaseCasterGroup(const std::string& layerID);
 
+    /// Drop all caster drawables (teardown when shadows go inactive — cast-shadows:false or the env
+    /// kill-switch — so no stale casters keep rendering into the shared shadow map). The groups + the
+    /// map are retained; they refill on the next active frame via the layers' missing-sidecar rebuild.
+    void clearCasters();
+
     uint32_t mapSize() const { return mapSize_; }
     bool ready() const { return shadowMap_ != nullptr; }
 

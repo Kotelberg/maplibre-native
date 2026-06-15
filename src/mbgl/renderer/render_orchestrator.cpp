@@ -988,6 +988,14 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
             changes.emplace_back(std::make_unique<AddRenderTargetRequest>(shadowPass->target()));
             shadowTargetRegistered = true;
         }
+    } else if (shadowPass && shadowTargetRegistered) {
+        // Shadows went inactive at runtime (cast-shadows:false or env off after being on): tear the
+        // pass down so its RenderTarget stops rendering stale casters into the shadow map every frame
+        // and the orphaned caster drawables are freed. The map + groups are retained and refill if
+        // shadows re-activate. (Without this the declarative kill-switch leaked GPU work — #30.)
+        changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(shadowPass->target()));
+        shadowTargetRegistered = false;
+        shadowPass->clearCasters();
     }
     // When shadows are inactive (env off or cast-shadows:false), hand layers a null pass so they
     // take the stock path even if the pass object already exists from an earlier frame.
@@ -1027,7 +1035,11 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
         if (renderLayer.baseImpl->getTypeInfo() == style::FillExtrusionLayer::Impl::staticTypeInfo()) {
             auto& fe = static_cast<RenderFillExtrusionLayer&>(renderLayer);
             fe.setShadowPass(activeShadowPass);
-            const bool groundOwner = (activeShadowPass != nullptr) && !shadowGroundOwnerAssigned;
+            // Ground owner = the first (lowest-index) fill-extrusion layer that actually has render
+            // tiles, so a momentarily tile-less base layer doesn't drop the ground shadow while a
+            // higher layer still casts (#31).
+            const bool groundOwner = (activeShadowPass != nullptr) && !shadowGroundOwnerAssigned &&
+                                     fe.hasRenderTiles();
             fe.setShadowGroundOwner(groundOwner);
             if (groundOwner) {
                 shadowGroundOwnerAssigned = true;

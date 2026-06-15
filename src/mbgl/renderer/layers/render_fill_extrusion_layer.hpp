@@ -23,10 +23,15 @@ public:
     void setShadowPass(ShadowPass* pass) { shadowPass = pass; }
 
     /// Designate this layer as the single ground-shadow owner (ground-once). The orchestrator marks
-    /// the lowest fill-extrusion layer as owner; only the owner draws the z=0 ground-shadow quads,
-    /// so highlight layers (hover/listings/selected) cast into the shared map but never stack a
-    /// second darkening ground draw over the same building.
+    /// the lowest fill-extrusion layer that has render tiles as owner; only the owner draws the z=0
+    /// ground-shadow quads, so highlight layers (hover/listings/selected) cast into the shared map
+    /// but never stack a second darkening ground draw over the same building.
     void setShadowGroundOwner(bool v) { shadowGroundOwner = v; }
+
+    /// Whether this layer currently has render tiles — used by the orchestrator to skip a tile-less
+    /// lowest layer when picking the ground owner (#31: avoids a 1-frame ground-shadow dropout when
+    /// the base layer is momentarily tile-less while a higher layer casts).
+    bool hasRenderTiles() const { return renderTiles && !renderTiles->empty(); }
 #endif
 
 private:
