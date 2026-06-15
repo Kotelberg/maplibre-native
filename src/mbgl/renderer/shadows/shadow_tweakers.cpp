@@ -47,11 +47,13 @@ float envFloat(const char* name, float fallback) {
 
 // Shadows are a 3D-building effect: fade their strength in with the building-height zoom ramp so
 // near-flat buildings (height interpolated to ~0 at low zoom) don't cast footprint-shaped shadow
-// blobs on the 2D map. Defaults match HataHub's fill-extrusion-height interpolate(zoom,15,0,16,H):
-// 0 below z15, ramping to full by z16. Env-tunable for other styles.
+// blobs on the 2D map. Defaults match HataHub's fill-extrusion-height interpolate(zoom,15,0,15.2,H):
+// 0 below z15, ramping to full by z15.2 (the buildings "snap up" quickly just past z15 rather than
+// growing over a whole zoom level). Keep this HI in lock-step with the style's upper height stop —
+// if they diverge, shadows lag or lead the buildings. Env-tunable for other styles.
 float shadowHeightFade(float zoom) {
     const float lo = envFloat("MLN_SHADOW_GROW_ZOOM_LO", 15.0f);
-    const float hi = envFloat("MLN_SHADOW_GROW_ZOOM_HI", 16.0f);
+    const float hi = envFloat("MLN_SHADOW_GROW_ZOOM_HI", 15.2f);
     if (hi <= lo) {
         return 1.0f;
     }
