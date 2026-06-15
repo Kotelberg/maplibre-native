@@ -117,43 +117,6 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     const float depthFade = ground_depthFade(in.view_w, props.depth_fade_start, props.depth_fade_end);
     const float fade = uvFade * depthFade;
 
-    // UV-DEBUG (MLN_SHADOW_INTENSITY > 2.5): paint each ground fragment's shadow-map sample
-    // coordinate so the screen can be correlated with the shadow-map dump. R=uv.x, G=uv.y;
-    // B=1 where a caster is present at that uv (occl<0.99). Out-of-frustum uv -> magenta.
-    if (props.shadow_intensity > 2.5) {
-        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-            return {half4(1.0, 0.0, 1.0, 1.0)};
-        }
-        // DEPTH-SEAM PROBE: R = current (ground ndc.z), G = sampled occl (caster depth at uv).
-        // On a uniform grid this showed occl > current at many ground pixels — the sampled caster is
-        // FARTHER from the light than the ground at the same uv, which is impossible if the caster's
-        // STORED depth and the receiver's COMPARED depth shared one convention. So caster-stored and
-        // receiver-compared depth diverge (the hardware LessEqual depth test selects the surviving
-        // caster by window-space [[position]].z, while the receiver compares the packed-color ndc.z).
-        const float occlDbg = ground_unpackShadowDepth(shadowTexture.sample(shadowSampler, uv));
-        // R = current (ground ndc.z), G = sampled occl (caster depth at uv), B = caster-present flag.
-        return {half4(half(ndc.z), half(occlDbg), occlDbg < 0.99 ? half(1.0) : half(0.0), 1.0)};
-    }
-
-    // VIZ debug (toggle via MLN_SHADOW_INTENSITY > 1.5): paint frustum + caster coverage so the
-    // live render reveals the cutoff cause (text logs don't surface in the RN host). blue = UV
-    // outside the light frustum (no coverage); red = in frustum + a caster wrote depth (shadowed),
-    // its intensity scaled by the SAME fade as the real shadow (so a band's red% reads the
-    // EFFECTIVE shadow after the fade — faded shadow goes red→green, the lit color); green = in
-    // frustum, no caster (lit ground).
-    if (props.shadow_intensity > 1.5) {
-        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-            return {half4(0.0, 0.0, 1.0, 0.55)};
-        }
-        const float occlV = ground_unpackShadowDepth(shadowTexture.sample(shadowSampler, uv));
-        if (occlV < 0.99) {
-            // red where the (post-fade) shadow is meaningful; ramp red→green as it fades so the
-            // per-band red% reflects the effective shadow gradient, not raw caster coverage.
-            const half3 vizColor = mix(half3(0.0, 1.0, 0.0), half3(1.0, 0.0, 0.0), half(fade));
-            return {half4(vizColor, 0.6)};
-        }
-        return {half4(0.0, 1.0, 0.0, 0.35)};
-    }
     // Sample the shadow map only when this ground fragment is inside the light frustum in ALL THREE
     // axes. The uv (xy) check alone is not enough: the ground quads span whole tiles that extend
     // past the bounded light frustum's depth range, so far ground points get ndc.z > 1 (beyond the

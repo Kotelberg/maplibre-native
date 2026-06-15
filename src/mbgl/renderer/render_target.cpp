@@ -122,10 +122,11 @@ void RenderTarget::render(RenderOrchestrator& orchestrator, const RenderTree& re
 
     parameters.scissorRect = prevScissorRect;
 
-    // DEBUG (env-gated, no effect on the byte-identical off path): dump the shadow-map RGBA8
-    // (packed-depth) texture to a PNG so the caster-depth coverage/registration is observable in
-    // headless mbgl-render. Only fires when MLN_SHADOW_DUMP names a file prefix AND this target
-    // owns a depth attachment (i.e. it is the shadow map, not some other render target).
+#ifndef NDEBUG
+    // DEV-ONLY diagnostic (compiled out of release/opt builds; env-gated within debug builds, so no
+    // effect on the byte-identical off path): dump the shadow-map RGBA8 (packed-depth) texture to a
+    // PNG so the caster-depth coverage/registration is observable in headless mbgl-render. Only fires
+    // when MLN_SHADOW_DUMP names a file prefix AND this target owns a depth attachment (the shadow map).
     if (withDepth) {
         if (const char* prefix = std::getenv("MLN_SHADOW_DUMP")) {
             static int dumpCounter = 0;
@@ -146,6 +147,7 @@ void RenderTarget::render(RenderOrchestrator& orchestrator, const RenderTree& re
             ++dumpCounter;
         }
     }
+#endif
 }
 
 } // namespace mbgl

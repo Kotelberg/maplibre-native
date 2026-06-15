@@ -230,6 +230,8 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
         {focalCenter[0] + radius * rgx + radius * sgx, focalCenter[1] + radius * rgy + radius * sgy, 0.0},
     };
 
+#ifndef NDEBUG
+    // DEV-ONLY frustum trace (compiled out of release/opt; env-gated within debug builds).
     if (std::getenv("MLN_SHADOW_DBG")) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
@@ -239,6 +241,7 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
                       focalCenter[0], focalCenter[1], radius, screenExtent, maxDist);
         Log::Warning(Event::General, buf);
     }
+#endif
 
     const std::vector<vec3> pts = ShadowFrustum::heightExpand(footprint, maxHeightWorld);
     // Texel-snap the light frustum so the shadow-map sampling grid is stable in world space as the
@@ -310,8 +313,11 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
     const auto zoom = static_cast<float>(state.getZoom());
     // Fade shadow strength in with the building-height zoom ramp (#9): no footprint blobs at low
     // zoom where buildings are flat.
-    const float baseIntensity = envFloat("MLN_SHADOW_INTENSITY",
-                                         parameters.evaluatedLight.get<LightShadowIntensity>()) *
+    // Clamp the style/env shadow-intensity to [0,1] (#32: author values can't over-darken or — now
+    // that the debug branches are gone — reach any out-of-range path), then fade by the height ramp.
+    const float baseIntensity = std::clamp(envFloat("MLN_SHADOW_INTENSITY",
+                                                    parameters.evaluatedLight.get<LightShadowIntensity>()),
+                                           0.0f, 1.0f) *
                                 shadowHeightFade(zoom);
     const FillExtrusionShadowPropsUBO propsUBO = {
         .color = evaluated.get<FillExtrusionColor>().constantOr(Color::black()),
@@ -378,8 +384,9 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
 
     const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
 
-    const float groundIntensity = envFloat("MLN_SHADOW_INTENSITY",
-                                            parameters.evaluatedLight.get<LightShadowIntensity>()) *
+    const float groundIntensity = std::clamp(envFloat("MLN_SHADOW_INTENSITY",
+                                                      parameters.evaluatedLight.get<LightShadowIntensity>()),
+                                             0.0f, 1.0f) *
                                   shadowHeightFade(static_cast<float>(state.getZoom()));
     const GroundShadowPropsUBO propsUBO = {.shadow_color = Color::black(),
                                            // World-anchored: constant strength at every pitch (see
