@@ -58,24 +58,33 @@ float shadowHeightFade(float zoom) {
     return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
 }
 
-double tileWorldZScale(const TransformState&, const OverscaledTileID&) {
-    // The fill-extrusion height vertex is already in the same world units as the x/y
-    // footprint (mercator pixels), so matrixFor's z-scale of 1 is isotropic and correct.
-    // The real cause of the old over-long ground shadows was the caster front-face cull
-    // dropping the roof (see render_fill_extrusion_layer.cpp), not the height scale.
-    // Kept env-tunable (MLN_SHADOW_ZSCALE) only for on-device length dialing.
-    return envFloat("MLN_SHADOW_ZSCALE", 1.0f);
+// World-units-per-meter for the building HEIGHT axis. The fill-extrusion height vertex is in
+// METERS, not mercator world-pixels: the visible FE perspective path converts it via
+// Camera::getWorldToCamera()'s "Post-multiply z" by pixelsPerMeter (= worldSize / (cos(lat) *
+// 2π * EARTH_RADIUS_M)), which GROWS with zoom (worldSize = scale·512). The shadow caster +
+// receiver build their light matrix from matrixFor() (z-scale 1) and so previously fed the raw
+// meters straight in — leaving the caster height fixed in world-px while the x/y footprint scaled
+// with zoom. Result: the cast shadow shrank relative to the building as you zoomed in (shadow
+// length should be height·tan(sun) in WORLD space, independent of camera zoom). Mirror the camera
+// here so the caster height tracks the footprint at every zoom. MLN_SHADOW_ZSCALE stays as a
+// multiplicative dialing knob on top.
+double pixelsPerMeter(const TransformState& state) {
+    const double worldSize = Projection::worldSize(state.getScale());
+    const double latitude = state.getLatLng(LatLng::Unwrapped).latitude();
+    return worldSize / (std::cos(util::deg2rad(latitude)) * util::M2PI * util::EARTH_RADIUS_M);
 }
 
-double shadowWorldZScale() {
-    return envFloat("MLN_SHADOW_ZSCALE", 1.0f);
+double tileWorldZScale(const TransformState& state, const OverscaledTileID&) {
+    return pixelsPerMeter(state) * envFloat("MLN_SHADOW_ZSCALE", 1.0f);
 }
 
 void matrixForLightTileWorld(mat4& tileWorld, const TransformState& state, const OverscaledTileID& tileID) {
     state.matrixFor(tileWorld, tileID.toUnwrapped());
     const double zScale = tileWorldZScale(state, tileID);
-    // Ground shadows need isotropic light space; the established building-only
-    // path keeps zScale=1 when MLN_GROUND_SHADOWS is unset.
+    // matrixFor gives x/y in world-pixels (scale with zoom) but leaves z at unit scale; the FE
+    // height vertex is in METERS, so scale z by world-pixels-per-meter (#2) to put the caster
+    // height in the same units as its footprint — keeping the cast-shadow length world-fixed
+    // (independent of camera zoom) instead of shrinking as you zoom in.
     matrix::scale(tileWorld, tileWorld, 1.0, 1.0, zScale);
 }
 
@@ -151,7 +160,12 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
     // zoom automatically.
     const uint8_t focalZoom = cameraFocalZoom(state);
     const vec3 focalCenter = centerPixelToWorld(state, focalZoom);
-    const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f) * shadowWorldZScale();
+    // Z-range of the light frustum, in WORLD-PIXELS. MLN_SHADOW_MAX_HEIGHT is a height in METERS
+    // (default 200m), so convert with the same per-zoom pixelsPerMeter the caster height uses —
+    // otherwise a tall building's scaled-up caster roof would punch out of a fixed-world-px frustum
+    // top at high zoom and get Z-clipped (→ short/missing shadow). Tracks zoom like the casters.
+    const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f) *
+                                  pixelsPerMeter(state) * envFloat("MLN_SHADOW_ZSCALE", 1.0f);
 
     const Size sz = state.getSize();
     const double screenExtent = 0.5 * std::hypot(static_cast<double>(sz.width), static_cast<double>(sz.height));
