@@ -275,6 +275,8 @@ MLN_CORE_SOURCE = [
     "include/mbgl/renderer/shadows/shadow_frustum.hpp",
     "src/mbgl/renderer/shadows/shadow_map.cpp",
     "include/mbgl/renderer/shadows/shadow_map.hpp",
+    "src/mbgl/renderer/shadows/shadow_pass.cpp",
+    "include/mbgl/renderer/shadows/shadow_pass.hpp",
     "src/mbgl/renderer/shadows/shadow_tweakers.cpp",
     "include/mbgl/renderer/shadows/shadow_tweakers.hpp",
     "include/mbgl/renderer/shadows/depth_pack.hpp",
