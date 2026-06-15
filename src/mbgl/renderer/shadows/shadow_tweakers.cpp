@@ -170,24 +170,6 @@ DepthFadeBounds computeDepthFadeBounds(const TransformState& state, uint8_t foca
     return b;
 }
 
-Point<double> heightCompensatedFootprintCenter(const vec3& focalCenter, const vec3& sunDir, double maxHeightWorld) {
-    const mat4 lightView = ShadowFrustum::lightView(sunDir);
-    const double a = lightView[0];
-    const double b = lightView[4];
-    const double c = lightView[1];
-    const double d = lightView[5];
-    const double det = a * d - b * c;
-    if (std::abs(det) < 1e-9) {
-        return {focalCenter[0], focalCenter[1]};
-    }
-
-    const double rhsX = -0.5 * maxHeightWorld * lightView[8];
-    const double rhsY = -0.5 * maxHeightWorld * lightView[9];
-    const double dx = (rhsX * d - b * rhsY) / det;
-    const double dy = (a * rhsY - rhsX * c) / det;
-    return {focalCenter[0] + dx, focalCenter[1] + dy};
-}
-
 const mat4& worldToLightClipForFrame(ShadowFrustumState& frustumState,
                                      const PaintParameters& parameters,
                                      uint32_t mapSize) {
@@ -214,88 +196,65 @@ mat4 computeWorldToLightClip(const PaintParameters& parameters, uint32_t mapSize
     // drawable order. The caster, building receiver, and ground receiver may contain different
     // drawable sets while tiles stream in; the light frustum must not depend on those sets.
     const uint8_t focalZoom = cameraFocalZoom(state);
-    const LatLng cameraCenter = state.getLatLng(LatLng::Unwrapped);
-    const Point<double> projectedCenter = Projection::project(cameraCenter, state.getScale());
     const vec3 focalCenter = centerPixelToWorld(state, focalZoom);
     const double maxHeightRaw = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f);
     const double maxHeightWorld = maxHeightRaw * shadowWorldZScale();
-    const Point<double> footprintCenter = heightCompensatedFootprintCenter(focalCenter, sunDir, maxHeightWorld);
-    const double cx = footprintCenter.x;
-    const double cy = footprintCenter.y;
 
-    // Coverage radius: size the light frustum so the whole on-screen map is shadow-mapped. A fixed
-    // radius (or one fit only to a few viewport corners, which under-shoots at pitch where the top
-    // samples land near the horizon) leaves the far/top of the view with no shadow data. Keep the
-    // box centered on the aligned focal point (UV stays centered); grow only the half-extent.
-    // Clamp the top so the shadow-map texel size stays usable. MLN_SHADOW_RADIUS forces it (debug).
-    //
-    // Critical: derive the frustum from camera state only, not from the per-layer-group loaded tiles.
-    // A tile term computed per group can differ between caster and receivers, so the caster would
-    // render depth into one frustum while the ground samples another. A denser screen grid keeps
-    // coverage robust under pitch.
-    const double radiusMax = static_cast<double>(envFloat("MLN_SHADOW_RADIUS_MAX", 4000.0f));
+    // View-frustum fit: unproject a dense grid of screen pixels to the ground plane (z=0) and use
+    // those (clamped) world points directly as the light-frustum footprint, so ShadowFrustum::fit
+    // bounds the VISIBLE ground tightly — the forward trapezoid at pitch — instead of a symmetric
+    // box around screen-center. A symmetric box sized to the forward extent is huge in EVERY
+    // direction, so the casters land in a small wedge of the shadow map and the FAR/top ground
+    // samples empty shadow-map space -> the steep-pitch cut-off. The tight asymmetric fit makes the
+    // casters fill the map and the far ground gets covered. Each sample is clamped to a max shadow
+    // distance from the focal so horizon-grazing top rows (which unproject to enormous / non-finite
+    // distances) cannot blow the frustum up; the ground shader fades shadows out toward that edge.
+    // Camera-state-only (P0 invariant: one shared worldToLightClip per frame across all passes).
     const Size sz = state.getSize();
-    double screenExtent = 0.0;
+    const double maxDist = static_cast<double>(envFloat("MLN_SHADOW_MAX_DIST", 2600.0f));
+    std::vector<vec3> footprint;
+    footprint.reserve(81);
+    double minX = focalCenter[0], maxX = focalCenter[0], minY = focalCenter[1], maxY = focalCenter[1];
     {
-        const double fr[6] = {0.0, 0.2, 0.4, 0.6, 0.8, 1.0};
-        for (double fx : fr) {
-            for (double fy : fr) {
+        const double fr[9] = {0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0};
+        for (double fy : fr) {
+            for (double fx : fr) {
                 const vec3 w = screenPixelToWorld(state, focalZoom, fx * sz.width, fy * sz.height);
-                const double d = std::max(std::abs(w[0] - cx), std::abs(w[1] - cy));
-                if (std::isfinite(d) && d > 0.0) {
-                    screenExtent = std::max(screenExtent, std::min(d, radiusMax));
+                double dx = w[0] - focalCenter[0];
+                double dy = w[1] - focalCenter[1];
+                const double dist = std::hypot(dx, dy);
+                if (!std::isfinite(dist)) {
+                    continue; // above the horizon: skip; clamped lower rows bound the far edge
                 }
+                if (dist > maxDist) {
+                    const double s = maxDist / dist;
+                    dx *= s;
+                    dy *= s;
+                }
+                const double px = focalCenter[0] + dx;
+                const double py = focalCenter[1] + dy;
+                footprint.push_back({px, py, 0.0});
+                minX = std::min(minX, px);
+                maxX = std::max(maxX, px);
+                minY = std::min(minY, py);
+                maxY = std::max(maxY, py);
             }
         }
     }
-    // Distance cap (Mapbox-v3 technique): bound the shadow volume to a multiple of the
-    // camera-to-center distance instead of letting the screen grid reach the horizon. At
-    // steep pitch the top screen rows graze the horizon and screenExtent balloons (~630 at
-    // p35 -> ~2043 at p60), packing the loaded casters into a small shadow-map fraction and
-    // extending the frustum past the loaded tiles -> the far/top of the view has no caster
-    // depth -> a hard cut-off line. The cap keeps casters texel-dense. It only bites at steep
-    // pitch (where screenExtent >> cap); at low pitch the cap is large so the near-field
-    // radius is unchanged (no near-field regression). Convert cameraToCenterDistance (screen
-    // px) to world units via the local world-per-pixel scale at the focal center.
-    const vec3 cWorld = screenPixelToWorld(state, focalZoom, 0.5 * sz.width, 0.5 * sz.height);
-    const vec3 cWorldDx = screenPixelToWorld(state, focalZoom, 0.5 * sz.width + 1.0, 0.5 * sz.height);
-    const double worldPerPixel = std::hypot(cWorldDx[0] - cWorld[0], cWorldDx[1] - cWorld[1]);
-    // ~1.0 * cameraToCenterDistance (world units) is the sweet spot: it leaves the low-pitch
-    // near-field radius (p0~537, p35~630) untouched (cap ~889 > those) and caps the steep-pitch
-    // balloon (p55~1411, p60~2043) back to a texel-dense ~889. Matches the empirically-verified
-    // good-coverage radius and Mapbox-v3's cameraToCenter-bounded shadow volume.
-    const double distFactor = static_cast<double>(envFloat("MLN_SHADOW_DIST_FACTOR", 1.0f));
-    const double distCapWorld = state.getCameraToCenterDistance() * distFactor * worldPerPixel;
-    // distCap = end of the shadow volume in world units. (Avoid the name `far`: it is a
-    // legacy reserved macro in some toolchains.)
-    const double distCap = std::isfinite(distCapWorld) && distCapWorld > 0.0
-                               ? std::min(distCapWorld, radiusMax)
-                               : radiusMax;
-    const double coverRadius = std::min(screenExtent, distCap);
-    const double radius = std::getenv("MLN_SHADOW_RADIUS")
-                              ? static_cast<double>(envFloat("MLN_SHADOW_RADIUS", 700.0f))
-                              : std::clamp(coverRadius,
-                                           static_cast<double>(envFloat("MLN_SHADOW_RADIUS_MIN", 350.0f)),
-                                           radiusMax);
+    if (footprint.empty()) {
+        footprint.push_back({focalCenter[0], focalCenter[1], 0.0});
+    }
 
     if (std::getenv("MLN_SHADOW_DBG")) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
-                      "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f focalZoom=%u size=%dx%d "
-                      "focal=(%.1f,%.1f) projCenter=(%.1f,%.1f) footCenter=(%.1f,%.1f) "
-                      "focalVsProj=(%.1f,%.1f) screenExtent=%.1f wpp=%.3f distCap=%.1f radius=%.1f",
-                      util::rad2deg(state.getPitch()), state.getZoom(),
-                      focalZoom, sz.width, sz.height,
-                      focalCenter[0], focalCenter[1], projectedCenter.x, projectedCenter.y,
-                      footprintCenter.x, footprintCenter.y,
-                      focalCenter[0] - projectedCenter.x, focalCenter[1] - projectedCenter.y,
-                      screenExtent, worldPerPixel, distCap, radius);
+                      "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f focalZoom=%u size=%dx%d focal=(%.1f,%.1f) "
+                      "fitAABB=[%.1f,%.1f]x[%.1f,%.1f] extent=(%.1f,%.1f) maxDist=%.1f pts=%zu",
+                      util::rad2deg(state.getPitch()), state.getZoom(), focalZoom, sz.width, sz.height,
+                      focalCenter[0], focalCenter[1], minX, maxX, minY, maxY, maxX - minX, maxY - minY,
+                      maxDist, footprint.size());
         Log::Warning(Event::General, buf);
     }
-
-    const std::vector<vec3> footprint = {
-        {cx - radius, cy - radius, 0.0}, {cx + radius, cy - radius, 0.0},
-        {cx - radius, cy + radius, 0.0}, {cx + radius, cy + radius, 0.0}};
 
     const std::vector<vec3> pts = ShadowFrustum::heightExpand(footprint, maxHeightWorld);
     // Texel-snap the light frustum so the shadow-map sampling grid is stable in world space as

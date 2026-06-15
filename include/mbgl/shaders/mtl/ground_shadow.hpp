@@ -110,6 +110,17 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     const float depthFade = ground_depthFade(in.view_w, props.depth_fade_start, props.depth_fade_end);
     const float fade = uvFade * depthFade;
 
+    // UV-DEBUG (MLN_SHADOW_INTENSITY > 2.5): paint each ground fragment's shadow-map sample
+    // coordinate so the screen can be correlated with the shadow-map dump. R=uv.x, G=uv.y;
+    // B=1 where a caster is present at that uv (occl<0.99). Out-of-frustum uv -> magenta.
+    if (props.shadow_intensity > 2.5) {
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+            return {half4(1.0, 0.0, 1.0, 1.0)};
+        }
+        const float occlDbg = ground_unpackShadowDepth(shadowTexture.sample(shadowSampler, uv));
+        return {half4(half(uv.x), half(uv.y), occlDbg < 0.99 ? half(1.0) : half(0.0), 1.0)};
+    }
+
     // VIZ debug (toggle via MLN_SHADOW_INTENSITY > 1.5): paint frustum + caster coverage so the
     // live render reveals the cutoff cause (text logs don't surface in the RN host). blue = UV
     // outside the light frustum (no coverage); red = in frustum + a caster wrote depth (shadowed),
