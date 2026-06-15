@@ -102,7 +102,14 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
                                      texture2d<float, access::sample> shadowTexture [[texture(0)]]) {
     constexpr sampler shadowSampler(coord::normalized, filter::nearest, address::clamp_to_edge);
     const float3 ndc = in.shadow_pos.xyz / in.shadow_pos.w;
-    const float2 uv = ndc.xy * 0.5 + 0.5;
+    // Metal renders the shadow map into an offscreen texture whose origin is TOP-left, while
+    // uv = ndc.xy*0.5+0.5 assumes a bottom-left origin. Flip uv.y so the receiver samples the texel
+    // the caster actually wrote. Without this the sample is vertically mirrored in light space, so a
+    // ground point only finds its caster where the mirror happens to coincide — the root cause of the
+    // "shadows only in part of the screen" / anti-sun-only pattern. (The caster vertex path and the
+    // receiver's matrix are identical; only the texture-coordinate convention differed.)
+    float2 uv = ndc.xy * 0.5 + 0.5;
+    uv.y = 1.0 - uv.y;
     // UV-radial (frustum-edge) fade + view-depth (camera-distance) fade. The view-depth fade is
     // the primary near→far softener; the UV-radial fade only trims the very frustum rim.
     const float r = max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0; // 0 at center, 1 at frustum edge
@@ -117,8 +124,15 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
             return {half4(1.0, 0.0, 1.0, 1.0)};
         }
+        // DEPTH-SEAM PROBE: R = current (ground ndc.z), G = sampled occl (caster depth at uv).
+        // On a uniform grid this showed occl > current at many ground pixels — the sampled caster is
+        // FARTHER from the light than the ground at the same uv, which is impossible if the caster's
+        // STORED depth and the receiver's COMPARED depth shared one convention. So caster-stored and
+        // receiver-compared depth diverge (the hardware LessEqual depth test selects the surviving
+        // caster by window-space [[position]].z, while the receiver compares the packed-color ndc.z).
         const float occlDbg = ground_unpackShadowDepth(shadowTexture.sample(shadowSampler, uv));
-        return {half4(half(uv.x), half(uv.y), occlDbg < 0.99 ? half(1.0) : half(0.0), 1.0)};
+        // R = current (ground ndc.z), G = sampled occl (caster depth at uv), B = caster-present flag.
+        return {half4(half(ndc.z), half(occlDbg), occlDbg < 0.99 ? half(1.0) : half(0.0), 1.0)};
     }
 
     // VIZ debug (toggle via MLN_SHADOW_INTENSITY > 1.5): paint frustum + caster coverage so the

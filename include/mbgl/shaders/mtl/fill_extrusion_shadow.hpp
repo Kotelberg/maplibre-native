@@ -153,7 +153,10 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     half4 color = in.color;
     constexpr sampler shadowSampler(coord::normalized, filter::nearest, address::clamp_to_edge);
     const float3 ndc = in.shadow_pos.xyz / in.shadow_pos.w;
-    const float2 uv = ndc.xy * 0.5 + 0.5;
+    // Flip uv.y for Metal's top-left offscreen-texture origin (see ground_shadow.hpp); the caster
+    // writes the shadow map with that origin, so the receiver must mirror Y to sample the right texel.
+    float2 uv = ndc.xy * 0.5 + 0.5;
+    uv.y = 1.0 - uv.y;
     // Slope-scaled bias: away-from-sun faces get a large bias so they never self-shadow
     // (their shading is the directional light's job); sun-facing faces keep the small base
     // bias so a neighbour's cast shadow still lands on them. Result: building shadows read as

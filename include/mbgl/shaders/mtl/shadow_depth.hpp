@@ -93,8 +93,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
 }
 
 half4 fragment fragmentMain(FragmentStage in [[stage_in]]) {
-    // Pack ndc.z = z/w — the exact metric the receiver compares against. (Using
-    // [[position]].z would be window-space depth, viewport-remapped, and mismatch.)
+    // Pack ndc.z = z/w — the exact metric the receiver compares against. (A seam-probe confirmed
+    // [[position]].z == lightClip.z/lightClip.w exactly, so window-space depth and this packed metric
+    // agree; the hardware LessEqual test selects the same nearest caster the receiver compares.)
     return half4(packDepth(in.lightClip.z / in.lightClip.w));
 }
 )";
