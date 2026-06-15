@@ -44,6 +44,20 @@ float envFloat(const char* name, float fallback) {
     return fallback;
 }
 
+// Shadows are a 3D-building effect: fade their strength in with the building-height zoom ramp so
+// near-flat buildings (height interpolated to ~0 at low zoom) don't cast footprint-shaped shadow
+// blobs on the 2D map. Defaults match HataHub's fill-extrusion-height interpolate(zoom,15,0,16,H):
+// 0 below z15, ramping to full by z16. Env-tunable for other styles.
+float shadowHeightFade(float zoom) {
+    const float lo = envFloat("MLN_SHADOW_GROW_ZOOM_LO", 15.0f);
+    const float hi = envFloat("MLN_SHADOW_GROW_ZOOM_HI", 16.0f);
+    if (hi <= lo) {
+        return 1.0f;
+    }
+    const float t = (zoom - lo) / (hi - lo);
+    return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+}
+
 double tileWorldZScale(const TransformState&, const OverscaledTileID&) {
     // The fill-extrusion height vertex is already in the same world units as the x/y
     // footprint (mercator pixels), so matrixFor's z-scale of 1 is isotropic and correct.
@@ -276,6 +290,12 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
     const auto lightColor = FillExtrusionBucket::lightColor(parameters.evaluatedLight);
     const auto lightPos = FillExtrusionBucket::lightPosition(parameters.evaluatedLight, state);
     const float base = evaluated.get<FillExtrusionBase>().constantOr(0.0f);
+    const auto zoom = static_cast<float>(state.getZoom());
+    // Fade shadow strength in with the building-height zoom ramp (#9): no footprint blobs at low
+    // zoom where buildings are flat.
+    const float baseIntensity = envFloat("MLN_SHADOW_INTENSITY",
+                                         parameters.evaluatedLight.get<LightShadowIntensity>()) *
+                                shadowHeightFade(zoom);
     const FillExtrusionShadowPropsUBO propsUBO = {
         .color = evaluated.get<FillExtrusionColor>().constantOr(Color::black()),
         .light_color_pad = {lightColor[0], lightColor[1], lightColor[2], 0.0f},
@@ -288,18 +308,16 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         // not depend on the camera; the previous pitch-fade was a band-aid for a camera-coupled
         // frustum that no longer exists. Far/barely-visible geometry simply falls outside the
         // bounded light frustum (no coverage), so there is nothing to fade by pitch.
-        .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY",
-                                     parameters.evaluatedLight.get<LightShadowIntensity>()),
+        .shadow_intensity = baseIntensity,
         .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
         .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
-        // Default 0: let buildings self-shadow their away-from-sun faces (the crisp per-face
-        // look the user wants — Mapbox does this). The slope term stays env-tunable
-        // (MLN_SHADOW_SLOPE_BIAS) to suppress acne if a build ever needs it.
-        .shadow_slope_bias = envFloat("MLN_SHADOW_SLOPE_BIAS", 0.0f)};
+        // Slope-scaled bias (×(1−n·L)): large on away/grazing faces (which the directional lighting
+        // already darkens) so the building never self-shadows them into acne stripes (#8), ~0 on
+        // sun-facing faces so a neighbour's cast shadow still lands. Headless-verified: kills the
+        // wall/roof acne (HF energy 16/42→0) while inter-building + ground shadows survive.
+        .shadow_slope_bias = envFloat("MLN_SHADOW_SLOPE_BIAS", 0.05f)};
     auto& layerUniforms = layerGroup.mutableUniformBuffers();
     layerUniforms.createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
-
-    const auto zoom = static_cast<float>(state.getZoom());
 
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         const auto& tileID = drawable.getTileID();
@@ -343,19 +361,22 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
 
     const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
 
+    const float groundIntensity = envFloat("MLN_SHADOW_INTENSITY",
+                                            parameters.evaluatedLight.get<LightShadowIntensity>()) *
+                                  shadowHeightFade(static_cast<float>(state.getZoom()));
     const GroundShadowPropsUBO propsUBO = {.shadow_color = Color::black(),
                                            // World-anchored: constant strength at every pitch (see
-                                           // FillExtrusionShadowTweaker). No pitch fade.
-                                           .shadow_intensity = envFloat(
-                                               "MLN_SHADOW_INTENSITY",
-                                               parameters.evaluatedLight.get<LightShadowIntensity>()),
+                                           // FillExtrusionShadowTweaker), faded in with the building
+                                           // height zoom ramp (#9) so flat low-zoom footprints cast none.
+                                           .shadow_intensity = groundIntensity,
                                            .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
                                            .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
                                            // UV-radial frustum-rim fade: softens the hard edge of the
                                            // bounded light frustum (a fixed WORLD radius around the
                                            // look-at point) so coverage tapers out in world space, not
-                                           // by pitch. Default 0.92; MLN_SHADOW_FADE_START=1.0 to off.
-                                           .shadow_fade_start = envFloat("MLN_SHADOW_FADE_START", 0.92f),
+                                           // by pitch. Default 0.75 (#10: wide taper so far shadows fade
+                                           // in gradually on pan, not a hard cutoff). =1.0 to disable.
+                                           .shadow_fade_start = envFloat("MLN_SHADOW_FADE_START", 0.75f),
                                            // View-depth (camera-distance) fade removed — it was a
                                            // pitch-gated band-aid. Disabled (0/0): the shader's
                                            // ground_depthFade returns 1.0 when fade_end<=0.
