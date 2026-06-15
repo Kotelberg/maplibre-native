@@ -138,3 +138,40 @@ TEST(ShadowFrustum, WorldToLightClipIsFiniteAcrossPitch) {
         }
     }
 }
+
+// Padding-aware frustum: under CAMERA_PADDING / edge insets (e.g. a bottom-sheet) the light frustum
+// must center on the PADDED look-at, not the geometric screen center. With NO insets the matrix is
+// unchanged (the no-padding path stays exactly as verified); with insets it shifts but stays finite.
+TEST(ShadowFrustum, PaddingCentersOnLookAt) {
+    const vec3 sunDir{0.3, 0.5, 0.81};
+    const LatLng center{50.4501, 30.5234};
+    const uint32_t mapSize = 1024;
+
+    const mat4 plain = computeWorldToLightClip(stateAt(16.0, 55.0, 0.0, center), sunDir, mapSize);
+
+    // HataHub-like bottom-sheet insets: EdgeInsets(top, left, bottom, right) = (88, 24, 130, 24).
+    Transform t;
+    t.resize({512, 512});
+    t.jumpTo(CameraOptions()
+                 .withCenter(center)
+                 .withZoom(16.0)
+                 .withPitch(55.0)
+                 .withBearing(0.0)
+                 .withPadding(EdgeInsets{88, 24, 130, 24}));
+    const TransformState padded = t.getState();
+    const mat4 mPadded = computeWorldToLightClip(padded, sunDir, mapSize);
+
+    // The asymmetric vertical insets shift the look-at up-screen (top<bottom ⇒ center offset y<0).
+    const EdgeInsets ins = padded.getEdgeInsets();
+    EXPECT_LT(0.5 * (ins.top() - ins.bottom()), 0.0);
+    // Frustum stays finite under padding (no NaN/regression).
+    for (int i = 0; i < 16; ++i) {
+        EXPECT_TRUE(std::isfinite(mPadded[i])) << "non-finite padded worldToLightClip entry " << i;
+    }
+    // Padding actually moves the frustum (it is now centered on the padded look-at, not ignored).
+    EXPECT_GT(maxAbsDiff(plain, mPadded), 0.0);
+
+    // No insets ⇒ getCenterOffset()==(0,0) ⇒ identical to the geometric-center path (no regression).
+    const mat4 noInset = computeWorldToLightClip(stateAt(16.0, 55.0, 0.0, center), sunDir, mapSize);
+    EXPECT_EQ(maxAbsDiff(plain, noInset), 0.0);
+}

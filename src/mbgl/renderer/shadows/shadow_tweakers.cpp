@@ -108,9 +108,23 @@ vec3 screenPixelToWorld(const TransformState& state, uint8_t tileZoom, double px
     return tileCornerToWorld(tileWorld, localX, localY);
 }
 
+// Screen-pixel offset of the PADDED look-at from the geometric screen center, from the camera's
+// edge insets (mirrors the private TransformState::getCenterOffset()). Zero with no insets.
+ScreenCoordinate paddedCenterOffset(const TransformState& state) {
+    const EdgeInsets ins = state.getEdgeInsets();
+    return {0.5 * (ins.left() - ins.right()), 0.5 * (ins.top() - ins.bottom())};
+}
+
 vec3 centerPixelToWorld(const TransformState& state, uint8_t tileZoom) {
     const Size size = state.getSize();
-    return screenPixelToWorld(state, tileZoom, 0.5 * size.width, 0.5 * size.height);
+    // Center on the PADDED look-at, not the geometric screen center: under CAMERA_PADDING / edge
+    // insets (e.g. HataHub's bottom-sheet {t88,r24,b130,l24} → offset≈(0,-21)) the visible map
+    // center is offset up-screen, so the light frustum should center there for optimal coverage.
+    // With no insets the offset is (0,0) → identical to the geometric center (no-padding path
+    // unchanged). Offsetting the screen pixel then unprojecting via the same path is unit-correct
+    // (NOT the earlier projectedCenter*tileSize_D approach, which was a 512x regression).
+    const ScreenCoordinate off = paddedCenterOffset(state);
+    return screenPixelToWorld(state, tileZoom, 0.5 * size.width + off.x, 0.5 * size.height + off.y);
 }
 
 uint8_t cameraFocalZoom(const TransformState& state) {
@@ -192,9 +206,12 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
     // per the user). cornerFactor pads for the wider far CORNERS of the view.
     double reach = 0.0;
     {
+        // Walk down the PADDED centerline (matches the padded focalCenter) so the forward-reach
+        // distances are measured from the same look-at the frustum is centered on.
+        const double colX = 0.5 * sz.width + paddedCenterOffset(state).x;
         const double fy[6] = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5};
         for (double f : fy) {
-            const vec3 w = screenPixelToWorld(state, focalZoom, 0.5 * sz.width, f * sz.height);
+            const vec3 w = screenPixelToWorld(state, focalZoom, colX, f * sz.height);
             const double d = std::hypot(w[0] - focalCenter[0], w[1] - focalCenter[1]);
             if (std::isfinite(d)) {
                 reach = std::max(reach, std::min(d, maxDist));
