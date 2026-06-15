@@ -257,3 +257,39 @@ No "looks good" sign-off. Acceptance is by numbers + diffs:
 - **P5 — Integration**: on-screen build stamp, on-device verification, anchor:map R2 deploy (with go-ahead).
 - **P6 — (optional) cascades** if §6 shows far-field softness.
 - **v2 (later)** — model-layer cast + receive (needs model-layer style props + material/shader work).
+
+---
+
+## 11. Implementation log (2026-06-15, branch `shadows/s1-shadowmap-ios`)
+
+**P1, P2, P3 DONE + committed (fork-only, NOT pushed); verified headless via `mbgl-render`.**
+
+- **P2** (`be08bbeae524`) — renderer-owned `ShadowPass` (`renderer/shadows/shadow_pass.{hpp,cpp}`)
+  owns the single `ShadowMap` (RenderTarget + depth + packed-depth texture) + the per-frame
+  `ShadowFrustumState`. `RenderOrchestrator::updateLayers` ensures it under the Metal+`shadowsEnabled`
+  gate, registers its RenderTarget once, and hands it to each fill-extrusion layer (identified by
+  static type-info — RTTI is off) via `setShadowPass()`. FE layers no longer own a ShadowMap or the
+  target lifecycle. `shadowsEnabled()`/`shadowMapSize()` moved to `shadow_pass.{hpp,cpp}` as the
+  single source of truth. Verified: 1FE parity, off-path creates no pass.
+- **P3** (`a8dfce6c88fa`) — caster *registry* keyed by layer id (`casterGroupFor`): one
+  `TileLayerGroup` per FE layer, all added to the one shared shadow RenderTarget (reusing the map's
+  built-in group for the first); each layer prunes only its own tiles (no cross-eviction). **Ground-
+  once**: the orchestrator marks the lowest FE layer as the single ground-shadow owner; only it draws
+  the z=0 ground quads. Verified on a 2-FE synthetic scene: **ONE** shadow map for two FE layers (one
+  `MLN_SHADOW_DUMP`, was N), and a 2nd identical FE layer → pixel-identical output (max diff 0) — so
+  casters add nothing for shared geometry and ground draws exactly once.
+- **P1** (`bda2f5612f69`) — fork-local legacy-`light` props: `cast-shadows` (bool, default **true** =
+  prior behavior) gates the pass (env kill-switch AND evaluated `cast-shadows`); `shadow-intensity`
+  (float, default **0.32** = approved "subtle") read by the receivers from the evaluated light
+  (`MLN_SHADOW_INTENSITY` still overrides). Sun was already light-owned (LightPosition/Anchor). Wired
+  through the generated light boilerplate; evaluation automatic via the LightProperties tuple.
+  Verified: default unchanged (139.6), `cast-shadows:false` → no shadow + no map (204 bg),
+  `shadow-intensity:0.6` → darker (83.1). Light + shadow + depth unit tests green.
+- **Non-Metal guard** (`ac24ff9330d3`) — orchestrator `shadowPass` member gated behind
+  `MLN_RENDER_BACKEND_METAL` (incomplete-type unique_ptr dtor otherwise).
+
+**Deferred:** shadow-color + shadow-draw-before-layer light props (YAGNI). **Remaining:** P4 (padding-
+aware frustum + checked-in band-coverage metric + regression images), P5 (framework rebuild + on-screen
+build stamp + on-device verify + **production** R2 `anchor:map` deploy — needs explicit go-ahead), and
+full non-Metal build verification (S1·T9 — needs a GL/Linux build config; the shadow .cpp are built
+unconditionally and are backend-agnostic).
