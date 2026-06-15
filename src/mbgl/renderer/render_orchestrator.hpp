@@ -246,12 +246,16 @@ private:
     std::vector<RenderTargetPtr> renderTargets;
     RenderItem::DebugLayerGroupMap debugLayerGroups;
 
+#if MLN_RENDER_BACKEND_METAL
     // Renderer-owned directional-shadow pass (light-owned architecture; SHADOW_REWRITE_DESIGN.md).
     // One shared shadow map + light frustum for all fill-extrusion layers, replacing per-layer
-    // ownership. Created lazily under the Metal + shadowsEnabled gate; its RenderTarget is registered
-    // once (shadowTargetRegistered). Null on non-Metal builds and when shadows are disabled.
+    // ownership. Created lazily under the Metal + shadowsEnabled + light-cast-shadows gate; its
+    // RenderTarget is registered once (shadowTargetRegistered). Metal-only — the entire shadow path
+    // is gated, so the member exists only here (avoids an incomplete-type unique_ptr dtor on other
+    // backends, where shadow_pass.hpp is not included).
     std::unique_ptr<ShadowPass> shadowPass;
     bool shadowTargetRegistered = false;
+#endif
 };
 
 } // namespace mbgl
