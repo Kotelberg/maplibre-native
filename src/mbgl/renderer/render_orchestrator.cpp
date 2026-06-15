@@ -974,9 +974,12 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
 
 #if MLN_RENDER_BACKEND_METAL
     // Renderer-owned directional-shadow pass: one shared shadow map + light frustum for every
-    // fill-extrusion layer (replaces per-layer ShadowMap ownership). Ensure it + register its
-    // RenderTarget once, before the per-layer update() calls register caster drawables into it.
-    if (shadowsEnabled()) {
+    // fill-extrusion layer (replaces per-layer ShadowMap ownership). Gated by the env kill-switch
+    // AND the scene light's `cast-shadows` (default true; SHADOW_REWRITE_DESIGN.md §3.1) — so a
+    // style can disable shadows declaratively. Ensure it + register its RenderTarget once, before
+    // the per-layer update() calls register caster drawables into it.
+    const bool shadowsActive = shadowsEnabled() && renderLight.getEvaluated().get<style::LightCastShadows>();
+    if (shadowsActive) {
         if (!shadowPass) {
             shadowPass = std::make_unique<ShadowPass>(shadowMapSize());
         }
@@ -986,6 +989,9 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
             shadowTargetRegistered = true;
         }
     }
+    // When shadows are inactive (env off or cast-shadows:false), hand layers a null pass so they
+    // take the stock path even if the pass object already exists from an earlier frame.
+    ShadowPass* const activeShadowPass = shadowsActive ? shadowPass.get() : nullptr;
 #endif
 
     // Per-layer update (drawable-build) timing, gated by MLN_PERF_LOG, to find which layer
@@ -1020,8 +1026,8 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
         // the orchestrator, then static_cast.
         if (renderLayer.baseImpl->getTypeInfo() == style::FillExtrusionLayer::Impl::staticTypeInfo()) {
             auto& fe = static_cast<RenderFillExtrusionLayer&>(renderLayer);
-            fe.setShadowPass(shadowPass.get());
-            const bool groundOwner = (shadowPass != nullptr) && !shadowGroundOwnerAssigned;
+            fe.setShadowPass(activeShadowPass);
+            const bool groundOwner = (activeShadowPass != nullptr) && !shadowGroundOwnerAssigned;
             fe.setShadowGroundOwner(groundOwner);
             if (groundOwner) {
                 shadowGroundOwnerAssigned = true;

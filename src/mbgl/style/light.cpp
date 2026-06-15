@@ -47,10 +47,14 @@ enum class Property : uint8_t {
     Color,
     Intensity,
     Position,
+    CastShadows,
+    ShadowIntensity,
     AnchorTransition,
     ColorTransition,
     IntensityTransition,
     PositionTransition,
+    CastShadowsTransition,
+    ShadowIntensityTransition,
 };
 
 template <typename T>
@@ -63,10 +67,14 @@ constexpr const auto properties = mapbox::eternal::hash_map<mapbox::eternal::str
      {"color", toUint8(Property::Color)},
      {"intensity", toUint8(Property::Intensity)},
      {"position", toUint8(Property::Position)},
+     {"cast-shadows", toUint8(Property::CastShadows)},
+     {"shadow-intensity", toUint8(Property::ShadowIntensity)},
      {"anchor-transition", toUint8(Property::AnchorTransition)},
      {"color-transition", toUint8(Property::ColorTransition)},
      {"intensity-transition", toUint8(Property::IntensityTransition)},
-     {"position-transition", toUint8(Property::PositionTransition)}});
+     {"position-transition", toUint8(Property::PositionTransition)},
+     {"cast-shadows-transition", toUint8(Property::CastShadowsTransition)},
+     {"shadow-intensity-transition", toUint8(Property::ShadowIntensityTransition)}});
 
 } // namespace
 
@@ -124,6 +132,28 @@ std::optional<Error> Light::setProperty(const std::string& name, const Convertib
         return std::nullopt;
     }
 
+    if (property == Property::CastShadows) {
+        Error error;
+        std::optional<PropertyValue<bool>> typedValue = convert<PropertyValue<bool>>(value, error, false, false);
+        if (!typedValue) {
+            return error;
+        }
+
+        setCastShadows(*typedValue);
+        return std::nullopt;
+    }
+
+    if (property == Property::ShadowIntensity) {
+        Error error;
+        std::optional<PropertyValue<float>> typedValue = convert<PropertyValue<float>>(value, error, false, false);
+        if (!typedValue) {
+            return error;
+        }
+
+        setShadowIntensity(*typedValue);
+        return std::nullopt;
+    }
+
     Error error;
     std::optional<TransitionOptions> transition = convert<TransitionOptions>(value, error);
     if (!transition) {
@@ -150,6 +180,16 @@ std::optional<Error> Light::setProperty(const std::string& name, const Convertib
         return std::nullopt;
     }
 
+    if (property == Property::CastShadowsTransition) {
+        setCastShadowsTransition(*transition);
+        return std::nullopt;
+    }
+
+    if (property == Property::ShadowIntensityTransition) {
+        setShadowIntensityTransition(*transition);
+        return std::nullopt;
+    }
+
     return Error{"light doesn't support this property"};
 }
 
@@ -168,6 +208,10 @@ StyleProperty Light::getProperty(const std::string& name) const {
             return makeStyleProperty(getIntensity());
         case Property::Position:
             return makeStyleProperty(getPosition());
+        case Property::CastShadows:
+            return makeStyleProperty(getCastShadows());
+        case Property::ShadowIntensity:
+            return makeStyleProperty(getShadowIntensity());
         case Property::AnchorTransition:
             return makeStyleProperty(getAnchorTransition());
         case Property::ColorTransition:
@@ -176,6 +220,10 @@ StyleProperty Light::getProperty(const std::string& name) const {
             return makeStyleProperty(getIntensityTransition());
         case Property::PositionTransition:
             return makeStyleProperty(getPositionTransition());
+        case Property::CastShadowsTransition:
+            return makeStyleProperty(getCastShadowsTransition());
+        case Property::ShadowIntensityTransition:
+            return makeStyleProperty(getShadowIntensityTransition());
     }
     return {};
 }
@@ -282,6 +330,58 @@ void Light::setPositionTransition(const TransitionOptions& options) {
 
 TransitionOptions Light::getPositionTransition() const {
     return impl->properties.template get<LightPosition>().options;
+}
+
+bool Light::getDefaultCastShadows() {
+    return LightCastShadows::defaultValue();
+}
+
+PropertyValue<bool> Light::getCastShadows() const {
+    return impl->properties.template get<LightCastShadows>().value;
+}
+
+void Light::setCastShadows(PropertyValue<bool> property) {
+    auto impl_ = mutableImpl();
+    impl_->properties.template get<LightCastShadows>().value = std::move(property);
+    impl = std::move(impl_);
+    observer->onLightChanged(*this);
+}
+
+void Light::setCastShadowsTransition(const TransitionOptions& options) {
+    auto impl_ = mutableImpl();
+    impl_->properties.template get<LightCastShadows>().options = options;
+    impl = std::move(impl_);
+    observer->onLightChanged(*this);
+}
+
+TransitionOptions Light::getCastShadowsTransition() const {
+    return impl->properties.template get<LightCastShadows>().options;
+}
+
+float Light::getDefaultShadowIntensity() {
+    return LightShadowIntensity::defaultValue();
+}
+
+PropertyValue<float> Light::getShadowIntensity() const {
+    return impl->properties.template get<LightShadowIntensity>().value;
+}
+
+void Light::setShadowIntensity(PropertyValue<float> property) {
+    auto impl_ = mutableImpl();
+    impl_->properties.template get<LightShadowIntensity>().value = std::move(property);
+    impl = std::move(impl_);
+    observer->onLightChanged(*this);
+}
+
+void Light::setShadowIntensityTransition(const TransitionOptions& options) {
+    auto impl_ = mutableImpl();
+    impl_->properties.template get<LightShadowIntensity>().options = options;
+    impl = std::move(impl_);
+    observer->onLightChanged(*this);
+}
+
+TransitionOptions Light::getShadowIntensityTransition() const {
+    return impl->properties.template get<LightShadowIntensity>().options;
 }
 
 } // namespace style

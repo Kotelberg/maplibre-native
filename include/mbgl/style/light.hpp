@@ -49,6 +49,20 @@ public:
     void setPositionTransition(const TransitionOptions&);
     TransitionOptions getPositionTransition() const;
 
+    // Fork-local directional-shadow properties (not in the public MapLibre style spec; see
+    // light_impl.hpp / SHADOW_REWRITE_DESIGN.md §3.1).
+    static bool getDefaultCastShadows();
+    PropertyValue<bool> getCastShadows() const;
+    void setCastShadows(PropertyValue<bool>);
+    void setCastShadowsTransition(const TransitionOptions&);
+    TransitionOptions getCastShadowsTransition() const;
+
+    static float getDefaultShadowIntensity();
+    PropertyValue<float> getShadowIntensity() const;
+    void setShadowIntensity(PropertyValue<float>);
+    void setShadowIntensityTransition(const TransitionOptions&);
+    TransitionOptions getShadowIntensityTransition() const;
+
     class Impl;
     Immutable<Impl> impl;
     explicit Light(Immutable<Impl>);
