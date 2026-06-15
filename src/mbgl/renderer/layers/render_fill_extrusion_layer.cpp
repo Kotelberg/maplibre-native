@@ -193,7 +193,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         return;
     }
 
-    bool useShadows = false;
+    [[maybe_unused]] bool useShadows = false; // all reads are Metal-gated; unused on other backends
 #if MLN_RENDER_BACKEND_METAL
     // The shared shadow map + per-frame light frustum are owned by RenderOrchestrator's ShadowPass
     // (handed to this layer via setShadowPass() before update()). This layer no longer owns a
