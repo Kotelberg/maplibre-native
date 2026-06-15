@@ -410,6 +410,21 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
                                animated:NO];
       self.mapView.camera = [self.mapView cameraByTiltingToPitch:testPitch];
     });
+    // Optional world-fixed sun override for on-device tuning without a production style deploy:
+    // MLN_SHADOW_TEST_SUN="azimuth,polar" (e.g. "135,38"). Applied after the style loads.
+    if (const char* sunEnv = getenv("MLN_SHADOW_TEST_SUN")) {
+      double az = 135, polar = 38;
+      sscanf(sunEnv, "%lf,%lf", &az, &polar);
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (self.mapView.style) {
+          MLNLight *light = [[MLNLight alloc] init];
+          light.anchor = [NSExpression expressionForConstantValue:@"map"];
+          MLNSphericalPosition pos = MLNSphericalPositionMake(1.5, az, polar);
+          light.position = [NSExpression expressionForConstantValue:[NSValue valueWithMLNSphericalPosition:pos]];
+          self.mapView.style.light = light;
+        }
+      });
+    }
   }
 }
 

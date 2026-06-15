@@ -288,7 +288,7 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         // not depend on the camera; the previous pitch-fade was a band-aid for a camera-coupled
         // frustum that no longer exists. Far/barely-visible geometry simply falls outside the
         // bounded light frustum (no coverage), so there is nothing to fade by pitch.
-        .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
+        .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.32f),
         .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
         .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
         // Default 0: let buildings self-shadow their away-from-sun faces (the crisp per-face
@@ -345,7 +345,7 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
     const GroundShadowPropsUBO propsUBO = {.shadow_color = Color::black(),
                                            // World-anchored: constant strength at every pitch (see
                                            // FillExtrusionShadowTweaker). No pitch fade.
-                                           .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.5f),
+                                           .shadow_intensity = envFloat("MLN_SHADOW_INTENSITY", 0.32f),
                                            .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
                                            .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
                                            // UV-radial frustum-rim fade: softens the hard edge of the
