@@ -26,7 +26,8 @@ MLN_PUBLIC_GENERATED_STYLE_HEADERS = [
     "include/mbgl/style/layers/color_relief_layer.hpp",
     "include/mbgl/style/layers/background_layer.hpp",
     "include/mbgl/style/layers/location_indicator_layer.hpp",
-    "include/mbgl/style/light.hpp",
+    # light.hpp is FORK-LOCAL hand-maintained (carries shadow props not in the style spec) — moved to
+    # MLN_CORE_HEADERS; generator no longer emits it (see scripts/generate-style-code.mjs).
 ]
 
 MLN_PRIVATE_GENERATED_STYLE_HEADERS = [
@@ -66,7 +67,7 @@ MLN_GENERATED_STYLE_SOURCE = [
     "src/mbgl/style/layers/background_layer.cpp",
     "src/mbgl/style/layers/location_indicator_layer_properties.cpp",
     "src/mbgl/style/layers/location_indicator_layer.cpp",
-    "src/mbgl/style/light.cpp",
+    # light.cpp is FORK-LOCAL hand-maintained (shadow props) — moved to MLN_CORE_SOURCE.
 ]
 
 MLN_GENERATED_SHADER_HEADERS = [
@@ -443,6 +444,7 @@ MLN_CORE_SOURCE = [
     "src/mbgl/style/layers/symbol_layer_impl.cpp",
     "src/mbgl/style/layers/symbol_layer_impl.hpp",
     "src/mbgl/style/layout_property.hpp",
+    "src/mbgl/style/light.cpp",
     "src/mbgl/style/light_impl.cpp",
     "src/mbgl/style/light_impl.hpp",
     "src/mbgl/style/light_observer.hpp",
@@ -731,6 +733,7 @@ MLN_CORE_HEADERS = [
     "include/mbgl/style/conversion/get_json_type.hpp",
     "include/mbgl/style/conversion/layer.hpp",
     "include/mbgl/style/conversion/light.hpp",
+    "include/mbgl/style/light.hpp",
     "include/mbgl/style/conversion/position.hpp",
     "include/mbgl/style/conversion/property_value.hpp",
     "include/mbgl/style/conversion/rotation.hpp",

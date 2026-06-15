@@ -402,7 +402,14 @@ const lightProperties = Object.keys(spec[`light`]).reduce((/** @type {any} **/ m
 // to get a deterministic order.
 lightProperties.sort((a, b) => collator.compare(a.name, b.name));
 
-const lightHpp = readAndCompile(`include/mbgl/style/light.hpp.ejs`, root);
-const lightCpp = readAndCompile(`src/mbgl/style/light.cpp.ejs`, root);
-writeIfModified(`include/mbgl/style/light.hpp`, lightHpp({properties: lightProperties}), outLocation);
-writeIfModified(`src/mbgl/style/light.cpp`, lightCpp({properties: lightProperties}), outLocation);
+// FORK-LOCAL: light.hpp/light.cpp are NO LONGER generated. They carry fork-local directional-shadow
+// properties (cast-shadows, shadow-intensity; see light_impl.hpp / SHADOW_REWRITE_DESIGN.md §3.1)
+// that are deliberately NOT in the public style spec (scripts/style-spec-reference/v8.json), so the
+// spec-driven generator can't produce them. They are hand-maintained checked-in sources (like
+// conversion/light.cpp + light_impl.hpp already are) and listed in MLN_CORE_{HEADERS,SOURCE} in
+// bazel/core.bzl rather than the generated lists. Re-enable both lines only if the shadow props are
+// promoted into v8.json (which would also regenerate the ObjC/Java/test light wrappers).
+// const lightHpp = readAndCompile(`include/mbgl/style/light.hpp.ejs`, root);
+// const lightCpp = readAndCompile(`src/mbgl/style/light.cpp.ejs`, root);
+// writeIfModified(`include/mbgl/style/light.hpp`, lightHpp({properties: lightProperties}), outLocation);
+// writeIfModified(`src/mbgl/style/light.cpp`, lightCpp({properties: lightProperties}), outLocation);
