@@ -981,19 +981,29 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
     const bool shadowsActive = shadowsEnabled() && renderLight.getEvaluated().get<style::LightCastShadows>();
     if (shadowsActive) {
         if (!shadowPass) {
-            shadowPass = std::make_unique<ShadowPass>(shadowMapSize());
+            shadowPass = std::make_unique<ShadowPass>(shadowMapSize(), shadowCascadeCount());
         }
         shadowPass->ensure(context);
-        if (!shadowTargetRegistered && shadowPass->target()) {
-            changes.emplace_back(std::make_unique<AddRenderTargetRequest>(shadowPass->target()));
+        if (!shadowTargetRegistered && shadowPass->ready()) {
+            // Register every cascade's RenderTarget (one shadow map per cascade — Metal has no
+            // texture-array render targets in this gfx layer, so N maps are N targets).
+            for (uint32_t c = 0; c < shadowPass->cascadeCount(); ++c) {
+                if (auto cascadeTarget = shadowPass->target(c)) {
+                    changes.emplace_back(std::make_unique<AddRenderTargetRequest>(cascadeTarget));
+                }
+            }
             shadowTargetRegistered = true;
         }
     } else if (shadowPass && shadowTargetRegistered) {
         // Shadows went inactive at runtime (cast-shadows:false or env off after being on): tear the
-        // pass down so its RenderTarget stops rendering stale casters into the shadow map every frame
-        // and the orphaned caster drawables are freed. The map + groups are retained and refill if
+        // pass down so its RenderTargets stop rendering stale casters into the shadow maps every frame
+        // and the orphaned caster drawables are freed. The maps + groups are retained and refill if
         // shadows re-activate. (Without this the declarative kill-switch leaked GPU work — #30.)
-        changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(shadowPass->target()));
+        for (uint32_t c = 0; c < shadowPass->cascadeCount(); ++c) {
+            if (auto cascadeTarget = shadowPass->target(c)) {
+                changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(cascadeTarget));
+            }
+        }
         shadowTargetRegistered = false;
         shadowPass->clearCasters();
     }

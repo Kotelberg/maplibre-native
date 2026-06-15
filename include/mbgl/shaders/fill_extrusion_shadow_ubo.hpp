@@ -2,22 +2,29 @@
 
 #include <mbgl/shaders/layer_ubo.hpp>
 
+#include <array>
+#include <cstdint>
+
 namespace mbgl {
 namespace shaders {
 
 // Self-contained UBOs for the shadow-receiving fill-extrusion variant. Deliberately separate
 // from FillExtrusion{Drawable,Props}UBO so the stock fill-extrusion shader/UBO/tweaker stay
 // byte-identical when shadows are off. Non-consolidated (one drawable UBO per drawable).
+// 4 == kMaxShadowCascades (mbgl/renderer/shadows/shadow_pass.hpp). MUST stay in lock-step with the
+// MSL `FillExtrusionShadowDrawableUBO` in mtl/fill_extrusion_shadow.hpp (same field order + size).
 struct alignas(16) FillExtrusionShadowDrawableUBO {
-    /*   0 */ std::array<float, 4 * 4> matrix;       // tile-local -> clip
-    /*  64 */ std::array<float, 4 * 4> light_matrix; // tile-local -> light clip
-    /* 128 */ float base_t;
-    /* 132 */ float height_t;
-    /* 136 */ float color_t;
-    /* 140 */ float pad1;
-    /* 144 */
+    /*   0 */ std::array<float, 4 * 4> matrix; // tile-local -> clip
+    // tile-local -> light clip, one matrix per concentric cascade (near→far); only the first
+    // `cascade_count` are valid.
+    /*  64 */ std::array<std::array<float, 4 * 4>, 4> light_matrix;
+    /* 320 */ float base_t;
+    /* 324 */ float height_t;
+    /* 328 */ float color_t;
+    /* 332 */ std::int32_t cascade_count;
+    /* 336 */
 };
-static_assert(sizeof(FillExtrusionShadowDrawableUBO) == 9 * 16);
+static_assert(sizeof(FillExtrusionShadowDrawableUBO) == 21 * 16);
 
 struct alignas(16) FillExtrusionShadowPropsUBO {
     /*  0 */ Color color;

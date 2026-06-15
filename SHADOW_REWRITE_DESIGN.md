@@ -293,3 +293,41 @@ aware frustum + checked-in band-coverage metric + regression images), P5 (framew
 build stamp + on-device verify + **production** R2 `anchor:map` deploy — needs explicit go-ahead), and
 full non-Metal build verification (S1·T9 — needs a GL/Linux build config; the shadow .cpp are built
 unconditionally and are backend-agnostic).
+
+### P6 — Cascaded Shadow Maps (2026-06-15, NOT yet committed at time of writing)
+
+**Goal:** fix artifact **A** (coarse/zoom-growing wall shadows — needs higher near-field texel density)
+and artifact **B** (pitched far-field shadow dropout — needs far coverage) at once, which a single map
+cannot do. Approved by the user: **2 cascades** (env-tunable), **hard transition** (no cross-cascade
+blend). Plan: `docs/csm-cascaded-shadows-plan.md`.
+
+**Design — bearing-invariant CONCENTRIC cascades (NOT view-frustum split).** Every cascade shares the
+same world-anchored `focalCenter` + sun-ground axes and differs only in RADIUS: cascade `count-1` = the
+full far radius (today's single map, byte-identical), nearer cascades shrink by `MLN_SHADOW_CASCADE_SPLIT`
+(default 0.4) per step, with NO minRadius floor (the near cascade is deliberately tighter than the
+screen — that is the resolution win; fragments outside it fall back to the far cascade). Because the only
+per-cascade parameter is a scalar radius, every cascade is bearing-invariant exactly like the single map.
+
+**Storage:** N separate `RenderTarget`+`Texture2D` pairs (the gfx/mtl layer has no texture-array render
+targets: `mtl/texture2d.hpp` uses `texture2DDescriptor`, `RenderPassDescriptor` binds one color+one
+depth). `kMaxShadowCascades=4` sizes the UBO matrix arrays + shader varyings; `MLN_SHADOW_CASCADE_COUNT`
+(default 2, clamp [1,4]) picks the live count. **count==1 reproduces the legacy single map exactly.**
+
+**Caster:** the same caster geometry is rendered once per cascade (`shadowCasterGroups[c]` +
+`ShadowDepthTweaker(cascadeIndex=c)` using `cascades[c]`); each cascade's ortho box clips out-of-range
+casters. **Receiver (hard transition):** the vertex emits a light-clip position per cascade (flattened
+to `shadow_pos0..3` — MSL forbids array members in a vertex-out struct); the fragment walks cascades
+near→far and uses the TIGHTEST one whose light-clip `uv∈[0,1] && ndc.z∈[0,1]`, PCF-samples that cascade's
+texture (`array<texture2d,4> [[texture(0)]]`), and stops. The ground receiver ties its UV-radial rim fade
+to the FAR cascade's edge (the outer coverage boundary) so the near cascade's inner edge never fades
+shadows mid-screen.
+
+**Verified (headless `mbgl-render`, dense 72-building grid, z17.5/p55):** MSL cascade shaders compile +
+render with no Metal errors; 2-cascade vs 1-cascade differ on ~9% of pixels (crisper near shadow edges,
+max Δ69) with NO seam / missing-shadow / regression; off-path (`MLN_RENDER_3D_ENHANCEMENTS=0`) renders
+unchanged; 14 shadow unit tests green incl. new `CascadesAreConcentricAndBearingInvariant` (count==1 ==
+legacy byte-for-byte; far cascade unchanged when a near is added; near provably tighter; per-cascade
+bearing-invariant). Env knobs: `MLN_SHADOW_CASCADE_COUNT` (2), `MLN_SHADOW_CASCADE_SPLIT` (0.4).
+
+**Remaining:** on-device A/B validation + near-split tuning at the real Kyiv style (P5; the dramatic
+improvement only shows at the production camera), framework rebuild, and the deferred R2 deploy.

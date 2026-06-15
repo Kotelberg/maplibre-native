@@ -2,6 +2,7 @@
 
 #include <mbgl/renderer/shadows/shadow_sun.hpp>
 #include <mbgl/renderer/shadows/shadow_frustum.hpp>
+#include <mbgl/renderer/shadows/shadow_pass.hpp>
 #include <mbgl/shaders/shadow_depth_ubo.hpp>
 #include <mbgl/shaders/fill_extrusion_shadow_ubo.hpp>
 #include <mbgl/shaders/ground_shadow_ubo.hpp>
@@ -131,16 +132,19 @@ uint8_t cameraFocalZoom(const TransformState& state) {
     return std::min(state.getIntegerZoom(), util::DEFAULT_MAX_ZOOM);
 }
 
-const mat4& worldToLightClipForFrame(ShadowFrustumState& frustumState,
-                                     const PaintParameters& parameters,
-                                     uint32_t mapSize) {
-    if (!frustumState.valid || frustumState.frameCount != parameters.frameCount || frustumState.mapSize != mapSize) {
-        frustumState.worldToLightClip = computeWorldToLightClip(parameters, mapSize);
+const std::vector<mat4>& worldToLightClipForFrame(ShadowFrustumState& frustumState,
+                                                  const PaintParameters& parameters,
+                                                  uint32_t mapSize) {
+    const uint32_t count = shadowCascadeCount();
+    if (!frustumState.valid || frustumState.frameCount != parameters.frameCount ||
+        frustumState.mapSize != mapSize || frustumState.cascadeCount != count) {
+        frustumState.cascades = computeWorldToLightClipCascades(parameters, mapSize, count, shadowCascadeSplit());
+        frustumState.cascadeCount = count;
         frustumState.frameCount = parameters.frameCount;
         frustumState.mapSize = mapSize;
         frustumState.valid = true;
     }
-    return frustumState.worldToLightClip;
+    return frustumState.cascades;
 }
 
 } // namespace
@@ -153,9 +157,28 @@ mat4 computeWorldToLightClip(const PaintParameters& parameters, uint32_t mapSize
     return computeWorldToLightClip(state, sunDir, mapSize);
 }
 
-mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, uint32_t mapSize) {
+std::vector<mat4> computeWorldToLightClipCascades(const PaintParameters& parameters, uint32_t mapSize,
+                                                  uint32_t cascadeCount, float split) {
+    const auto& state = parameters.state;
+    const vec3 sunDir = ShadowSun::direction(parameters.evaluatedLight.get<LightPosition>(),
+                                             parameters.evaluatedLight.get<LightAnchor>(),
+                                             static_cast<float>(state.getBearing()));
+    return computeWorldToLightClipCascades(state, sunDir, mapSize, cascadeCount, split);
+}
+
+std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, const vec3& sunDir,
+                                                  uint32_t mapSize, uint32_t cascadeCount, float split) {
     // WORLD-ANCHORED light frustum, sized to COVER the visible ground but BEARING-INVARIANT so the
     // shadows don't move when the camera rotates (the user's core requirement).
+    //
+    // CASCADES: this produces `cascadeCount` CONCENTRIC frustums that all share the SAME focalCenter
+    // and the SAME sun-ground axes, differing ONLY in radius (cascade count-1 = the full far radius
+    // computed below; nearer cascades shrink by `split` per step). Because the only per-cascade
+    // parameter is a scalar radius — and the focal center + sun axes are bearing-invariant — every
+    // cascade stays put under camera rotation, just like the single map. A near cascade packs the
+    // same 2048 texels into a smaller world square → higher density on near buildings (fixes the
+    // coarse/zoom-growing wall shadows, artifact A) while the far cascade keeps the pitched-horizon
+    // coverage (artifact B). cascadeCount==1 reproduces the legacy single-map fit byte-for-byte.
     //
     // The hard part of map shadows is the pitched view: the visible ground is a forward trapezoid
     // that, at steep pitch, reaches thousands of world-units past the look-at point. A frustum sized
@@ -220,7 +243,7 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
             }
         }
     }
-    const double radius = std::min(std::max(minRadius, reach * cornerFactor), maxDist);
+    const double farRadius = std::min(std::max(minRadius, reach * cornerFactor), maxDist);
 
     // Footprint aligned to the SUN's GROUND axes, so that in light space it is an axis-aligned
     // square that fills the whole shadow map. A WORLD-axis square (focalCenter ± radius in world x/y)
@@ -232,6 +255,7 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
     // ShadowFrustum::lightView's `right`), sunG = the sun's ground direction. A square of half-side
     // `radius` along these axes still contains the full visible disk of radius `radius` (a square of
     // half-side R contains the disk of radius R), so coverage is preserved while the map is filled.
+    // (These axes + focalCenter are shared by every cascade — only the radius shrinks per cascade.)
     const double fwdHyp = std::hypot(sunDir[0], sunDir[1]);
     double rgx = 1.0, rgy = 0.0, sgx = 0.0, sgy = 1.0; // overhead-sun fallback: world axes
     if (fwdHyp > 1e-4) {
@@ -242,12 +266,6 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
         sgx = -sunDir[0] / fwdHyp;
         sgy = -sunDir[1] / fwdHyp;
     }
-    const std::vector<vec3> footprint = {
-        {focalCenter[0] - radius * rgx - radius * sgx, focalCenter[1] - radius * rgy - radius * sgy, 0.0},
-        {focalCenter[0] + radius * rgx - radius * sgx, focalCenter[1] + radius * rgy - radius * sgy, 0.0},
-        {focalCenter[0] - radius * rgx + radius * sgx, focalCenter[1] - radius * rgy + radius * sgy, 0.0},
-        {focalCenter[0] + radius * rgx + radius * sgx, focalCenter[1] + radius * rgy + radius * sgy, 0.0},
-    };
 
 #ifndef NDEBUG
     // DEV-ONLY frustum trace (compiled out of release/opt; env-gated within debug builds).
@@ -255,19 +273,57 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
         char buf[512];
         std::snprintf(buf, sizeof(buf),
                       "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f focalZoom=%u size=%dx%d focal=(%.1f,%.1f) "
-                      "radius=%.1f screenExtent=%.1f maxDist=%.0f",
+                      "farRadius=%.1f screenExtent=%.1f maxDist=%.0f cascades=%u",
                       util::rad2deg(state.getPitch()), state.getZoom(), focalZoom, sz.width, sz.height,
-                      focalCenter[0], focalCenter[1], radius, screenExtent, maxDist);
+                      focalCenter[0], focalCenter[1], farRadius, screenExtent, maxDist, cascadeCount);
         Log::Warning(Event::General, buf);
     }
 #endif
 
-    const std::vector<vec3> pts = ShadowFrustum::heightExpand(footprint, maxHeightWorld);
-    // Texel-snap the light frustum so the shadow-map sampling grid is stable in world space as the
-    // camera pans/rotates. The symmetric radius keeps the box bearing-invariant; the snap then
-    // anchors the grid so shadows don't crawl. (Pitch changes resize the box — a brief, rare
-    // transient.) Requires a world-fixed sun (map anchor); see the style's light.anchor.
-    return ShadowFrustum::fit(sunDir, pts, mapSize, /*texelSnapEnabled=*/true);
+    // Build one fitted world->light-clip matrix for a given square half-side `radius`. The footprint,
+    // height-expand and texel-snapped ortho fit are IDENTICAL to the legacy single-map path; only the
+    // radius varies between cascades. For cascadeCount==1 the single call uses farRadius → the result
+    // is byte-for-byte the pre-cascade matrix.
+    const auto fitForRadius = [&](double radius) -> mat4 {
+        const std::vector<vec3> footprint = {
+            {focalCenter[0] - radius * rgx - radius * sgx, focalCenter[1] - radius * rgy - radius * sgy, 0.0},
+            {focalCenter[0] + radius * rgx - radius * sgx, focalCenter[1] + radius * rgy - radius * sgy, 0.0},
+            {focalCenter[0] - radius * rgx + radius * sgx, focalCenter[1] - radius * rgy + radius * sgy, 0.0},
+            {focalCenter[0] + radius * rgx + radius * sgx, focalCenter[1] + radius * rgy + radius * sgy, 0.0},
+        };
+        const std::vector<vec3> pts = ShadowFrustum::heightExpand(footprint, maxHeightWorld);
+        // Texel-snap the light frustum so the shadow-map sampling grid is stable in world space as the
+        // camera pans/rotates. The symmetric radius keeps the box bearing-invariant; the snap then
+        // anchors the grid so shadows don't crawl. (Pitch changes resize the box — a brief, rare
+        // transient.) Requires a world-fixed sun (map anchor); see the style's light.anchor.
+        return ShadowFrustum::fit(sunDir, pts, mapSize, /*texelSnapEnabled=*/true);
+    };
+
+    const uint32_t count = cascadeCount < 1u ? 1u : cascadeCount;
+    std::vector<mat4> cascades;
+    cascades.reserve(count);
+    for (uint32_t c = 0; c < count; ++c) {
+        // Concentric radii: the LAST cascade (c == count-1) is the full far radius; each nearer
+        // cascade is `split` times the next one (geometric), floored at minRadius so the tightest
+        // cascade never collapses below ~the visible screen. count==1 ⇒ the single radius == farRadius.
+        double radius = farRadius;
+        if (count > 1) {
+            // factor == 1 for the last cascade (split^0) → the full far radius; < 1 for nearer ones.
+            // NO minRadius floor here: minRadius keeps the FAR cascade covering the whole screen, but
+            // the near cascades are DELIBERATELY tighter than the screen — that is the resolution win.
+            // Fragments outside a near cascade's box fall back to the far cascade (containment select).
+            const double factor = std::pow(static_cast<double>(split), static_cast<double>(count - 1 - c));
+            radius = farRadius * factor;
+        }
+        cascades.push_back(fitForRadius(radius));
+    }
+    return cascades;
+}
+
+mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, uint32_t mapSize) {
+    // Legacy single-map entry point: one cascade at the full far radius (byte-identical to the
+    // pre-cascade fit). Retained for callers/tests that want exactly one frustum.
+    return computeWorldToLightClipCascades(state, sunDir, mapSize, 1u, shadowCascadeSplit()).front();
 }
 
 void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParameters& parameters) {
@@ -276,7 +332,11 @@ void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
     }
     auto& context = parameters.context;
     const auto& state = parameters.state;
-    const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
+    const std::vector<mat4>& cascades = worldToLightClipForFrame(*frustumState, parameters, mapSize);
+    // This caster pass renders into cascade `cascadeIndex`'s shadow map, so it must use that
+    // cascade's frustum (clamped defensively in case the active count shrank).
+    const uint32_t idx = std::min(cascadeIndex, static_cast<uint32_t>(cascades.size()) - 1u);
+    const mat4& worldToLightClip = cascades[idx];
 
     // Constant base/height fallbacks for caster drawables whose base/height is uniform
     // (HAS_UNIFORM_u_base/u_height). These mirror the visible FE shader's
@@ -323,7 +383,8 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
     const auto& state = parameters.state;
     const auto& evaluated = static_cast<const FillExtrusionLayerProperties&>(*evaluatedProperties).evaluated;
 
-    const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
+    const std::vector<mat4>& cascades = worldToLightClipForFrame(*frustumState, parameters, mapSize);
+    const auto cascadeCount = static_cast<uint32_t>(cascades.size());
 
     // Per-layer props (shared across drawables).
     const auto lightColor = FillExtrusionBucket::lightColor(parameters.evaluatedLight);
@@ -379,16 +440,22 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
 
         mat4 tileWorld;
         matrixForLightTileWorld(tileWorld, state, *tileID);
-        mat4 lightMatrix;
-        matrix::multiply(lightMatrix, worldToLightClip, tileWorld);
+        // tile-local -> light clip for each cascade (kMaxShadowCascades slots; unused slots replicate
+        // cascade 0 so the UBO is fully initialized — the receiver only reads the first cascade_count).
+        std::array<std::array<float, 16>, 4> lightMatrices{};
+        for (uint32_t c = 0; c < 4; ++c) {
+            mat4 lm;
+            matrix::multiply(lm, cascades[std::min(c, cascadeCount - 1u)], tileWorld);
+            lightMatrices[c] = util::cast<float>(lm);
+        }
 
         const FillExtrusionShadowDrawableUBO ubo = {
             .matrix = util::cast<float>(matrix),
-            .light_matrix = util::cast<float>(lightMatrix),
+            .light_matrix = lightMatrices,
             .base_t = std::get<0>(binders->get<FillExtrusionBase>()->interpolationFactor(zoom)),
             .height_t = std::get<0>(binders->get<FillExtrusionHeight>()->interpolationFactor(zoom)),
             .color_t = std::get<0>(binders->get<FillExtrusionColor>()->interpolationFactor(zoom)),
-            .pad1 = 0.0f};
+            .cascade_count = static_cast<std::int32_t>(cascadeCount)};
         drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionShadowDrawableUBO, &ubo, context);
     });
 }
@@ -401,7 +468,8 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
     const auto& state = parameters.state;
     const auto& evaluated = static_cast<const FillExtrusionLayerProperties&>(*evaluatedProperties).evaluated;
 
-    const mat4& worldToLightClip = worldToLightClipForFrame(*frustumState, parameters, mapSize);
+    const std::vector<mat4>& cascades = worldToLightClipForFrame(*frustumState, parameters, mapSize);
+    const auto cascadeCount = static_cast<uint32_t>(cascades.size());
 
     const float groundIntensity = std::clamp(envFloat("MLN_SHADOW_INTENSITY",
                                                       parameters.evaluatedLight.get<LightShadowIntensity>()),
@@ -455,11 +523,21 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
 
         mat4 tileWorld;
         matrixForLightTileWorld(tileWorld, state, *tileID);
-        mat4 lightMatrix;
-        matrix::multiply(lightMatrix, worldToLightClip, tileWorld);
+        // tile-local -> light clip per cascade (unused slots replicate cascade 0; the receiver reads
+        // only the first cascade_count, plus the last for the rim fade).
+        std::array<std::array<float, 16>, 4> lightMatrices{};
+        for (uint32_t c = 0; c < 4; ++c) {
+            mat4 lm;
+            matrix::multiply(lm, cascades[std::min(c, cascadeCount - 1u)], tileWorld);
+            lightMatrices[c] = util::cast<float>(lm);
+        }
 
         const GroundShadowDrawableUBO ubo = {.matrix = util::cast<float>(matrix),
-                                             .light_matrix = util::cast<float>(lightMatrix)};
+                                             .light_matrix = lightMatrices,
+                                             .cascade_count = static_cast<std::int32_t>(cascadeCount),
+                                             .pad0 = 0.0f,
+                                             .pad1 = 0.0f,
+                                             .pad2 = 0.0f};
         // Props set per-drawable (NOT on the shared group) so they don't collide with the
         // FillExtrusionShadow group props at the aliased slot.
         auto& uniforms = drawable.mutableUniformBuffers();

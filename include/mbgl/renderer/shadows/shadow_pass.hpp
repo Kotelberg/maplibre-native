@@ -7,6 +7,8 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace mbgl {
 
@@ -31,6 +33,20 @@ bool shadowsEnabled();
 /// Shadow-map resolution (square). `MLN_SHADOW_MAP_SIZE` override; default 1024.
 uint32_t shadowMapSize();
 
+/// Compile-time upper bound on cascades (sizes the per-receiver UBO matrix arrays + shader
+/// varyings). The runtime count (`shadowCascadeCount`) is clamped to [1, this].
+inline constexpr uint32_t kMaxShadowCascades = 4;
+
+/// Number of concentric, bearing-invariant shadow cascades. `MLN_SHADOW_CASCADE_COUNT` override;
+/// default 2 (near = crisp building/near shadows, far = pitched-horizon coverage). Clamped to
+/// [1, kMaxShadowCascades]; =1 reproduces the legacy single-map path exactly.
+uint32_t shadowCascadeCount();
+
+/// Concentric split factor: cascade 0's radius = max(minRadius, split * farRadius); intermediate
+/// cascades interpolate geometrically up to the full far radius. `MLN_SHADOW_CASCADE_SPLIT`
+/// override; default 0.4. Clamped to (0, 1).
+float shadowCascadeSplit();
+
 /// Renderer-owned directional-shadow pass (the light-owned architecture; see
 /// SHADOW_REWRITE_DESIGN.md).
 ///
@@ -49,17 +65,21 @@ uint32_t shadowMapSize();
 /// remove the shared target on their own lifecycle events.
 class ShadowPass {
 public:
-    explicit ShadowPass(uint32_t mapSize);
+    ShadowPass(uint32_t mapSize, uint32_t cascadeCount);
     ~ShadowPass();
 
-    /// Idempotent: create the depth-capable shadow map.
+    /// Idempotent: create the per-cascade depth-capable shadow maps.
     void ensure(gfx::Context&);
 
-    /// The shadow-map RenderTarget — registered once with the orchestrator (AddRenderTargetRequest).
-    RenderTargetPtr target() const;
+    /// Number of concentric cascades this pass owns (1..kMaxShadowCascades), near→far.
+    uint32_t cascadeCount() const { return cascadeCount_; }
 
-    /// The shared shadow texture all receivers sample.
-    const gfx::Texture2DPtr& texture() const;
+    /// The shadow-map RenderTarget for cascade `cascadeIdx` — each registered once with the
+    /// orchestrator (AddRenderTargetRequest). Ordered near→far, matching ShadowFrustumState::cascades.
+    RenderTargetPtr target(uint32_t cascadeIdx) const;
+
+    /// The shadow texture for cascade `cascadeIdx` that receivers sample.
+    const gfx::Texture2DPtr& texture(uint32_t cascadeIdx) const;
 
     /// The per-frame world->light-clip matrix cache, shared by caster + every receiver so they
     /// register against an identical frustum.
@@ -70,7 +90,7 @@ public:
     /// render into the one shadow texture (depth-tested, nearest-to-light wins across layers); each
     /// layer prunes only its own group's tiles, so one layer's tile removal never evicts another's
     /// casters.
-    TileLayerGroup* casterGroupFor(gfx::Context&, const std::string& layerID);
+    TileLayerGroup* casterGroupFor(gfx::Context&, const std::string& layerID, uint32_t cascadeIdx);
 
     /// Drop a layer's caster group (layer removed). Removes it from the shared RenderTarget.
     void releaseCasterGroup(const std::string& layerID);
@@ -81,15 +101,19 @@ public:
     void clearCasters();
 
     uint32_t mapSize() const { return mapSize_; }
-    bool ready() const { return shadowMap_ != nullptr; }
+    bool ready() const { return !shadowMaps_.empty() && shadowMaps_.front() != nullptr; }
 
 private:
     uint32_t mapSize_;
-    std::unique_ptr<ShadowMap> shadowMap_;
+    uint32_t cascadeCount_;
+    // One depth-capable shadow map per cascade (near→far). Allocated lazily by ensure().
+    std::vector<std::unique_ptr<ShadowMap>> shadowMaps_;
     ShadowFrustumStatePtr frustumState_ = std::make_shared<ShadowFrustumState>();
-    // Caster registry: layer id -> its caster group (each at a distinct RenderTarget layer index).
-    std::map<std::string, LayerGroupBasePtr> casterGroups_;
-    int32_t nextCasterIndex_ = 0;
+    // Caster registry keyed by {layer id, cascade index}: each entry is that layer's caster group on
+    // that cascade's RenderTarget (the first layer on a cascade reuses the map's built-in group 0).
+    std::map<std::pair<std::string, uint32_t>, LayerGroupBasePtr> casterGroups_;
+    // Next free RenderTarget layer index per cascade (index 0 is the built-in caster group).
+    std::vector<int32_t> nextCasterIndex_;
 };
 
 } // namespace mbgl

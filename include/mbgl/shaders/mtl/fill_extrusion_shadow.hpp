@@ -20,14 +20,14 @@ enum {
 
 struct alignas(16) FillExtrusionShadowDrawableUBO {
     /*   0 */ float4x4 matrix;
-    /*  64 */ float4x4 light_matrix;
-    /* 128 */ float base_t;
-    /* 132 */ float height_t;
-    /* 136 */ float color_t;
-    /* 140 */ float pad1;
-    /* 144 */
+    /*  64 */ float4x4 light_matrix[4]; // one per concentric cascade (near→far); first cascade_count valid
+    /* 320 */ float base_t;
+    /* 324 */ float height_t;
+    /* 328 */ float color_t;
+    /* 332 */ int cascade_count;
+    /* 336 */
 };
-static_assert(sizeof(FillExtrusionShadowDrawableUBO) == 9 * 16, "wrong size");
+static_assert(sizeof(FillExtrusionShadowDrawableUBO) == 21 * 16, "wrong size");
 
 struct alignas(16) FillExtrusionShadowPropsUBO {
     /*  0 */ float4 color;
@@ -55,7 +55,7 @@ struct ShaderSource<BuiltIn::FillExtrusionShadowShader, gfx::Backend::Type::Meta
 
     static const std::array<AttributeInfo, 5> attributes;
     static constexpr std::array<AttributeInfo, 0> instanceAttributes{};
-    static const std::array<TextureInfo, 1> textures;
+    static const std::array<TextureInfo, 4> textures;
 
     static constexpr auto prelude = fillExtrusionShadowShaderPrelude;
     static constexpr auto source = R"(
@@ -78,11 +78,18 @@ struct VertexStage {
 struct FragmentStage {
     float4 position [[position, invariant]];
     half4 color;
-    float4 shadow_pos;
+    // Light-clip position per concentric cascade (near→far); only the first `cascade_count` are
+    // valid. The fragment picks the tightest cascade that contains it (hard transition). NOTE: MSL
+    // forbids array members in a vertex-output struct, so the 4 cascade slots are flattened here.
+    float4 shadow_pos0;
+    float4 shadow_pos1;
+    float4 shadow_pos2;
+    float4 shadow_pos3;
     // (1 - n·L): 0 on sun-facing faces, →1 on faces turned away from the sun. Scales the
     // depth bias so a building never shadows its OWN away-faces (the directional lighting
     // already darkens those); only a neighbour's cast shadow falling across it darkens it.
     float slope;
+    int cascade_count [[flat]];
 };
 
 struct FragmentOutput {
@@ -135,12 +142,19 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const float3 minLight = mix(0.0, 0.3, 1.0 - light_color.rgb);
     vcolor += float4(clamp(color.rgb * directional * light_color.rgb, minLight, 1.0), 0.0);
 
-    return {
-        .position = position,
-        .color    = half4(vcolor * props.opacity),
-        .shadow_pos = drawable.light_matrix * worldLocal,
-        .slope = 1.0 - directionalFraction,
-    };
+    FragmentStage out;
+    out.position = position;
+    out.color = half4(vcolor * props.opacity);
+    out.slope = 1.0 - directionalFraction;
+    const int cc = drawable.cascade_count;
+    out.cascade_count = cc;
+    // Project into every cascade's light clip (near→far). Unused slots (c >= cascade_count) replicate
+    // cascade 0 so nothing is left uninitialized; the fragment only reads c < cascade_count.
+    out.shadow_pos0 = drawable.light_matrix[0] * worldLocal;
+    out.shadow_pos1 = drawable.light_matrix[(cc > 1) ? 1 : 0] * worldLocal;
+    out.shadow_pos2 = drawable.light_matrix[(cc > 2) ? 2 : 0] * worldLocal;
+    out.shadow_pos3 = drawable.light_matrix[(cc > 3) ? 3 : 0] * worldLocal;
+    return out;
 }
 
 float fe_unpackShadowDepth(float4 rgba) {
@@ -165,34 +179,43 @@ float fe_pcfBilinear(texture2d<float, access::sample> tex, sampler s, float2 uv,
 
 fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
                                      device const FillExtrusionShadowPropsUBO& props [[buffer(idFillExtrusionShadowPropsUBO)]],
-                                     texture2d<float, access::sample> shadowTexture [[texture(0)]]) {
+                                     array<texture2d<float, access::sample>, 4> shadowTextures [[texture(0)]]) {
     half4 color = in.color;
     constexpr sampler shadowSampler(coord::normalized, filter::nearest, address::clamp_to_edge);
-    const float3 ndc = in.shadow_pos.xyz / in.shadow_pos.w;
-    // Flip uv.y for Metal's top-left offscreen-texture origin (see ground_shadow.hpp); the caster
-    // writes the shadow map with that origin, so the receiver must mirror Y to sample the right texel.
-    float2 uv = ndc.xy * 0.5 + 0.5;
-    uv.y = 1.0 - uv.y;
-    // Slope-scaled bias: away-from-sun faces get a large bias so they never self-shadow
-    // (their shading is the directional light's job); sun-facing faces keep the small base
-    // bias so a neighbour's cast shadow still lands on them. Result: building shadows read as
-    // "the ground shadow extended up where another building occludes it", not per-face grey.
-    const float current = ndc.z - (props.shadow_bias + in.slope * props.shadow_slope_bias);
-    // Inside the light frustum in all three axes (see ground_shadow.hpp): the depth-range guard
-    // prevents fragments beyond the far/near plane (ndc.z outside [0,1]) from reading phantom shadow.
+    // CASCADED SHADOW MAPS: walk cascades near→far and use the TIGHTEST (highest-resolution) one that
+    // contains this fragment — i.e. its light-clip uv is inside [0,1] in all three axes. Hard
+    // transition (no cross-cascade blend): the first containing cascade wins. A fragment outside every
+    // cascade's bounded frustum is left fully lit.
     float lit = 1.0;
-    if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && ndc.z >= 0.0 && ndc.z <= 1.0) {
-        // 2x2 grid of bilinear-PCF taps: smooth, staircase-free penumbra (kills the stripes a
-        // cast shadow showed on a receiving surface) at 16 samples.
-        lit = 0.0;
+    for (int c = 0; c < in.cascade_count; ++c) {
+        // Select this cascade's light-clip position (flattened varyings — MSL has no varying arrays).
+        float4 sp = in.shadow_pos0;
+        if (c == 1) sp = in.shadow_pos1;
+        else if (c == 2) sp = in.shadow_pos2;
+        else if (c == 3) sp = in.shadow_pos3;
+        const float3 ndc = sp.xyz / sp.w;
+        // Flip uv.y for Metal's top-left offscreen-texture origin (the caster writes the map with that
+        // origin, so the receiver mirrors Y to sample the right texel).
+        float2 uv = ndc.xy * 0.5 + 0.5;
+        uv.y = 1.0 - uv.y;
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+            continue; // not covered by this cascade — fall back to the next (wider) one
+        }
+        // Slope-scaled bias: away-from-sun faces get a large bias so they never self-shadow (their
+        // shading is the directional light's job); sun-facing faces keep the small base bias so a
+        // neighbour's cast shadow still lands on them.
+        const float current = ndc.z - (props.shadow_bias + in.slope * props.shadow_slope_bias);
+        // 2x2 grid of bilinear-PCF taps: smooth, staircase-free penumbra at 16 samples.
+        float l = 0.0;
         for (int dy = 0; dy <= 1; ++dy) {
             for (int dx = 0; dx <= 1; ++dx) {
-                lit += fe_pcfBilinear(shadowTexture, shadowSampler,
-                                      uv + (float2(dx, dy) - 0.5) * props.shadow_texel_size,
-                                      props.shadow_texel_size, current);
+                l += fe_pcfBilinear(shadowTextures[c], shadowSampler,
+                                    uv + (float2(dx, dy) - 0.5) * props.shadow_texel_size,
+                                    props.shadow_texel_size, current);
             }
         }
-        lit /= 4.0;
+        lit = l / 4.0;
+        break; // tightest containing cascade wins (hard transition)
     }
     color.rgb *= half(1.0 - (1.0 - lit) * props.shadow_intensity);
     return { color };

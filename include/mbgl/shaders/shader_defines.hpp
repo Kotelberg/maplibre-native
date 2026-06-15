@@ -333,13 +333,21 @@ enum {
 
 enum { shadowDepthTextureCount }; // depth-only caster: no textures
 
+// One shadow texture per cascade (cascaded shadow maps). Slots are consecutive from 0 so the render
+// layer binds cascade c to idFillExtrusionShadowTexture0 + c; the count is the max cascade count.
 enum {
-    idFillExtrusionShadowTexture,
+    idFillExtrusionShadowTexture0,
+    idFillExtrusionShadowTexture1,
+    idFillExtrusionShadowTexture2,
+    idFillExtrusionShadowTexture3,
     fillExtrusionShadowTextureCount
 };
 
 enum {
-    idGroundShadowTexture,
+    idGroundShadowTexture0,
+    idGroundShadowTexture1,
+    idGroundShadowTexture2,
+    idGroundShadowTexture3,
     groundShadowTextureCount
 };
 

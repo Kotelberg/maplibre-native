@@ -2,15 +2,26 @@
 
 #include <mbgl/shaders/layer_ubo.hpp>
 
+#include <array>
+#include <cstdint>
+
 namespace mbgl {
 namespace shaders {
 
+// 4 == kMaxShadowCascades (mbgl/renderer/shadows/shadow_pass.hpp). MUST stay in lock-step with the
+// MSL `GroundShadowDrawableUBO` in mtl/ground_shadow.hpp (same field order + size).
 struct alignas(16) GroundShadowDrawableUBO {
-    /*   0 */ std::array<float, 4 * 4> matrix;       // tile-local -> clip
-    /*  64 */ std::array<float, 4 * 4> light_matrix; // tile-local -> light clip
-    /* 128 */
+    /*   0 */ std::array<float, 4 * 4> matrix; // tile-local -> clip
+    // tile-local -> light clip, one matrix per concentric cascade (near→far); only the first
+    // `cascade_count` are valid.
+    /*  64 */ std::array<std::array<float, 4 * 4>, 4> light_matrix;
+    /* 320 */ std::int32_t cascade_count;
+    /* 324 */ float pad0;
+    /* 328 */ float pad1;
+    /* 332 */ float pad2;
+    /* 336 */
 };
-static_assert(sizeof(GroundShadowDrawableUBO) == 8 * 16);
+static_assert(sizeof(GroundShadowDrawableUBO) == 21 * 16);
 
 struct alignas(16) GroundShadowPropsUBO {
     /*  0 */ Color shadow_color;

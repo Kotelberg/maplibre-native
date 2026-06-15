@@ -20,8 +20,13 @@ const std::array<AttributeInfo, 5> FillExtrusionShadowShaderSource::attributes =
         4, gfx::AttributeDataType::Float2, fillExtrusionShadowUBOCount + 1, idFillExtrusionHeightVertexAttribute},
 };
 
-const std::array<TextureInfo, 1> FillExtrusionShadowShaderSource::textures = {
-    TextureInfo{0, idFillExtrusionShadowTexture}};
+// One texture per cascade (cascaded shadow maps); the receiver picks the tightest cascade.
+const std::array<TextureInfo, 4> FillExtrusionShadowShaderSource::textures = {
+    TextureInfo{0, idFillExtrusionShadowTexture0},
+    TextureInfo{1, idFillExtrusionShadowTexture1},
+    TextureInfo{2, idFillExtrusionShadowTexture2},
+    TextureInfo{3, idFillExtrusionShadowTexture3},
+};
 
 } // namespace shaders
 } // namespace mbgl

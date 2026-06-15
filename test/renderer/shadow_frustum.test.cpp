@@ -175,3 +175,46 @@ TEST(ShadowFrustum, PaddingCentersOnLookAt) {
     const mat4 noInset = computeWorldToLightClip(stateAt(16.0, 55.0, 0.0, center), sunDir, mapSize);
     EXPECT_EQ(maxAbsDiff(plain, noInset), 0.0);
 }
+
+// CASCADED SHADOW MAPS (P6). The cascades must be (a) concentric — the near cascade covers a SMALLER
+// world square at the same map resolution, so a fixed world displacement spans MORE clip space under
+// near than far; (b) additive — adding a near cascade must NOT change the far cascade, so the legacy
+// single-map output is preserved exactly as cascades.back(); and (c) bearing-invariant per cascade,
+// just like the single map. count==1 must reproduce the legacy matrix byte-for-byte.
+TEST(ShadowFrustum, CascadesAreConcentricAndBearingInvariant) {
+    const vec3 sunDir{0.3, 0.5, 0.81};
+    const LatLng center{50.4501, 30.5234}; // Kyiv (Maidan)
+    const uint32_t mapSize = 2048;
+    const TransformState state = stateAt(16.0, 55.0, 0.0, center);
+
+    // (count==1) == legacy single map, byte-for-byte.
+    const std::vector<mat4> c1 = computeWorldToLightClipCascades(state, sunDir, mapSize, 1, 0.4f);
+    ASSERT_EQ(c1.size(), 1u);
+    EXPECT_EQ(maxAbsDiff(c1[0], computeWorldToLightClip(state, sunDir, mapSize)), 0.0);
+
+    // (additive) the far cascade of a 2-cascade fit is IDENTICAL to the single-map matrix — only the
+    // extra near cascade is new, so nothing about the existing far behavior changes.
+    const std::vector<mat4> c2 = computeWorldToLightClipCascades(state, sunDir, mapSize, 2, 0.4f);
+    ASSERT_EQ(c2.size(), 2u);
+    EXPECT_EQ(maxAbsDiff(c2.back(), c1[0]), 0.0) << "adding a near cascade must not move the far cascade";
+
+    // (concentric) a fixed world displacement maps to a LARGER clip displacement under the near
+    // cascade than the far — i.e. the near frustum is tighter / higher resolution. The fit is affine
+    // in xy (w==1), so the displacement is independent of absolute position.
+    const auto clipDisp = [](const mat4& m, double dx, double dy) {
+        vec4 a, b;
+        matrix::transformMat4(a, vec4{{0.0, 0.0, 0.0, 1.0}}, m);
+        matrix::transformMat4(b, vec4{{dx, dy, 0.0, 1.0}}, m);
+        return std::hypot(b[0] / b[3] - a[0] / a[3], b[1] / b[3] - a[1] / a[3]);
+    };
+    const mat4& near = c2.front();
+    const mat4& far = c2.back();
+    EXPECT_GT(clipDisp(near, 100.0, 0.0), clipDisp(far, 100.0, 0.0)) << "near cascade must be tighter than far";
+    EXPECT_GT(clipDisp(near, 0.0, 100.0), clipDisp(far, 0.0, 100.0)) << "near cascade must be tighter than far";
+
+    // (bearing-invariant per cascade) every cascade stays put under camera rotation, like the single map.
+    const std::vector<mat4> c2_b90 = computeWorldToLightClipCascades(stateAt(16.0, 55.0, 90.0, center), sunDir, mapSize, 2, 0.4f);
+    ASSERT_EQ(c2_b90.size(), 2u);
+    EXPECT_LT(maxAbsDiff(c2.front(), c2_b90.front()), 1e-6) << "near cascade moved when rotating bearing";
+    EXPECT_LT(maxAbsDiff(c2.back(), c2_b90.back()), 1e-6) << "far cascade moved when rotating bearing";
+}

@@ -77,8 +77,8 @@ void RenderFillExtrusionLayer::layerRemoved(UniqueChangeRequestVec& changes) {
     // Drop this layer's slot in the shared caster registry; the shadow target itself is owned by
     // RenderOrchestrator (see markLayerRenderable).
     if (shadowPass) {
-        shadowPass->releaseCasterGroup(getID());
-        shadowCasterGroup = nullptr;
+        shadowPass->releaseCasterGroup(getID()); // removes this layer's group on every cascade
+        shadowCasterGroups.clear();
     }
 }
 
@@ -96,10 +96,12 @@ std::size_t RenderFillExtrusionLayer::removeTile(RenderPass renderPass, const Ov
     if (groundShadowLayerGroup) {
         stats.drawablesRemoved += groundShadowLayerGroup->removeDrawables(renderPass, tileID).size();
     }
-    // This layer's own caster group in the shared pass (cached in update()); pruning it never
-    // touches another layer's casters.
-    if (shadowCasterGroup) {
-        stats.drawablesRemoved += shadowCasterGroup->removeDrawables(RenderPass::Opaque, tileID).size();
+    // This layer's own per-cascade caster groups in the shared pass (cached in update()); pruning
+    // them never touches another layer's casters.
+    for (auto* casterGroup : shadowCasterGroups) {
+        if (casterGroup) {
+            stats.drawablesRemoved += casterGroup->removeDrawables(RenderPass::Opaque, tileID).size();
+        }
     }
     return stats.drawablesRemoved - oldValue;
 }
@@ -114,11 +116,13 @@ std::size_t RenderFillExtrusionLayer::removeAllDrawables() {
         stats.drawablesRemoved += groundShadowLayerGroup->getDrawableCount();
         groundShadowLayerGroup->clearDrawables();
     }
-    // Per-layer caster group (keyed {layerID,tileID} in the pass registry): clearing it evicts only
-    // this layer's casters, never another fill-extrusion layer's.
-    if (shadowCasterGroup) {
-        stats.drawablesRemoved += shadowCasterGroup->getDrawableCount();
-        shadowCasterGroup->clearDrawables();
+    // Per-layer per-cascade caster groups (keyed {layerID,cascade} in the pass registry): clearing
+    // them evicts only this layer's casters, never another fill-extrusion layer's.
+    for (auto* casterGroup : shadowCasterGroups) {
+        if (casterGroup) {
+            stats.drawablesRemoved += casterGroup->getDrawableCount();
+            casterGroup->clearDrawables();
+        }
     }
     return stats.drawablesRemoved - oldValue;
 }
@@ -212,18 +216,25 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         if (!groundShadowGroup) {
             groundShadowGroup = shaders.getShaderGroup("GroundShadowShader");
         }
-        // This layer's own slot in the shared caster registry (keyed {layerID,tileID}). Cached so
-        // the lifecycle removeTile/removeAllDrawables can prune it without a gfx::Context.
-        shadowCasterGroup = shadowPass->casterGroupFor(context, getID());
-        // Caster tweaker on this layer's caster group; it writes each caster's light_matrix from
-        // that drawable's own tileID, so one tweaker serves every caster in the group.
-        if (shadowCasterGroup && !shadowCasterTweaker) {
-            shadowCasterTweaker = std::make_shared<ShadowDepthTweaker>(
-                getID(), evaluatedProperties, shadowMapSize(), frustumState);
-            shadowCasterGroup->addLayerTweaker(shadowCasterTweaker);
+        // This layer's per-cascade slots in the shared caster registry (keyed {layerID,cascade}).
+        // Cached so the lifecycle removeTile/removeAllDrawables can prune them without a gfx::Context.
+        // One caster group + tweaker per cascade; each tweaker is bound to its cascade index so it
+        // writes that cascade's light_matrix (the near map gets the tight frustum, the far the full).
+        const uint32_t cascadeCount = shadowPass->cascadeCount();
+        shadowCasterGroups.assign(cascadeCount, nullptr);
+        if (shadowCasterTweakers.size() != cascadeCount) {
+            shadowCasterTweakers.assign(cascadeCount, nullptr);
+        }
+        for (uint32_t c = 0; c < cascadeCount; ++c) {
+            shadowCasterGroups[c] = shadowPass->casterGroupFor(context, getID(), c);
+            if (shadowCasterGroups[c] && !shadowCasterTweakers[c]) {
+                shadowCasterTweakers[c] = std::make_shared<ShadowDepthTweaker>(
+                    getID(), evaluatedProperties, shadowMapSize(), frustumState, c);
+                shadowCasterGroups[c]->addLayerTweaker(shadowCasterTweakers[c]);
+            }
         }
     } else {
-        shadowCasterGroup = nullptr;
+        shadowCasterGroups.clear();
     }
 
     // Ground cast shadows default ON (gated by the master useShadows above); MLN_GROUND_SHADOWS=0
@@ -311,11 +322,13 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             return !(drawable.getRenderPass() & drawPass) || (tileID && !hasRenderTile(*tileID));
         });
     }
-    if (shadowCasterGroup) {
-        stats.drawablesRemoved += shadowCasterGroup->removeDrawablesIf([&](gfx::Drawable& drawable) {
-            const auto& tileID = drawable.getTileID();
-            return !(drawable.getRenderPass() & RenderPass::Opaque) || (tileID && !hasRenderTile(*tileID));
-        });
+    for (auto* casterGroup : shadowCasterGroups) {
+        if (casterGroup) {
+            stats.drawablesRemoved += casterGroup->removeDrawablesIf([&](gfx::Drawable& drawable) {
+                const auto& tileID = drawable.getTileID();
+                return !(drawable.getRenderPass() & RenderPass::Opaque) || (tileID && !hasRenderTile(*tileID));
+            });
+        }
     }
 #endif
 
@@ -410,8 +423,13 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             missingShadowSidecar = true;
         }
         if (useShadows && shadowDepthGroup && bucket.sharedTriangles->elements()) {
-            if (shadowCasterGroup && shadowCasterGroup->getDrawableCount(RenderPass::Opaque, tileID) == 0) {
-                missingShadowSidecar = true;
+            // If ANY cascade is missing this tile's casters, rebuild (the build loop refills all
+            // cascades together, so a partial set means the whole sidecar must be regenerated).
+            for (auto* casterGroup : shadowCasterGroups) {
+                if (casterGroup && casterGroup->getDrawableCount(RenderPass::Opaque, tileID) == 0) {
+                    missingShadowSidecar = true;
+                    break;
+                }
             }
         }
         if (missingShadowSidecar) {
@@ -480,7 +498,15 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                 }
 #if MLN_RENDER_BACKEND_METAL
                 if (useShadows) {
-                    builder->setTexture(shadowPass->texture(), idFillExtrusionShadowTexture);
+                    // Bind one shadow texture per cascade; the receiver shader picks the tightest
+                    // cascade that contains the fragment (idFillExtrusionShadowTexture0 + cascade).
+                    // Bind ALL kMaxShadowCascades slots the shader declares (Metal needs every
+                    // declared texture argument bound); slots past the active count reuse the far
+                    // cascade as a harmless dummy (never sampled — the shader loops to cascade_count).
+                    for (uint32_t c = 0; c < kMaxShadowCascades; ++c) {
+                        const uint32_t src = std::min(c, shadowPass->cascadeCount() - 1u);
+                        builder->setTexture(shadowPass->texture(src), idFillExtrusionShadowTexture0 + c);
+                    }
                 }
 #endif
                 depthBuilder = std::move(builder);
@@ -500,7 +526,15 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                 }
 #if MLN_RENDER_BACKEND_METAL
                 if (useShadows) {
-                    builder->setTexture(shadowPass->texture(), idFillExtrusionShadowTexture);
+                    // Bind one shadow texture per cascade; the receiver shader picks the tightest
+                    // cascade that contains the fragment (idFillExtrusionShadowTexture0 + cascade).
+                    // Bind ALL kMaxShadowCascades slots the shader declares (Metal needs every
+                    // declared texture argument bound); slots past the active count reuse the far
+                    // cascade as a harmless dummy (never sampled — the shader loops to cascade_count).
+                    for (uint32_t c = 0; c < kMaxShadowCascades; ++c) {
+                        const uint32_t src = std::min(c, shadowPass->cascadeCount() - 1u);
+                        builder->setTexture(shadowPass->texture(src), idFillExtrusionShadowTexture0 + c);
+                    }
                 }
 #endif
                 colorBuilder = std::move(builder);
@@ -612,7 +646,10 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                     groundBuilder->setRenderPass(drawPass);
                     groundBuilder->setDrawPriority(-1);
                     groundBuilder->setVertexAttrId(idGroundShadowPosVertexAttribute);
-                    groundBuilder->setTexture(shadowPass->texture(), idGroundShadowTexture);
+                    for (uint32_t c = 0; c < kMaxShadowCascades; ++c) {
+                        const uint32_t src = std::min(c, shadowPass->cascadeCount() - 1u);
+                        groundBuilder->setTexture(shadowPass->texture(src), idGroundShadowTexture0 + c);
+                    }
                     groundBuilder->addQuad(0, 0, util::EXTENT, util::EXTENT);
                     groundBuilder->flush(context);
                     for (auto& drawable : groundBuilder->clearDrawables()) {
@@ -630,9 +667,16 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         // Build a depth-only caster drawable from the same geometry into this layer's caster group
         // in the shared shadow map (rendered from the sun's POV by the shadow RenderTarget).
         if (useShadows && shadowDepthGroup && casterAttrs && bucket.sharedTriangles->elements()) {
-            if (auto* casterGroup = shadowCasterGroup) {
-                if (const auto casterShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
-                        shadowDepthGroup->getOrCreateShader(context, propertiesAsUniforms))) {
+            if (const auto casterShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
+                    shadowDepthGroup->getOrCreateShader(context, propertiesAsUniforms))) {
+                // One caster drawable per cascade — each renders into its cascade's shadow map with
+                // that cascade's frustum (shadowCasterTweakers[c]). The vertex buffers + segments are
+                // shared GPU data; the attribute handle is copied per cascade, not deep-duplicated.
+                for (uint32_t c = 0; c < shadowCasterGroups.size(); ++c) {
+                    auto* casterGroup = shadowCasterGroups[c];
+                    if (!casterGroup) {
+                        continue;
+                    }
                     if (auto casterBuilder = context.createDrawableBuilder(layerPrefix + "shadowCaster")) {
                         casterBuilder->setShader(casterShader);
                         // is3D + enableDepth route the caster through mtl::TileLayerGroup's
@@ -664,7 +708,10 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                         }
                         casterBuilder->setCullFaceMode(casterCull);
                         casterBuilder->setRawVertices({}, vertexCount, gfx::AttributeDataType::Short2);
-                        casterBuilder->setVertexAttributes(std::move(casterAttrs));
+                        // Copy the shared attribute handle per cascade (all cascades reference the
+                        // same underlying GPU vertex buffer; the handle is just ref-counted).
+                        auto cascadeAttrs = casterAttrs;
+                        casterBuilder->setVertexAttributes(std::move(cascadeAttrs));
                         casterBuilder->setSegments(gfx::Triangles(),
                                                    bucket.sharedTriangles,
                                                    bucket.triangleSegments.data(),
@@ -672,7 +719,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                         casterBuilder->flush(context);
                         for (auto& drawable : casterBuilder->clearDrawables()) {
                             drawable->setTileID(tileID);
-                            drawable->setLayerTweaker(shadowCasterTweaker);
+                            drawable->setLayerTweaker(shadowCasterTweakers[c]);
                             drawable->setBinders(renderData.bucket, &binders);
                             drawable->setRenderTile(renderTilesOwner, &tile);
                             casterGroup->addDrawable(RenderPass::Opaque, tileID, std::move(drawable));

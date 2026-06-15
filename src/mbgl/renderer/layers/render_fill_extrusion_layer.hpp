@@ -6,6 +6,7 @@
 #include <mbgl/style/layers/fill_extrusion_layer_properties.hpp>
 
 #include <memory>
+#include <vector>
 
 namespace mbgl {
 
@@ -77,14 +78,18 @@ private:
     // (owned by the pass; cached here so the lifecycle removeTile/removeAllDrawables can prune it
     // without a gfx::Context). `shadowGroundOwner` gates the single ground draw (set by orchestrator).
     ShadowPass* shadowPass = nullptr;
-    TileLayerGroup* shadowCasterGroup = nullptr;
+    // One caster group per cascade (near→far), each a cached slot in the pass's {layerID,cascade}
+    // registry (owned by the pass; cached so removeTile/removeAllDrawables can prune without a
+    // gfx::Context). Empty when shadows are inactive.
+    std::vector<TileLayerGroup*> shadowCasterGroups;
     bool shadowGroundOwner = false;
     TileLayerGroupPtr groundShadowLayerGroup;
     gfx::ShaderGroupPtr fillExtrusionShadowGroup;
     gfx::ShaderGroupPtr groundShadowGroup;
     gfx::ShaderGroupPtr shadowDepthGroup;
-    // Strong ref — the caster group stores only a weak_ptr (runTweakers drops expired ones).
-    LayerTweakerPtr shadowCasterTweaker;
+    // Strong refs (one per cascade) — the caster groups store only weak_ptrs (runTweakers drops
+    // expired ones). Each tweaker is bound to its cascade index so it writes that cascade's matrix.
+    std::vector<LayerTweakerPtr> shadowCasterTweakers;
     LayerTweakerPtr groundShadowTweaker;
 #endif
 

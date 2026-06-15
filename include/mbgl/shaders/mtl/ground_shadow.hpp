@@ -17,10 +17,14 @@ enum {
 
 struct alignas(16) GroundShadowDrawableUBO {
     /*   0 */ float4x4 matrix;
-    /*  64 */ float4x4 light_matrix;
-    /* 128 */
+    /*  64 */ float4x4 light_matrix[4]; // one per concentric cascade (near→far); first cascade_count valid
+    /* 320 */ int cascade_count;
+    /* 324 */ float pad0;
+    /* 328 */ float pad1;
+    /* 332 */ float pad2;
+    /* 336 */
 };
-static_assert(sizeof(GroundShadowDrawableUBO) == 8 * 16, "wrong size");
+static_assert(sizeof(GroundShadowDrawableUBO) == 21 * 16, "wrong size");
 
 struct alignas(16) GroundShadowPropsUBO {
     /*  0 */ float4 shadow_color;
@@ -46,7 +50,7 @@ struct ShaderSource<BuiltIn::GroundShadowShader, gfx::Backend::Type::Metal> {
 
     static const std::array<AttributeInfo, 1> attributes;
     static constexpr std::array<AttributeInfo, 0> instanceAttributes{};
-    static const std::array<TextureInfo, 1> textures;
+    static const std::array<TextureInfo, 4> textures;
 
     static constexpr auto prelude = groundShadowShaderPrelude;
     static constexpr auto source = R"(
@@ -57,12 +61,18 @@ struct VertexStage {
 
 struct FragmentStage {
     float4 position [[position, invariant]];
-    float4 shadow_pos;
+    // Light-clip position per concentric cascade (near→far); only the first `cascade_count` valid.
+    // Flattened (MSL forbids array members in a vertex-output struct).
+    float4 shadow_pos0;
+    float4 shadow_pos1;
+    float4 shadow_pos2;
+    float4 shadow_pos3;
     // Clip-space w of this ground fragment = perspective view-distance from the camera
     // (world/mercator-px units). Used for the near→far view-depth fade. Interpolated
     // perspective-correctly by the rasterizer (it carries 1/w in the standard varying path,
     // so passing w directly is fine for a monotonic fade weight).
     float view_w;
+    int cascade_count [[flat]];
 };
 
 struct FragmentOutput {
@@ -73,11 +83,18 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
                                 device const GroundShadowDrawableUBO& drawable [[buffer(idGroundShadowDrawableUBO)]]) {
     const float4 worldLocal = float4(float2(vertx.pos), 0.0, 1.0);
     const float4 clip = drawable.matrix * worldLocal;
-    return {
-        .position = clip,
-        .shadow_pos = drawable.light_matrix * worldLocal,
-        .view_w = clip.w,
-    };
+    FragmentStage out;
+    out.position = clip;
+    out.view_w = clip.w;
+    const int cc = drawable.cascade_count;
+    out.cascade_count = cc;
+    // Project the ground point into every cascade's light clip (near→far). Unused slots replicate
+    // cascade 0; the fragment only reads c < cascade_count (+ the last for the rim fade).
+    out.shadow_pos0 = drawable.light_matrix[0] * worldLocal;
+    out.shadow_pos1 = drawable.light_matrix[(cc > 1) ? 1 : 0] * worldLocal;
+    out.shadow_pos2 = drawable.light_matrix[(cc > 2) ? 2 : 0] * worldLocal;
+    out.shadow_pos3 = drawable.light_matrix[(cc > 3) ? 3 : 0] * worldLocal;
+    return out;
 }
 
 float ground_unpackShadowDepth(float4 rgba) {
@@ -115,44 +132,55 @@ float ground_pcfBilinear(texture2d<float, access::sample> tex, sampler s, float2
 
 fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
                                      device const GroundShadowPropsUBO& props [[buffer(idGroundShadowPropsUBO)]],
-                                     texture2d<float, access::sample> shadowTexture [[texture(0)]]) {
+                                     array<texture2d<float, access::sample>, 4> shadowTextures [[texture(0)]]) {
     constexpr sampler shadowSampler(coord::normalized, filter::nearest, address::clamp_to_edge);
-    const float3 ndc = in.shadow_pos.xyz / in.shadow_pos.w;
-    // Metal renders the shadow map into an offscreen texture whose origin is TOP-left, while
-    // uv = ndc.xy*0.5+0.5 assumes a bottom-left origin. Flip uv.y so the receiver samples the texel
-    // the caster actually wrote. Without this the sample is vertically mirrored in light space, so a
-    // ground point only finds its caster where the mirror happens to coincide — the root cause of the
-    // "shadows only in part of the screen" / anti-sun-only pattern. (The caster vertex path and the
-    // receiver's matrix are identical; only the texture-coordinate convention differed.)
-    float2 uv = ndc.xy * 0.5 + 0.5;
-    uv.y = 1.0 - uv.y;
-    // UV-radial (frustum-edge) fade + view-depth (camera-distance) fade. The view-depth fade is
-    // the primary near→far softener; the UV-radial fade only trims the very frustum rim.
-    const float r = max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0; // 0 at center, 1 at frustum edge
+    const int lastCascade = max(in.cascade_count - 1, 0);
+
+    // UV-radial (frustum-edge) fade is tied to the FAR cascade — the OUTER coverage boundary — so the
+    // tighter near cascade's inner edge never fades shadows mid-screen. (Metal's offscreen texture has
+    // a TOP-left origin, so flip uv.y to match the texel the caster wrote.) The view-depth fade is
+    // camera-distance based and cascade-independent.
+    float4 farSp = in.shadow_pos0;
+    if (lastCascade == 1) farSp = in.shadow_pos1;
+    else if (lastCascade == 2) farSp = in.shadow_pos2;
+    else if (lastCascade == 3) farSp = in.shadow_pos3;
+    const float3 farNdc = farSp.xyz / farSp.w;
+    float2 farUv = farNdc.xy * 0.5 + 0.5;
+    farUv.y = 1.0 - farUv.y;
+    const float r = max(abs(farUv.x - 0.5), abs(farUv.y - 0.5)) * 2.0; // 0 at center, 1 at far-frustum edge
     const float uvFade = 1.0 - smoothstep(props.shadow_fade_start, 1.0, r);
     const float depthFade = ground_depthFade(in.view_w, props.depth_fade_start, props.depth_fade_end);
     const float fade = uvFade * depthFade;
 
-    // Sample the shadow map only when this ground fragment is inside the light frustum in ALL THREE
-    // axes. The uv (xy) check alone is not enough: the ground quads span whole tiles that extend
-    // past the bounded light frustum's depth range, so far ground points get ndc.z > 1 (beyond the
-    // far plane) which exceeds the cleared depth (~1.0) and would falsely read as shadowed — a hard
-    // diagonal of phantom shadow along the far-plane boundary. Points outside [0,1] in depth have no
-    // possible occluder in the map, so they are lit. (Standard shadow-map receiver guard.)
+    // CASCADED SHADOW MAPS: walk cascades near→far and sample the TIGHTEST one that contains this
+    // ground fragment (light-clip uv inside [0,1] in all three axes). The depth-range guard (ndc.z in
+    // [0,1]) keeps far ground points beyond a cascade's far plane from reading phantom shadow; such
+    // points fall through to the next (wider) cascade, or are lit if outside every cascade.
     float lit = 1.0;
-    if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && ndc.z >= 0.0 && ndc.z <= 1.0) {
+    for (int c = 0; c < in.cascade_count; ++c) {
+        float4 sp = in.shadow_pos0;
+        if (c == 1) sp = in.shadow_pos1;
+        else if (c == 2) sp = in.shadow_pos2;
+        else if (c == 3) sp = in.shadow_pos3;
+        const float3 ndc = sp.xyz / sp.w;
+        float2 uv = ndc.xy * 0.5 + 0.5;
+        uv.y = 1.0 - uv.y;
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+            continue;
+        }
         const float current = ndc.z - props.shadow_bias;
         // 2x2 grid of bilinear-PCF taps: smooth, staircase-free penumbra (matches the building
         // receiver) so courtyard / inter-building ground shadows aren't blocky.
-        lit = 0.0;
+        float l = 0.0;
         for (int dy = 0; dy <= 1; ++dy) {
             for (int dx = 0; dx <= 1; ++dx) {
-                lit += ground_pcfBilinear(shadowTexture, shadowSampler,
-                                          uv + (float2(dx, dy) - 0.5) * props.shadow_texel_size,
-                                          props.shadow_texel_size, current);
+                l += ground_pcfBilinear(shadowTextures[c], shadowSampler,
+                                        uv + (float2(dx, dy) - 0.5) * props.shadow_texel_size,
+                                        props.shadow_texel_size, current);
             }
         }
-        lit /= 4.0;
+        lit = l / 4.0;
+        break; // tightest containing cascade wins (hard transition)
     }
 
     return {half4(half3(props.shadow_color.rgb), half((1.0 - lit) * props.shadow_intensity * fade))};

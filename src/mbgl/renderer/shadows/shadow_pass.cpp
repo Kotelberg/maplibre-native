@@ -29,60 +29,103 @@ uint32_t shadowMapSize() {
     return size;
 }
 
-ShadowPass::ShadowPass(uint32_t mapSize)
-    : mapSize_(mapSize) {}
+uint32_t shadowCascadeCount() {
+    static const uint32_t count = [] {
+        const char* v = std::getenv("MLN_SHADOW_CASCADE_COUNT");
+        const uint32_t n = v ? static_cast<uint32_t>(std::atoi(v)) : 2u;
+        // Clamp to [1, kMaxShadowCascades]: 1 = legacy single map; the UBO/shader arrays are sized
+        // to kMaxShadowCascades, so a larger value would overrun them.
+        return n < 1u ? 1u : (n > kMaxShadowCascades ? kMaxShadowCascades : n);
+    }();
+    return count;
+}
+
+float shadowCascadeSplit() {
+    static const float split = [] {
+        const char* v = std::getenv("MLN_SHADOW_CASCADE_SPLIT");
+        const float s = v ? static_cast<float>(std::atof(v)) : 0.4f;
+        // Keep strictly inside (0,1): 0 collapses the near cascade, 1 makes it equal the far cascade.
+        return s <= 0.05f ? 0.05f : (s >= 0.95f ? 0.95f : s);
+    }();
+    return split;
+}
+
+ShadowPass::ShadowPass(uint32_t mapSize, uint32_t cascadeCount)
+    : mapSize_(mapSize),
+      cascadeCount_(cascadeCount < 1u ? 1u : cascadeCount) {}
 
 ShadowPass::~ShadowPass() = default;
 
 void ShadowPass::ensure(gfx::Context& context) {
-    if (!shadowMap_) {
-        shadowMap_ = std::make_unique<ShadowMap>(mapSize_);
-        shadowMap_->ensure(context, "shadow-pass");
-        // ShadowMap::ensure creates one caster group at RenderTarget index 0 — claim it as the
-        // first registry slot so the common single-FE-layer case reuses it (no extra group).
-        nextCasterIndex_ = 1;
+    if (!shadowMaps_.empty()) {
+        return;
+    }
+    shadowMaps_.reserve(cascadeCount_);
+    // Index 0 of each cascade's RenderTarget is its built-in caster group (claimed by the first
+    // layer registered on that cascade); fresh groups start at index 1.
+    nextCasterIndex_.assign(cascadeCount_, 1);
+    for (uint32_t c = 0; c < cascadeCount_; ++c) {
+        auto map = std::make_unique<ShadowMap>(mapSize_);
+        map->ensure(context, "shadow-pass-c" + std::to_string(c));
+        shadowMaps_.push_back(std::move(map));
     }
 }
 
-RenderTargetPtr ShadowPass::target() const {
-    return shadowMap_ ? shadowMap_->target() : nullptr;
+RenderTargetPtr ShadowPass::target(uint32_t cascadeIdx) const {
+    return cascadeIdx < shadowMaps_.size() && shadowMaps_[cascadeIdx] ? shadowMaps_[cascadeIdx]->target()
+                                                                      : nullptr;
 }
 
-const gfx::Texture2DPtr& ShadowPass::texture() const {
-    return shadowMap_->texture();
+const gfx::Texture2DPtr& ShadowPass::texture(uint32_t cascadeIdx) const {
+    return shadowMaps_[cascadeIdx]->texture();
 }
 
-TileLayerGroup* ShadowPass::casterGroupFor(gfx::Context& context, const std::string& layerID) {
-    if (const auto it = casterGroups_.find(layerID); it != casterGroups_.end()) {
-        return static_cast<TileLayerGroup*>(it->second.get());
-    }
-    if (!shadowMap_) {
+TileLayerGroup* ShadowPass::casterGroupFor(gfx::Context& context, const std::string& layerID, uint32_t cascadeIdx) {
+    if (cascadeIdx >= shadowMaps_.size() || !shadowMaps_[cascadeIdx]) {
         return nullptr;
     }
+    const auto key = std::make_pair(layerID, cascadeIdx);
+    if (const auto it = casterGroups_.find(key); it != casterGroups_.end()) {
+        return static_cast<TileLayerGroup*>(it->second.get());
+    }
+    auto& map = shadowMaps_[cascadeIdx];
 
+    // Reuse THIS cascade's built-in caster group (RenderTarget index 0) for the first layer
+    // registered on it; later layers get a fresh group at the next index on the same target.
+    bool cascadeHasLayer = false;
+    for (const auto& e : casterGroups_) {
+        if (e.first.second == cascadeIdx) {
+            cascadeHasLayer = true;
+            break;
+        }
+    }
     LayerGroupBasePtr group;
-    if (casterGroups_.empty()) {
-        // Reuse the shadow map's built-in caster group (index 0) for the first registered layer.
-        group = shadowMap_->target()->getLayerGroup(0);
+    if (!cascadeHasLayer) {
+        group = map->target()->getLayerGroup(0);
     }
     if (!group) {
-        group = context.createTileLayerGroup(
-            nextCasterIndex_++, /*initialCapacity=*/64, "shadow-pass-casters-" + layerID);
-        shadowMap_->target()->addLayerGroup(group, /*replace=*/false);
+        group = context.createTileLayerGroup(nextCasterIndex_[cascadeIdx]++,
+                                             /*initialCapacity=*/64,
+                                             "shadow-pass-casters-" + layerID + "-c" + std::to_string(cascadeIdx));
+        map->target()->addLayerGroup(group, /*replace=*/false);
     }
-    casterGroups_[layerID] = group;
+    casterGroups_[key] = group;
     return static_cast<TileLayerGroup*>(group.get());
 }
 
 void ShadowPass::releaseCasterGroup(const std::string& layerID) {
-    const auto it = casterGroups_.find(layerID);
-    if (it == casterGroups_.end()) {
-        return;
+    // Remove this layer's caster group from EVERY cascade it was registered on.
+    for (auto it = casterGroups_.begin(); it != casterGroups_.end();) {
+        if (it->first.first == layerID) {
+            const uint32_t cascadeIdx = it->first.second;
+            if (cascadeIdx < shadowMaps_.size() && shadowMaps_[cascadeIdx] && it->second) {
+                shadowMaps_[cascadeIdx]->target()->removeLayerGroup(it->second->getLayerIndex());
+            }
+            it = casterGroups_.erase(it);
+        } else {
+            ++it;
+        }
     }
-    if (shadowMap_ && it->second) {
-        shadowMap_->target()->removeLayerGroup(it->second->getLayerIndex());
-    }
-    casterGroups_.erase(it);
 }
 
 void ShadowPass::clearCasters() {

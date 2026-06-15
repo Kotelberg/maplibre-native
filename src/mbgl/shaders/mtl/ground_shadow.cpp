@@ -10,7 +10,13 @@ const std::array<AttributeInfo, 1> GroundShadowShaderSource::attributes = {
     AttributeInfo{0, gfx::AttributeDataType::Short2, groundShadowUBOCount + 0, idGroundShadowPosVertexAttribute},
 };
 
-const std::array<TextureInfo, 1> GroundShadowShaderSource::textures = {TextureInfo{0, idGroundShadowTexture}};
+// One texture per cascade (cascaded shadow maps); the receiver picks the tightest cascade.
+const std::array<TextureInfo, 4> GroundShadowShaderSource::textures = {
+    TextureInfo{0, idGroundShadowTexture0},
+    TextureInfo{1, idGroundShadowTexture1},
+    TextureInfo{2, idGroundShadowTexture2},
+    TextureInfo{3, idGroundShadowTexture3},
+};
 
 } // namespace shaders
 } // namespace mbgl
