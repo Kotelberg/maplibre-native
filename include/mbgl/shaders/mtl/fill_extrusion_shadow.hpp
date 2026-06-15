@@ -147,6 +147,22 @@ float fe_unpackShadowDepth(float4 rgba) {
     return dot(rgba, float4(1.0, 1.0/255.0, 1.0/65025.0, 1.0/16581375.0));
 }
 
+// Bilinear percentage-closer filter: depth-compare the 4 texels surrounding `uv`, then bilinearly
+// blend the 0/1 results. The map stores RGBA8-PACKED depth, so hardware linear filtering would blend
+// the bytes (garbage) — we must compare FIRST, then blend. This turns the cast-shadow edge from a
+// per-texel staircase (which reads as stripes on a receiving rooftop/wall) into a smooth gradient.
+float fe_pcfBilinear(texture2d<float, access::sample> tex, sampler s, float2 uv, float texel, float current) {
+    const float2 tc = uv / texel - 0.5;
+    const float2 base = floor(tc);
+    const float2 f = tc - base;
+    const float2 c00 = (base + 0.5) * texel;
+    const float s00 = (current <= fe_unpackShadowDepth(tex.sample(s, c00))) ? 1.0 : 0.0;
+    const float s10 = (current <= fe_unpackShadowDepth(tex.sample(s, c00 + float2(texel, 0.0)))) ? 1.0 : 0.0;
+    const float s01 = (current <= fe_unpackShadowDepth(tex.sample(s, c00 + float2(0.0, texel)))) ? 1.0 : 0.0;
+    const float s11 = (current <= fe_unpackShadowDepth(tex.sample(s, c00 + float2(texel, texel)))) ? 1.0 : 0.0;
+    return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+}
+
 fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
                                      device const FillExtrusionShadowPropsUBO& props [[buffer(idFillExtrusionShadowPropsUBO)]],
                                      texture2d<float, access::sample> shadowTexture [[texture(0)]]) {
@@ -166,15 +182,17 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     // prevents fragments beyond the far/near plane (ndc.z outside [0,1]) from reading phantom shadow.
     float lit = 1.0;
     if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && ndc.z >= 0.0 && ndc.z <= 1.0) {
+        // 2x2 grid of bilinear-PCF taps: smooth, staircase-free penumbra (kills the stripes a
+        // cast shadow showed on a receiving surface) at 16 samples.
         lit = 0.0;
-        for (int dy = -1; dy <= 1; ++dy) {
-            for (int dx = -1; dx <= 1; ++dx) {
-                const float occl = fe_unpackShadowDepth(
-                    shadowTexture.sample(shadowSampler, uv + float2(dx, dy) * props.shadow_texel_size));
-                lit += (current <= occl) ? 1.0 : 0.0;
+        for (int dy = 0; dy <= 1; ++dy) {
+            for (int dx = 0; dx <= 1; ++dx) {
+                lit += fe_pcfBilinear(shadowTexture, shadowSampler,
+                                      uv + (float2(dx, dy) - 0.5) * props.shadow_texel_size,
+                                      props.shadow_texel_size, current);
             }
         }
-        lit /= 9.0;
+        lit /= 4.0;
     }
     color.rgb *= half(1.0 - (1.0 - lit) * props.shadow_intensity);
     return { color };
