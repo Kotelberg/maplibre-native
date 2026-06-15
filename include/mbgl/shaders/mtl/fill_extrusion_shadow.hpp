@@ -204,7 +204,13 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
         // Slope-scaled bias: away-from-sun faces get a large bias so they never self-shadow (their
         // shading is the directional light's job); sun-facing faces keep the small base bias so a
         // neighbour's cast shadow still lands on them.
-        const float current = ndc.z - (props.shadow_bias + in.slope * props.shadow_slope_bias);
+        // PER-CASCADE bias scale: the near cascades have a much tighter frustum than the far one, so
+        // the bias tuned for the far cascade is too small there and the building WALLS self-shadow
+        // into dark blotches (the ground, being flat, never hits this). Scale the bias up on every
+        // cascade EXCEPT the far one (c == cascade_count-1), which keeps its tuned value so legitimate
+        // inter-building cast shadows still land. 8x matches the empirically-clean near-cascade bias.
+        const float biasScale = (c < in.cascade_count - 1) ? 8.0 : 1.0;
+        const float current = ndc.z - (props.shadow_bias + in.slope * props.shadow_slope_bias) * biasScale;
         // 2x2 grid of bilinear-PCF taps: smooth, staircase-free penumbra at 16 samples.
         float l = 0.0;
         for (int dy = 0; dy <= 1; ++dy) {
