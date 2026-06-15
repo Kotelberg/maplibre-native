@@ -170,7 +170,10 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
     const Size sz = state.getSize();
     const double screenExtent = 0.5 * std::hypot(static_cast<double>(sz.width), static_cast<double>(sz.height));
     // Floor: at flat pitch the visible field is ~the screen; keep at least this much coverage.
-    const double minRadius = static_cast<double>(envFloat("MLN_SHADOW_MIN_RADIUS", 1.2f)) * screenExtent;
+    // Default 1.8 (#3: push the pitched far-cutoff further toward the horizon; the bilinear PCF keeps
+    // the resulting slightly-coarser texels smooth). MLN_SHADOW_MAP_SIZE=2048 restores texel density
+    // if the softening is noticeable on-device.
+    const double minRadius = static_cast<double>(envFloat("MLN_SHADOW_MIN_RADIUS", 1.8f)) * screenExtent;
     // Cap: world-distance ceiling on coverage (keeps resolution sane + drops the far horizon).
     const double maxDist = static_cast<double>(envFloat("MLN_SHADOW_MAX_DIST", 4000.0f));
     // Corner safety: the top screen CORNERS reach a bit farther than the top-center; pad the radius
