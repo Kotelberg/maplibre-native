@@ -117,30 +117,60 @@ mat4 computeWorldToLightClip(const PaintParameters& parameters, uint32_t mapSize
 }
 
 mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, uint32_t mapSize) {
-    // WORLD-ANCHORED light frustum. A directional sun does not move with the camera, so the shadow
-    // map must cover the same world region regardless of camera PITCH (and bearing) — only the
-    // look-at point and zoom select WHICH region. We therefore fit the frustum to a fixed-radius
-    // square centered on the look-at ground point, NOT to the camera's view trapezoid.
+    // WORLD-ANCHORED light frustum, sized to COVER the visible ground but BEARING-INVARIANT so the
+    // shadows don't move when the camera rotates (the user's core requirement).
     //
-    // Why a fixed radius (not a view-frustum fit): the old per-frame view-fit made the shadow map's
-    // coverage and its world->texel scale change with pitch/zoom, which (a) made shadows appear
-    // pitch-dependent and (b) silently broke ShadowFrustum::fit's texel-snap (it assumes a constant
-    // box size), so shadows swam and detached from buildings. A constant footprint restores both:
-    // identical worldToLightClip across pitch (unit-tested) and a stable texel grid.
+    // The hard part of map shadows is the pitched view: the visible ground is a forward trapezoid
+    // that, at steep pitch, reaches thousands of world-units past the look-at point. A frustum sized
+    // to the FLAT on-screen extent leaves that far field uncovered -> "shadows only in the bottom
+    // half". A view-frustum fit would cover it but rotates WITH the camera, so the shadow texels
+    // crawl as you turn -> shadows appear to move. We resolve both: take the coverage RADIUS to be
+    // the farthest the visible ground reaches from the look-at point (so it grows with pitch and the
+    // far field is covered), but apply it as a SYMMETRIC square around the look-at point. The radius
+    // is a scalar (max distance), hence invariant to bearing: rotating the camera does not change it,
+    // so the frustum — and the shadows — stay put under rotation. Capped at MLN_SHADOW_MAX_DIST so a
+    // horizon-grazing steep view doesn't blow the frustum up (and far, barely-visible geometry is
+    // intentionally left uncovered, per the user).
     //
-    // World units here are TransformState::matrixFor() units == mercator screen-pixels at the current
-    // scale, so 1 world unit == 1 screen pixel at the map center (definitional, pitch-independent).
-    // Sizing the radius as a multiple of the on-screen extent therefore both (a) scales correctly
-    // with zoom and (b) is exactly pitch-invariant. We deliberately cover the near/mid field around
-    // the look-at point rather than the far horizon: far, barely-visible geometry should not consume
-    // shadow-map resolution (and the user explicitly does not want shadows drawn far away at pitch).
+    // World units are TransformState::matrixFor() units == mercator screen-pixels at the current
+    // scale (1 world unit == 1 screen pixel at the map center), so all distances below scale with
+    // zoom automatically.
     const uint8_t focalZoom = cameraFocalZoom(state);
     const vec3 focalCenter = centerPixelToWorld(state, focalZoom);
     const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f) * shadowWorldZScale();
 
     const Size sz = state.getSize();
     const double screenExtent = 0.5 * std::hypot(static_cast<double>(sz.width), static_cast<double>(sz.height));
-    const double radius = static_cast<double>(envFloat("MLN_SHADOW_RADIUS", 1.5f)) * screenExtent;
+    // Floor: at flat pitch the visible field is ~the screen; keep at least this much coverage.
+    const double minRadius = static_cast<double>(envFloat("MLN_SHADOW_MIN_RADIUS", 1.2f)) * screenExtent;
+    // Cap: world-distance ceiling on coverage (keeps resolution sane + drops the far horizon).
+    const double maxDist = static_cast<double>(envFloat("MLN_SHADOW_MAX_DIST", 4000.0f));
+    // Corner safety: the top screen CORNERS reach a bit farther than the top-center; pad the radius
+    // so the far corners of the pitched view are still covered.
+    const double cornerFactor = static_cast<double>(envFloat("MLN_SHADOW_CORNER_FACTOR", 1.3f));
+
+    // Bearing-invariant coverage radius. The binding constraint at pitch is the FORWARD reach of the
+    // visible ground. Sample DOWN the screen's vertical center column and take the farthest ground
+    // intersection from the look-at point: rows above the horizon unproject to the near plane (a
+    // small distance — screenCoordinateToTileCoordinate returns the near point when the ray escapes
+    // the ground), while the row just below the horizon gives the true far reach, which peaks there.
+    // That maximum distance is a function of pitch / fov / zoom only — NOT of the compass direction —
+    // because rotating the camera only spins this centerline; its far-reach magnitude is unchanged.
+    // So the radius, and the whole symmetric frustum, stay invariant under rotation. Capped at
+    // maxDist so a near-horizon row can't blow the frustum up (and the far horizon is left uncovered,
+    // per the user). cornerFactor pads for the wider far CORNERS of the view.
+    double reach = 0.0;
+    {
+        const double fy[6] = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5};
+        for (double f : fy) {
+            const vec3 w = screenPixelToWorld(state, focalZoom, 0.5 * sz.width, f * sz.height);
+            const double d = std::hypot(w[0] - focalCenter[0], w[1] - focalCenter[1]);
+            if (std::isfinite(d)) {
+                reach = std::max(reach, std::min(d, maxDist));
+            }
+        }
+    }
+    const double radius = std::min(std::max(minRadius, reach * cornerFactor), maxDist);
 
     const std::vector<vec3> footprint = {
         {focalCenter[0] - radius, focalCenter[1] - radius, 0.0},
@@ -153,17 +183,17 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
         char buf[512];
         std::snprintf(buf, sizeof(buf),
                       "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f focalZoom=%u size=%dx%d focal=(%.1f,%.1f) "
-                      "radius=%.1f screenExtent=%.1f",
+                      "radius=%.1f screenExtent=%.1f maxDist=%.0f",
                       util::rad2deg(state.getPitch()), state.getZoom(), focalZoom, sz.width, sz.height,
-                      focalCenter[0], focalCenter[1], radius, screenExtent);
+                      focalCenter[0], focalCenter[1], radius, screenExtent, maxDist);
         Log::Warning(Event::General, buf);
     }
 
     const std::vector<vec3> pts = ShadowFrustum::heightExpand(footprint, maxHeightWorld);
     // Texel-snap the light frustum so the shadow-map sampling grid is stable in world space as the
-    // camera pans/zooms — the constant box size above is what makes the snap actually anchor the
-    // grid (otherwise the texel size drifts and shadows crawl). Requires a world-fixed sun (map
-    // anchor); see the style's light.anchor.
+    // camera pans/rotates. The symmetric radius keeps the box bearing-invariant; the snap then
+    // anchors the grid so shadows don't crawl. (Pitch changes resize the box — a brief, rare
+    // transient.) Requires a world-fixed sun (map anchor); see the style's light.anchor.
     return ShadowFrustum::fit(sunDir, pts, mapSize, /*texelSnapEnabled=*/true);
 }
 
