@@ -6,6 +6,10 @@
 #include <mbgl/renderer/renderer_observer.hpp>
 #include <mbgl/renderer/render_source.hpp>
 #include <mbgl/renderer/render_layer.hpp>
+#if MLN_RENDER_BACKEND_METAL
+#include <mbgl/renderer/shadows/shadow_pass.hpp>
+#include <mbgl/renderer/layers/render_fill_extrusion_layer.hpp>
+#endif
 #include <mbgl/renderer/render_static_data.hpp>
 #include <mbgl/renderer/render_tree.hpp>
 #include <mbgl/renderer/update_parameters.hpp>
@@ -968,6 +972,22 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
     std::vector<std::unique_ptr<ChangeRequest>> changes;
     changes.reserve(items.size() * 3);
 
+#if MLN_RENDER_BACKEND_METAL
+    // Renderer-owned directional-shadow pass: one shared shadow map + light frustum for every
+    // fill-extrusion layer (replaces per-layer ShadowMap ownership). Ensure it + register its
+    // RenderTarget once, before the per-layer update() calls register caster drawables into it.
+    if (shadowsEnabled()) {
+        if (!shadowPass) {
+            shadowPass = std::make_unique<ShadowPass>(shadowMapSize());
+        }
+        shadowPass->ensure(context);
+        if (!shadowTargetRegistered && shadowPass->target()) {
+            changes.emplace_back(std::make_unique<AddRenderTargetRequest>(shadowPass->target()));
+            shadowTargetRegistered = true;
+        }
+    }
+#endif
+
     // Per-layer update (drawable-build) timing, gated by MLN_PERF_LOG, to find which layer
     // dominates the per-frame CPU "pre-pass" cost. Zero overhead when off.
     static const bool perfLog = [] {
@@ -984,6 +1004,15 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
         // inside the GL translation layer at the cost of emulator performance.
         if (androidGoldfishMitigationEnabled) {
             renderLayer.removeAllDrawables();
+        }
+#endif
+#if MLN_RENDER_BACKEND_METAL
+        // Hand fill-extrusion layers the shared shadow pass so they register casters/receivers into
+        // it instead of owning per-layer shadow maps. Null when shadows are disabled (stock path).
+        // RTTI is off (-fno-rtti); identify the layer by its static type-info tag, like the rest of
+        // the orchestrator, then static_cast.
+        if (renderLayer.baseImpl->getTypeInfo() == style::FillExtrusionLayer::Impl::staticTypeInfo()) {
+            static_cast<RenderFillExtrusionLayer&>(renderLayer).setShadowPass(shadowPass.get());
         }
 #endif
         try {

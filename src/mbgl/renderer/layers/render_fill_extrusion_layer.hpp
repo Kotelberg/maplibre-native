@@ -9,13 +9,19 @@
 
 namespace mbgl {
 
-class ShadowMap;
-struct ShadowFrustumState;
+class ShadowPass;
 
 class RenderFillExtrusionLayer final : public RenderLayer {
 public:
     explicit RenderFillExtrusionLayer(Immutable<style::FillExtrusionLayer::Impl>);
     ~RenderFillExtrusionLayer() override;
+
+#if MLN_RENDER_BACKEND_METAL
+    /// Hand this layer the renderer-owned shared ShadowPass before update(). The layer registers its
+    /// caster/receiver drawables into the shared pass instead of owning a per-layer ShadowMap. Set by
+    /// RenderOrchestrator under the Metal + shadowsEnabled gate; null otherwise (stock FE path).
+    void setShadowPass(ShadowPass* pass) { shadowPass = pass; }
+#endif
 
 private:
     void transition(const TransitionParameters&) override;
@@ -54,8 +60,9 @@ private:
     void layerIndexChanged(int32_t newLayerIndex, UniqueChangeRequestVec&) override;
     std::size_t removeTile(RenderPass, const OverscaledTileID&) override;
     std::size_t removeAllDrawables() override;
-    std::unique_ptr<ShadowMap> shadowMap;
-    std::shared_ptr<ShadowFrustumState> shadowFrustumState;
+    // The shared shadow map + per-frame light frustum live on the renderer-owned ShadowPass (set
+    // via setShadowPass). This layer owns only its receiver/caster tweakers + its ground group.
+    ShadowPass* shadowPass = nullptr;
     TileLayerGroupPtr groundShadowLayerGroup;
     gfx::ShaderGroupPtr fillExtrusionShadowGroup;
     gfx::ShaderGroupPtr groundShadowGroup;

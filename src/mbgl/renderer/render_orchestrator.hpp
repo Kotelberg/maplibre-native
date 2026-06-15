@@ -36,6 +36,7 @@ class LineAtlas;
 class PatternAtlas;
 class CrossTileSymbolIndex;
 class RenderTree;
+class ShadowPass;
 
 namespace gfx {
 class ShaderRegistry;
@@ -244,6 +245,13 @@ private:
 
     std::vector<RenderTargetPtr> renderTargets;
     RenderItem::DebugLayerGroupMap debugLayerGroups;
+
+    // Renderer-owned directional-shadow pass (light-owned architecture; SHADOW_REWRITE_DESIGN.md).
+    // One shared shadow map + light frustum for all fill-extrusion layers, replacing per-layer
+    // ownership. Created lazily under the Metal + shadowsEnabled gate; its RenderTarget is registered
+    // once (shadowTargetRegistered). Null on non-Metal builds and when shadows are disabled.
+    std::unique_ptr<ShadowPass> shadowPass;
+    bool shadowTargetRegistered = false;
 };
 
 } // namespace mbgl

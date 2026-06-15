@@ -28,7 +28,7 @@
 
 #if MLN_RENDER_BACKEND_METAL
 #include <mbgl/renderer/change_request.hpp>
-#include <mbgl/renderer/shadows/shadow_map.hpp>
+#include <mbgl/renderer/shadows/shadow_pass.hpp>
 #include <mbgl/renderer/shadows/shadow_tweakers.hpp>
 #include <mbgl/shaders/shader_defines.hpp>
 #include <cstdlib>
@@ -47,31 +47,8 @@ inline const FillExtrusionLayer::Impl& impl_cast(const Immutable<style::Layer::I
     return static_cast<const FillExtrusionLayer::Impl&>(*impl);
 }
 
-#if MLN_RENDER_BACKEND_METAL
-// Master runtime gate for the directional-shadow path. Default ON (on-sim-verified 2026-06-14:
-// building + ground cast shadows render correctly across the full pitched view, no cutoff).
-// MLN_RENDER_3D_ENHANCEMENTS=0 force-disables for the byte-identical-off check and per-device
-// benchmark gating (S-BENCH).
-bool shadowsEnabled() {
-    static const bool enabled = [] {
-        const char* v = std::getenv("MLN_RENDER_3D_ENHANCEMENTS");
-        return !(v && std::string_view(v) == "0");
-    }();
-    return enabled;
-}
-
-uint32_t shadowMapSize() {
-    static const uint32_t size = [] {
-        const char* v = std::getenv("MLN_SHADOW_MAP_SIZE");
-        return v ? static_cast<uint32_t>(std::atoi(v)) : 1024u;
-    }();
-    return size;
-}
-
-TileLayerGroup* shadowCasterGroup(const std::unique_ptr<ShadowMap>& shadowMap) {
-    return shadowMap ? shadowMap->casterGroup() : nullptr;
-}
-#endif
+// Shadow runtime gate (shadowsEnabled / shadowMapSize) lives in shadow_pass.{hpp,cpp} now — the
+// single source of truth shared by the renderer-owned ShadowPass and this layer.
 
 } // namespace
 
@@ -89,22 +66,15 @@ void RenderFillExtrusionLayer::markLayerRenderable(bool willRender, UniqueChange
 
     activateLayerGroup(groundShadowLayerGroup, willRender, changes);
     activateLayerGroup(layerGroup, willRender, changes);
-    if (shadowMap && shadowMap->target()) {
-        if (willRender) {
-            changes.emplace_back(std::make_unique<AddRenderTargetRequest>(shadowMap->target()));
-        } else {
-            changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(shadowMap->target()));
-        }
-    }
+    // The shared shadow-map RenderTarget is owned + (un)registered by RenderOrchestrator (it is
+    // shared across all fill-extrusion layers), so per-layer lifecycle must NOT touch it.
 }
 
 void RenderFillExtrusionLayer::layerRemoved(UniqueChangeRequestVec& changes) {
     removeAllDrawables();
     activateLayerGroup(groundShadowLayerGroup, false, changes);
     activateLayerGroup(layerGroup, false, changes);
-    if (shadowMap && shadowMap->target()) {
-        changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(shadowMap->target()));
-    }
+    // Shared shadow target lifecycle is owned by RenderOrchestrator; see markLayerRenderable.
 }
 
 void RenderFillExtrusionLayer::layerIndexChanged(int32_t newLayerIndex, UniqueChangeRequestVec& changes) {
@@ -121,7 +91,7 @@ std::size_t RenderFillExtrusionLayer::removeTile(RenderPass renderPass, const Ov
     if (groundShadowLayerGroup) {
         stats.drawablesRemoved += groundShadowLayerGroup->removeDrawables(renderPass, tileID).size();
     }
-    if (auto* casterGroup = shadowCasterGroup(shadowMap)) {
+    if (auto* casterGroup = shadowPass ? shadowPass->casterGroup() : nullptr) {
         stats.drawablesRemoved += casterGroup->removeDrawables(RenderPass::Opaque, tileID).size();
     }
     return stats.drawablesRemoved - oldValue;
@@ -137,7 +107,9 @@ std::size_t RenderFillExtrusionLayer::removeAllDrawables() {
         stats.drawablesRemoved += groundShadowLayerGroup->getDrawableCount();
         groundShadowLayerGroup->clearDrawables();
     }
-    if (auto* casterGroup = shadowCasterGroup(shadowMap)) {
+    // P2: single FE layer, so clearing the shared caster group is safe. P3 switches to per-layer
+    // caster groups (keyed {layerID,tileID}) so this no longer evicts other layers' casters.
+    if (auto* casterGroup = shadowPass ? shadowPass->casterGroup() : nullptr) {
         stats.drawablesRemoved += casterGroup->getDrawableCount();
         casterGroup->clearDrawables();
     }
@@ -216,21 +188,14 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
 
     bool useShadows = false;
 #if MLN_RENDER_BACKEND_METAL
-    useShadows = shadowsEnabled();
-    if (useShadows && !shadowFrustumState) {
-        shadowFrustumState = std::make_shared<ShadowFrustumState>();
-    }
-    if (useShadows && !shadowMap) {
-        shadowMap = std::make_unique<ShadowMap>(shadowMapSize());
-        shadowMap->ensure(context, getID());
-        if (auto* casters = shadowMap->casterGroup()) {
-            shadowCasterTweaker =
-                std::make_shared<ShadowDepthTweaker>(getID(), evaluatedProperties, shadowMapSize(), shadowFrustumState);
-            casters->addLayerTweaker(shadowCasterTweaker);
-        }
-        if (shadowMap->target()) {
-            changes.emplace_back(std::make_unique<AddRenderTargetRequest>(shadowMap->target()));
-        }
+    // The shared shadow map + per-frame light frustum are owned by RenderOrchestrator's ShadowPass
+    // (handed to this layer via setShadowPass() before update()). This layer no longer owns a
+    // ShadowMap or registers the shadow RenderTarget — it only registers caster/receiver drawables
+    // into the shared pass and samples the shared texture.
+    useShadows = shadowsEnabled() && shadowPass && shadowPass->ready();
+    const ShadowFrustumStatePtr frustumState = useShadows ? shadowPass->frustumState()
+                                                          : ShadowFrustumStatePtr{};
+    if (useShadows) {
         if (!shadowDepthGroup) {
             shadowDepthGroup = shaders.getShaderGroup("ShadowDepthShader");
         }
@@ -239,6 +204,14 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         }
         if (!groundShadowGroup) {
             groundShadowGroup = shaders.getShaderGroup("GroundShadowShader");
+        }
+        // Caster tweaker on the shared caster group. It writes each caster drawable's light_matrix
+        // from that drawable's own tileID, so one tweaker correctly serves every caster in the
+        // group (P2 single layer; P3 keeps this true with per-layer caster groups).
+        if (auto* casters = shadowPass->casterGroup(); casters && !shadowCasterTweaker) {
+            shadowCasterTweaker = std::make_shared<ShadowDepthTweaker>(
+                getID(), evaluatedProperties, shadowMapSize(), frustumState);
+            casters->addLayerTweaker(shadowCasterTweaker);
         }
     }
 
@@ -257,7 +230,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         }
         if (groundShadowLayerGroup && !groundShadowTweaker) {
             groundShadowTweaker =
-                std::make_shared<GroundShadowTweaker>(getID(), evaluatedProperties, shadowMapSize(), shadowFrustumState);
+                std::make_shared<GroundShadowTweaker>(getID(), evaluatedProperties, shadowMapSize(), frustumState);
             groundShadowLayerGroup->addLayerTweaker(groundShadowTweaker);
         }
     } else if (groundShadowLayerGroup) {
@@ -282,7 +255,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
 #if MLN_RENDER_BACKEND_METAL
         if (useShadows) {
             layerTweaker = std::make_shared<FillExtrusionShadowTweaker>(
-                getID(), evaluatedProperties, shadowMapSize(), shadowFrustumState);
+                getID(), evaluatedProperties, shadowMapSize(), frustumState);
         } else
 #endif
         {
@@ -325,7 +298,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             return !(drawable.getRenderPass() & drawPass) || (tileID && !hasRenderTile(*tileID));
         });
     }
-    if (auto* casterGroup = shadowCasterGroup(shadowMap)) {
+    if (auto* casterGroup = shadowPass ? shadowPass->casterGroup() : nullptr) {
         stats.drawablesRemoved += casterGroup->removeDrawablesIf([&](gfx::Drawable& drawable) {
             const auto& tileID = drawable.getTileID();
             return !(drawable.getRenderPass() & RenderPass::Opaque) || (tileID && !hasRenderTile(*tileID));
@@ -424,7 +397,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             missingShadowSidecar = true;
         }
         if (useShadows && shadowDepthGroup && bucket.sharedTriangles->elements()) {
-            if (auto* casterGroup = shadowCasterGroup(shadowMap);
+            if (auto* casterGroup = shadowPass ? shadowPass->casterGroup() : nullptr;
                 casterGroup && casterGroup->getDrawableCount(RenderPass::Opaque, tileID) == 0) {
                 missingShadowSidecar = true;
             }
@@ -494,8 +467,8 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                     builder->addTweaker(tweaker);
                 }
 #if MLN_RENDER_BACKEND_METAL
-                if (useShadows && shadowMap) {
-                    builder->setTexture(shadowMap->texture(), idFillExtrusionShadowTexture);
+                if (useShadows) {
+                    builder->setTexture(shadowPass->texture(), idFillExtrusionShadowTexture);
                 }
 #endif
                 depthBuilder = std::move(builder);
@@ -514,8 +487,8 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                     builder->addTweaker(tweaker);
                 }
 #if MLN_RENDER_BACKEND_METAL
-                if (useShadows && shadowMap) {
-                    builder->setTexture(shadowMap->texture(), idFillExtrusionShadowTexture);
+                if (useShadows) {
+                    builder->setTexture(shadowPass->texture(), idFillExtrusionShadowTexture);
                 }
 #endif
                 colorBuilder = std::move(builder);
@@ -611,7 +584,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
 
 #if MLN_RENDER_BACKEND_METAL
         // Env toggle (diagnostic): MLN_GROUND_SHADOWS=1 enables the ground-shadow quads.
-        if (useGroundShadows && shadowMap && groundShadowLayerGroup) {
+        if (useGroundShadows && groundShadowLayerGroup) {
             if (const auto groundShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
                     groundShadowGroup->getOrCreateShader(context, {}))) {
                 if (auto groundBuilder = context.createDrawableBuilder(layerPrefix + "groundShadow")) {
@@ -627,7 +600,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                     groundBuilder->setRenderPass(drawPass);
                     groundBuilder->setDrawPriority(-1);
                     groundBuilder->setVertexAttrId(idGroundShadowPosVertexAttribute);
-                    groundBuilder->setTexture(shadowMap->texture(), idGroundShadowTexture);
+                    groundBuilder->setTexture(shadowPass->texture(), idGroundShadowTexture);
                     groundBuilder->addQuad(0, 0, util::EXTENT, util::EXTENT);
                     groundBuilder->flush(context);
                     for (auto& drawable : groundBuilder->clearDrawables()) {
@@ -644,8 +617,8 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
 
         // Build a depth-only caster drawable from the same geometry into the shadow map's
         // caster group (rendered from the sun's POV by the shadow RenderTarget).
-        if (useShadows && shadowMap && shadowDepthGroup && casterAttrs && bucket.sharedTriangles->elements()) {
-            if (auto* casterGroup = shadowMap->casterGroup()) {
+        if (useShadows && shadowDepthGroup && casterAttrs && bucket.sharedTriangles->elements()) {
+            if (auto* casterGroup = shadowPass->casterGroup()) {
                 if (const auto casterShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
                         shadowDepthGroup->getOrCreateShader(context, propertiesAsUniforms))) {
                     if (auto casterBuilder = context.createDrawableBuilder(layerPrefix + "shadowCaster")) {

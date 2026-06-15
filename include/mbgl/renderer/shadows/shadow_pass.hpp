@@ -5,7 +5,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <string>
 
 namespace mbgl {
 
@@ -18,39 +17,47 @@ using Texture2DPtr = std::shared_ptr<Texture2D>;
 class RenderTarget;
 using RenderTargetPtr = std::shared_ptr<RenderTarget>;
 class TileLayerGroup;
-class LayerGroupBase;
-using LayerGroupBasePtr = std::shared_ptr<LayerGroupBase>;
 
-/// Renderer-owned directional-shadow pass (the light-owned architecture; see SHADOW_REWRITE_DESIGN.md).
+/// Master runtime gate for the directional-shadow path (Metal-only). Default ON;
+/// `MLN_RENDER_3D_ENHANCEMENTS=0` force-disables it for the byte-identical-off check and
+/// per-device benchmark gating. Single source of truth shared by the orchestrator (which owns the
+/// pass) and the render layers (which register casters/receivers).
+bool shadowsEnabled();
+
+/// Shadow-map resolution (square). `MLN_SHADOW_MAP_SIZE` override; default 1024.
+uint32_t shadowMapSize();
+
+/// Renderer-owned directional-shadow pass (the light-owned architecture; see
+/// SHADOW_REWRITE_DESIGN.md).
 ///
-/// Owns ONE shared shadow system for the whole frame — the depth-capable shadow map + the caster
-/// layer group + the per-frame light frustum + the single ground-shadow receiver group — replacing
-/// the previous per-RenderFillExtrusionLayer ownership. ALL shadow-casting 3D layers register their
-/// caster drawables into the shared caster group (keyed by {layerID, tileID}); ALL receiver layers
-/// sample the one shared texture with the one shared worldToLightClip. This eliminates the multi-
-/// layer cost (N shadow maps / N caster passes) and the double-cast-shadow hazard of the per-layer
-/// design on styles with several fill-extrusion layers (e.g. HataHub's building-3d + hover + listing
-/// + selected).
+/// Owns ONE shared shadow system for the whole frame — the depth-capable shadow map (RenderTarget +
+/// hardware depth + RGBA8 packed-depth texture + caster layer group) and the per-frame light
+/// frustum — replacing the previous per-RenderFillExtrusionLayer ownership. ALL shadow-casting 3D
+/// layers register their caster drawables into the shared caster group; ALL receiver layers sample
+/// the one shared texture with the one shared `worldToLightClip` (cached per-frame in
+/// `frustumState`). This eliminates the multi-layer cost (N shadow maps / N caster passes) and the
+/// double-cast-shadow / multi-ground-draw hazard of the per-layer design on styles with several
+/// fill-extrusion layers (e.g. HataHub's staged style: building-3d + hover + listings + selected).
 ///
-/// Owned by RenderOrchestrator; only instantiated under the Metal gate.
+/// Owned by RenderOrchestrator; only instantiated under the Metal gate. The orchestrator owns the
+/// RenderTarget lifecycle (registers it once via AddRenderTargetRequest); layers must NOT add or
+/// remove the shared target on their own lifecycle events.
+///
+/// P2 (this commit): single shared caster group + shared texture + shared frustum; single-FE-layer
+/// parity. P3 adds a per-`{layerID, tileID}` caster registry + a single ground-shadow group.
 class ShadowPass {
 public:
     explicit ShadowPass(uint32_t mapSize);
     ~ShadowPass();
 
-    /// Idempotent: create the depth-capable shadow map (with its caster group) + the per-frame
-    /// frustum state + the single ground-shadow layer group at the given layer index.
-    void ensure(gfx::Context&, int32_t groundLayerIndex);
+    /// Idempotent: create the depth-capable shadow map (with its caster group).
+    void ensure(gfx::Context&);
 
     /// The shadow-map RenderTarget — registered once with the orchestrator (AddRenderTargetRequest).
     RenderTargetPtr target() const;
 
-    /// All shadow-casting layers add their caster (depth-only) drawables here, tagged by layer id.
+    /// All shadow-casting layers add their caster (depth-only) drawables here.
     TileLayerGroup* casterGroup() const;
-
-    /// The single ground-shadow receiver layer group (z=0 quads), drawn once at the insertion point.
-    LayerGroupBase* groundGroup() const { return groundGroup_.get(); }
-    const LayerGroupBasePtr& groundGroupPtr() const { return groundGroup_; }
 
     /// The shared shadow texture all receivers sample.
     const gfx::Texture2DPtr& texture() const;
@@ -65,7 +72,6 @@ public:
 private:
     uint32_t mapSize_;
     std::unique_ptr<ShadowMap> shadowMap_;
-    LayerGroupBasePtr groundGroup_;
     ShadowFrustumStatePtr frustumState_ = std::make_shared<ShadowFrustumState>();
 };
 

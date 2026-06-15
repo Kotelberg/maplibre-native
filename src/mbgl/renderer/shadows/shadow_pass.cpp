@@ -2,24 +2,37 @@
 
 #include <mbgl/gfx/context.hpp>
 #include <mbgl/renderer/render_target.hpp>
-#include <mbgl/renderer/layer_group.hpp>
+
+#include <cstdlib>
+#include <string_view>
 
 namespace mbgl {
+
+bool shadowsEnabled() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("MLN_RENDER_3D_ENHANCEMENTS");
+        return !(v && std::string_view(v) == "0");
+    }();
+    return enabled;
+}
+
+uint32_t shadowMapSize() {
+    static const uint32_t size = [] {
+        const char* v = std::getenv("MLN_SHADOW_MAP_SIZE");
+        return v ? static_cast<uint32_t>(std::atoi(v)) : 1024u;
+    }();
+    return size;
+}
 
 ShadowPass::ShadowPass(uint32_t mapSize)
     : mapSize_(mapSize) {}
 
 ShadowPass::~ShadowPass() = default;
 
-void ShadowPass::ensure(gfx::Context& context, int32_t groundLayerIndex) {
+void ShadowPass::ensure(gfx::Context& context) {
     if (!shadowMap_) {
         shadowMap_ = std::make_unique<ShadowMap>(mapSize_);
         shadowMap_->ensure(context, "shadow-pass");
-    }
-    if (!groundGroup_) {
-        // One ground-shadow receiver group (z=0 quads) shared by the whole frame, inserted at the
-        // style-controlled index (shadow-draw-before-layer; defaults below the building layers).
-        groundGroup_ = context.createTileLayerGroup(groundLayerIndex, /*initialCapacity=*/64, "shadow-pass-ground");
     }
 }
 
