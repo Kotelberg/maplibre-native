@@ -89,6 +89,10 @@ struct FragmentStage {
     // depth bias so a building never shadows its OWN away-faces (the directional lighting
     // already darkens those); only a neighbour's cast shadow falling across it darkens it.
     float slope;
+    // 1.0 on vertical walls (normal.z≈0), 0.0 on roofs/up-facing faces (normal.z≈±1). Used to
+    // suppress the (aliased) cast shadow on walls while keeping it on roofs. Smoothly interpolated
+    // across the roof→wall crease so there's no hard transition line.
+    float wallness;
     int cascade_count [[flat]];
 };
 
@@ -146,6 +150,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     out.position = position;
     out.color = half4(vcolor * props.opacity);
     out.slope = 1.0 - directionalFraction;
+    out.wallness = 1.0 - abs(normal.z); // roof normal=(0,0,1)→0; wall normal=(nx,ny,0)→1
     const int cc = drawable.cascade_count;
     out.cascade_count = cc;
     // Project into every cascade's light clip (near→far). Unused slots (c >= cascade_count) replicate
@@ -223,6 +228,14 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
         lit = l / 4.0;
         break; // tightest containing cascade wins (hard transition)
     }
+    // Suppress the cast shadow on VERTICAL WALLS (keep it on roofs + the separate ground receiver).
+    // Under a near-overhead sun a vertical wall is almost parallel to the light, so its shadow-map
+    // sample is projective garbage — the map's silhouette (the building's own body / the skyline)
+    // smears onto the wall (back wall: "ground shadow climbs the wall"; sun-facing wall: a dark
+    // patch). Depth bias cannot fix this (it's an XY/projection issue, not a depth one). Walls still
+    // get their directional face-shading; only the (broken) cast-shadow term is faded out. Roofs face
+    // the light head-on (no aliasing) so they keep crisp cast shadows from taller neighbours.
+    lit = mix(lit, 1.0, smoothstep(0.4, 0.85, in.wallness));
     color.rgb *= half(1.0 - (1.0 - lit) * props.shadow_intensity);
     return { color };
 }
