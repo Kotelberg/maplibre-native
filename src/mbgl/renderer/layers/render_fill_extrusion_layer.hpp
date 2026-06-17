@@ -88,7 +88,7 @@ private:
     gfx::ShaderGroupPtr fillExtrusionShadowGroup;
     gfx::ShaderGroupPtr groundShadowGroup;
     gfx::ShaderGroupPtr shadowDepthGroup;
-#if MLN_USE_FILL_EXTRUSION_INSTANCING
+#if MLN_USE_FILL_EXTRUSION_INSTANCING || MLN_GL_FE_INSTANCING
     // Instanced WALL caster shader. The roof-only sharedTriangles caster (shadowDepthGroup) leaves ground
     // shadows detached from the base on the instanced path; this casts the walls so they reattach.
     gfx::ShaderGroupPtr shadowDepthInstancedGroup;

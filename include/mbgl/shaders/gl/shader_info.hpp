@@ -40,6 +40,8 @@ template <>
 const std::vector<AttributeInfo>& instanceAttributes<BuiltIn::FillExtrusionInstancedShader>();
 template <>
 const std::vector<AttributeInfo>& instanceAttributes<BuiltIn::FillExtrusionPatternInstancedShader>();
+template <>
+const std::vector<AttributeInfo>& instanceAttributes<BuiltIn::ShadowDepthInstancedShader>();
 
 template <BuiltIn T, gfx::Backend::Type>
 struct ShaderInfo;
@@ -166,6 +168,13 @@ struct ShaderInfo<BuiltIn::FillExtrusionPatternInstancedShader, gfx::Backend::Ty
 template <>
 struct ShaderInfo<BuiltIn::ShadowDepthShader, gfx::Backend::Type::OpenGL> {
     static const std::vector<AttributeInfo> attributes;
+    static const std::vector<UniformBlockInfo> uniformBlocks;
+    static const std::vector<TextureInfo> textures;
+};
+
+template <>
+struct ShaderInfo<BuiltIn::ShadowDepthInstancedShader, gfx::Backend::Type::OpenGL> {
+    static const std::vector<AttributeInfo> attributes; // combined, location-indexed (vertex + instance)
     static const std::vector<UniformBlockInfo> uniformBlocks;
     static const std::vector<TextureInfo> textures;
 };

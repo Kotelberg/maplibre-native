@@ -14,6 +14,9 @@
 // Directional-shadow shaders (fork). Included directly here (like the Metal backend does for its
 // shadow shaders) rather than via the generated shader_manifest.hpp.
 #include <mbgl/shaders/gl/shadow_depth.hpp>
+#if MLN_GL_FE_INSTANCING
+#include <mbgl/shaders/gl/shadow_depth_instanced.hpp>
+#endif
 #include <mbgl/shaders/gl/fill_extrusion_shadow.hpp>
 #include <mbgl/shaders/gl/ground_shadow.hpp>
 
@@ -143,6 +146,7 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
 #if MLN_GL_FE_INSTANCING
                   shaders::BuiltIn::FillExtrusionInstancedShader,
                   shaders::BuiltIn::FillExtrusionPatternInstancedShader,
+                  shaders::BuiltIn::ShadowDepthInstancedShader,
 #endif
                   shaders::BuiltIn::ShadowDepthShader,
                   shaders::BuiltIn::FillExtrusionShadowShader,

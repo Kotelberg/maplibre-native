@@ -336,6 +336,33 @@ const std::vector<AttributeInfo>& instanceAttributes<BuiltIn::FillExtrusionPatte
     };
     return attrs;
 }
+
+// Instanced wall shadow caster (edge-indexed): static-quad a_pos + per-instance endpoints +
+// data-driven base/height (no normals/color — depth only).
+using ShadowDepthInstancedShaderInfo = ShaderInfo<BuiltIn::ShadowDepthInstancedShader, gfx::Backend::Type::OpenGL>;
+
+const std::vector<UniformBlockInfo> ShadowDepthInstancedShaderInfo::uniformBlocks = {
+    UniformBlockInfo{"ShadowDepthDrawableUBO", idShadowDepthDrawableUBO},
+};
+const std::vector<AttributeInfo> ShadowDepthInstancedShaderInfo::attributes = {
+    AttributeInfo{"a_pos", idFillExtrusionPosVertexAttribute},       // 0 — static quad (per-vertex)
+    AttributeInfo{"a_pos0", idFillExtrusionOutlinePosAttribute},     // 1 — instance
+    AttributeInfo{"a_pos1", idFillExtrusionPos1Attribute},           // 2 — instance
+    AttributeInfo{"a_base", idFillExtrusionBaseVertexAttribute},     // 3 — instance (data-driven)
+    AttributeInfo{"a_height", idFillExtrusionHeightVertexAttribute}, // 4 — instance (data-driven)
+};
+const std::vector<TextureInfo> ShadowDepthInstancedShaderInfo::textures = {};
+
+template <>
+const std::vector<AttributeInfo>& instanceAttributes<BuiltIn::ShadowDepthInstancedShader>() {
+    static const std::vector<AttributeInfo> attrs = {
+        AttributeInfo{"a_pos0", idFillExtrusionOutlinePosAttribute},
+        AttributeInfo{"a_pos1", idFillExtrusionPos1Attribute},
+        AttributeInfo{"a_base", idFillExtrusionBaseVertexAttribute},
+        AttributeInfo{"a_height", idFillExtrusionHeightVertexAttribute},
+    };
+    return attrs;
+}
 #endif // MLN_GL_FE_INSTANCING
 
 // Shadow caster (depth pack) — reuses the FE vertex attributes (pos/normal_ed/base/height).

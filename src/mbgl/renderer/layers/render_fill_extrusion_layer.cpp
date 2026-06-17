@@ -213,7 +213,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         if (!shadowDepthGroup) {
             shadowDepthGroup = shaders.getShaderGroup("ShadowDepthShader");
         }
-#if MLN_USE_FILL_EXTRUSION_INSTANCING
+#if MLN_USE_FILL_EXTRUSION_INSTANCING || MLN_GL_FE_INSTANCING
         if (!shadowDepthInstancedGroup) {
             shadowDepthInstancedGroup = shaders.getShaderGroup("ShadowDepthInstancedShader");
         }
@@ -630,6 +630,45 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
 #endif // MLN_DRAWABLE_SHADOWS
 #endif // MLN_USE_FILL_EXTRUSION_INSTANCING (shadow caster prebuild is Metal-only)
 
+#if MLN_GL_FE_INSTANCING && MLN_DRAWABLE_SHADOWS
+        // GL instanced WALL caster attributes — read HERE, before any flush (same reason as the
+        // visible instanceAttrs above). The caster reconstructs each wall from the static quad +
+        // edge endpoints + data-driven base/height; it ignores the visible-only attrs (normals/color).
+        StringIDSetsPair glCasterUniforms;
+        gfx::VertexAttributeArrayPtr glCasterStaticVertices;
+        gfx::VertexAttributeArrayPtr glCasterInstanceAttrs;
+        if (useShadows && shadowDepthInstancedGroup) {
+            glCasterStaticVertices = context.createVertexAttributeArray();
+            if (const auto& attr = glCasterStaticVertices->set(idFillExtrusionPosVertexAttribute)) {
+                attr->setSharedRawData(staticDataVertices,
+                                       offsetof(FillExtrusionStaticVertex, a1),
+                                       /*vertexOffset=*/0,
+                                       sizeof(FillExtrusionStaticVertex),
+                                       gfx::AttributeDataType::Short2);
+            }
+            glCasterInstanceAttrs = context.createVertexAttributeArray();
+            glCasterInstanceAttrs->readDataDrivenPaintProperties<FillExtrusionBase,
+                                                                 FillExtrusionColor,
+                                                                 FillExtrusionHeight,
+                                                                 FillExtrusionPattern>(
+                binders, evaluated, glCasterUniforms, idFillExtrusionBaseVertexAttribute);
+            if (const auto& a = glCasterInstanceAttrs->set(idFillExtrusionOutlinePosAttribute)) {
+                a->setSharedRawData(bucket.sharedGLEdgeInstances,
+                                    offsetof(GLEdgeInstanceVertex, a1) /*pos0*/,
+                                    /*vertexOffset=*/0,
+                                    sizeof(GLEdgeInstanceVertex),
+                                    gfx::AttributeDataType::Short2);
+            }
+            if (const auto& a = glCasterInstanceAttrs->set(idFillExtrusionPos1Attribute)) {
+                a->setSharedRawData(bucket.sharedGLEdgeInstances,
+                                    offsetof(GLEdgeInstanceVertex, a2) /*pos1*/,
+                                    /*vertexOffset=*/0,
+                                    sizeof(GLEdgeInstanceVertex),
+                                    gfx::AttributeDataType::Short2);
+            }
+        }
+#endif
+
         const auto instancedShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
             instancedShaderGroup->getOrCreateShader(context, instancePropertiesAsUniforms));
         if (!instancedShader) {
@@ -1037,7 +1076,56 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                 }
             }
         }
-#endif
+#endif // MLN_USE_FILL_EXTRUSION_INSTANCING && MLN_DRAWABLE_SHADOWS
+
+#if MLN_GL_FE_INSTANCING && MLN_DRAWABLE_SHADOWS
+        // GL instanced WALL caster: the roof-only sharedTriangles caster (above) leaves the ground
+        // shadow detached from the base on the GL instanced path (the gated bucket emits roof-only
+        // triangles). Cast the walls too — same edge-indexed geometry as the visible instanced walls,
+        // via ShadowDepthInstancedShader. One depth-only drawable per cascade (cull disabled; both wall
+        // faces occlude). Together roof + wall casters fill the full building volume → shadows reattach.
+        if (buildCasters && useShadows && shadowDepthInstancedGroup && glCasterInstanceAttrs &&
+            glCasterStaticVertices && !shadowCasterGroups.empty() && bucket.sharedGLEdgeInstances->elements() &&
+            staticDataIndices->elements()) {
+            if (const auto instCasterShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
+                    shadowDepthInstancedGroup->getOrCreateShader(context, glCasterUniforms))) {
+                for (uint32_t c = 0; c < shadowCasterGroups.size(); ++c) {
+                    auto* casterGroup = shadowCasterGroups[c];
+                    if (!casterGroup) {
+                        continue;
+                    }
+                    if (auto wallCaster = context.createDrawableBuilder(layerPrefix + "shadowCasterWall")) {
+                        wallCaster->setShader(instCasterShader);
+                        wallCaster->setIs3D(true);
+                        wallCaster->setEnableColor(true);
+                        wallCaster->setColorMode(gfx::ColorMode::unblended()); // write packed depth (replace)
+                        wallCaster->setEnableDepth(true);
+                        wallCaster->setRenderPass(RenderPass::Opaque);
+                        wallCaster->setCullFaceMode(gfx::CullFaceMode::disabled()); // depth-only; both faces
+                        wallCaster->setRawVertices({}, staticDataVertices->elements(), gfx::AttributeDataType::Short2);
+                        // Shared GPU buffers; the attribute handles are ref-counted, so copy per cascade.
+                        auto cascadeStatic = glCasterStaticVertices;
+                        auto cascadeInstance = glCasterInstanceAttrs;
+                        wallCaster->setVertexAttributes(std::move(cascadeStatic));
+                        wallCaster->setInstanceAttributes(std::move(cascadeInstance));
+                        wallCaster->setSegments(gfx::Triangles(),
+                                                staticDataIndices,
+                                                staticDataSegments->data(),
+                                                staticDataSegments->size());
+                        wallCaster->flush(context);
+                        for (auto& drawable : wallCaster->clearDrawables()) {
+                            drawable->setTileID(tileID);
+                            drawable->setLayerTweaker(shadowCasterTweakers[c]);
+                            drawable->setBinders(renderData.bucket, &binders);
+                            drawable->setRenderTile(renderTilesOwner, &tile);
+                            casterGroup->addDrawable(RenderPass::Opaque, tileID, std::move(drawable));
+                            ++stats.drawablesAdded;
+                        }
+                    }
+                }
+            }
+        }
+#endif // MLN_GL_FE_INSTANCING && MLN_DRAWABLE_SHADOWS
 #endif
     }
 }
