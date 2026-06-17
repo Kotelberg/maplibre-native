@@ -1,14 +1,4 @@
-// Generated code, do not modify this file!
-#pragma once
-#include <mbgl/shaders/shader_source.hpp>
-
-namespace mbgl {
-namespace shaders {
-
-template <>
-struct ShaderSource<BuiltIn::FillExtrusionInstancedShader, gfx::Backend::Type::OpenGL> {
-    static constexpr const char* name = "FillExtrusionInstancedShader";
-    static constexpr const char* vertex = R"(layout (location = 0) in vec2 a_pos;            // static unit quad: x = endpoint sel, y = base/top sel
+layout (location = 0) in vec2 a_pos;            // static unit quad: x = endpoint sel, y = base/top sel
 layout (location = 1) in vec2 a_pos0;           // instance: edge start (tile coords)
 layout (location = 2) in vec2 a_pos1;           // instance: edge end
 layout (location = 3) in vec3 a_normal0;        // instance: smoothed wall normal at pos0 * 2^14
@@ -55,32 +45,14 @@ layout (std140) uniform FillExtrusionPropsUBO {
     lowp float props_pad2;
 };
 
-#ifndef HAS_UNIFORM_u_base
-layout (location = 6) in highp vec2 a_base;
-#endif
-#ifndef HAS_UNIFORM_u_height
-layout (location = 7) in highp vec2 a_height;
-#endif
-#ifndef HAS_UNIFORM_u_color
-layout (location = 8) in highp vec4 a_color;
-#endif
+#pragma mapbox: define highp float base
+#pragma mapbox: define highp float height
+#pragma mapbox: define highp vec4 color
 
 void main() {
-    #ifndef HAS_UNIFORM_u_base
-highp float base = unpack_mix_vec2(a_base, u_base_t);
-#else
-highp float base = u_base;
-#endif
-    #ifndef HAS_UNIFORM_u_height
-highp float height = unpack_mix_vec2(a_height, u_height_t);
-#else
-highp float height = u_height;
-#endif
-    #ifndef HAS_UNIFORM_u_color
-highp vec4 color = unpack_mix_color(a_color, u_color_t);
-#else
-highp vec4 color = u_color;
-#endif
+    #pragma mapbox: initialize highp float base
+    #pragma mapbox: initialize highp float height
+    #pragma mapbox: initialize highp vec4 color
 
     base = max(0.0, base);
     height = max(0.0, height);
@@ -129,18 +101,3 @@ highp vec4 color = u_color;
     v_color.b += clamp(color.b * directional * u_lightcolor.b, mix(0.0, 0.3, 1.0 - u_lightcolor.b), 1.0);
     v_color *= u_opacity;
 }
-)";
-    static constexpr const char* fragment = R"(in vec4 v_color;
-
-void main() {
-    fragColor = v_color;
-
-#ifdef OVERDRAW_INSPECTOR
-    fragColor = vec4(1.0);
-#endif
-}
-)";
-};
-
-} // namespace shaders
-} // namespace mbgl
