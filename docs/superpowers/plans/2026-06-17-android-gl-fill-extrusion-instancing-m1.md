@@ -227,13 +227,16 @@ git commit -m "feat(gl): instance divisor through AttributeBinding + glVertexAtt
 - Produces (only when `MLN_GL_FE_INSTANCING`): `FillExtrusionBucket::glEdgeInstances` — a `gfx::VertexVector<GLEdgeInstance>` where
   ```cpp
   struct GLEdgeInstance { // 1 per footprint edge
-      int16_t pos0[2];   // edge start (tile coords)
-      int16_t pos1[2];   // edge end
-      int16_t normal[3]; // smoothed wall normal * 2^13 (matches #else packing)
+      int16_t pos0[2];     // edge start (tile coords)
+      int16_t pos1[2];     // edge end
+      int16_t normal0[3];  // smoothed normal AT pos0 * 2^13  (nP at the start endpoint)
+      int16_t normal1[3];  // smoothed normal AT pos1 * 2^13  (nP at the end endpoint)
       uint16_t edgeDistance;
   };
   ```
-  plus the existing data-driven base/height/color binders (reused). Consumed by Task 10 (render layer builds instance attributes from this) and the GL shaders (Task 6). Edge count = number of emitted `GLEdgeInstance`.
+  **TWO endpoint normals, not one (review P1):** the non-instanced `#else` path computes a distinct smoothed normal at each endpoint (`nP1` at `p1`, `nP2` at `p2` in `fill_extrusion_bucket.cpp:277`) and interpolates them across the wall. A single per-edge normal would flatten curved facades. The shader interpolates `normal0`/`normal1` by `a_pos.x`.
+- **Edge-aligned paint stream (review P1):** the data-driven base/height/color binders currently populate per `vertices.elements()` (explicit-wall vertex count), which does NOT match the edge-instance count. The divisor binding indexes by `gl_InstanceID`, so the per-instance base/height/color MUST be a stream with exactly `glEdgeInstances.elements()` entries, one per edge. Produce an edge-aligned paint stream in the bucket (append the evaluated paint value for each edge as it is emitted, or duplicate the per-feature binder value per edge). Do NOT assume the existing binders align. The render layer (Task 10) binds THIS edge-aligned paint data as divisor-1 attributes; verify alignment against the headless golden (Task 10 Step 3).
+  - Consumed by Task 10 (render layer builds instance attributes from this) and the GL shaders (Task 6). Edge count = number of emitted `GLEdgeInstance`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -269,7 +272,8 @@ In `fill_extrusion_bucket.hpp`, under a new `#if MLN_GL_FE_INSTANCING` block (do
     using GLEdgeInstanceVertex =
         gfx::Vertex<TypeList<attributes::pos,          // pos0 (Short2)
                              attributes::pos1,         // pos1 (Short2) — see attributes.hpp
-                             attributes::normal,       // Short3 smoothed normal
+                             attributes::normal0,      // Short3 smoothed normal at pos0
+                             attributes::normal1,      // Short3 smoothed normal at pos1
                              attributes::edgedistance>>; // UShort1
     using GLEdgeInstanceVector = gfx::VertexVector<GLEdgeInstanceVertex>;
     const std::shared_ptr<GLEdgeInstanceVector> sharedGLEdgeInstances =
@@ -281,17 +285,19 @@ Add the supporting `MBGL_DEFINE_ATTRIBUTE`s (`pos1`, `normal`, `edgedistance` if
 
 - [ ] **Step 4: Emit one instance per edge in `addFeature`**
 
-In `fill_extrusion_bucket.cpp`, in the ring loop, add an `#if MLN_GL_FE_INSTANCING` branch that, for each edge `e = ring[i] → ring[i+1]` (skipping the ring-closing degenerate), computes the smoothed normal with the EXISTING `blendNormal(perp, adjacentEdge, hasNeighbor)` helper already used by the `#else` path, and appends:
+In `fill_extrusion_bucket.cpp`, in the ring loop, add an `#if MLN_GL_FE_INSTANCING` branch that, for each edge `e = ring[i] → ring[i+1]` (skipping the ring-closing degenerate), computes BOTH endpoint normals with the EXISTING `blendNormal(perp, adjacentEdge, hasNeighbor)` helper used by the `#else` path — `nP1` at the start endpoint and `nP2` at the end endpoint (same `blendNormal` calls the `#else` path already makes at `fill_extrusion_bucket.cpp:277`) — and appends:
 ```cpp
+const auto pack = [](double v) { return static_cast<int16_t>(std::floor(v * 8192.0)); };
 glEdgeInstances.emplace_back(GLEdgeInstanceVertex{
     {ring[i].x, ring[i].y},
     {ring[i + 1].x, ring[i + 1].y},
-    { static_cast<int16_t>(std::floor(n.x * 8192.0)),
-      static_cast<int16_t>(n.y * 8192.0),
-      0 },
+    { pack(nP0.x), pack(nP0.y), 0 },   // normal at pos0
+    { pack(nP1.x), pack(nP1.y), 0 },   // normal at pos1
     { static_cast<uint16_t>(edgeDistance) }});
 ```
-(8192 = 2^13, matching the `#else` packing factor; `n` = the per-edge smoothed normal.) The data-driven base/height/color streams are produced by the existing `paintPropertyBinders` and need NO change here — they are read per-instance in Task 10.
+(8192 = 2^13, matching the `#else` packing factor.)
+
+**Edge-aligned paint:** in the SAME branch, append this edge's data-driven base/height/color into edge-aligned paint vertex vectors (one entry per `emplace_back` above), so the paint streams have exactly `glEdgeInstances.elements()` entries. Do NOT rely on the existing vertex-aligned binders (review P1). The simplest correct approach: evaluate the per-feature paint value once and push it for this edge, matching the instance count 1:1.
 
 - [ ] **Step 5: Run the test to verify it passes**
 
@@ -393,7 +399,7 @@ Append to `test/gl/instancing.test.cpp` a headless test that builds a DrawableGL
 Run: `cmake --build build-gl-check --target mbgl-test-runner -j && build-gl-check/mbgl-test-runner --gtest_filter='GLInstancing.DrawsInstances'`
 Expected: FAIL — `DrawableGL` ignores instance attributes / draws non-instanced.
 
-- [ ] **Step 3: Store instance attributes + count on the impl**
+- [ ] **Step 3: Store instance attributes + count on the impl, and dirty the upload**
 
 In `drawable_gl_impl.hpp` add:
 ```cpp
@@ -402,7 +408,7 @@ In `drawable_gl_impl.hpp` add:
     std::vector<gfx::UniqueVertexBufferResource> instanceAttributeBuffers;
     std::size_t instanceCount = 0;
 ```
-In `drawable_gl.hpp` override the base `setInstanceAttributes(gfx::VertexAttributeArrayPtr)` to store into `impl->instanceAttributes`.
+In `drawable_gl.hpp` override the base `setInstanceAttributes(gfx::VertexAttributeArrayPtr)` to store into `impl->instanceAttributes`. **Review P2:** the base `setInstanceAttributes` does NOT reset `attributeUpdateTime`, and `upload()` rebuilds bindings + (re)binds the VAO only on vertex-attribute dirtiness / VAO-invalid. So in the GL override, explicitly reset `attributeUpdateTime` (clear the optional) AND invalidate each segment's VAO, so the next `upload()` rebuilds the merged vertex+instance bindings and rebinds the VAO. Without this, instance data set after the first upload is silently ignored.
 
 - [ ] **Step 4: Build instance bindings in `upload()`**
 
@@ -436,8 +442,12 @@ git commit -m "feat(gl): DrawableGL instance attributes + instanced draw path"
 
 ### Task 6: GL `FillExtrusionInstancedShader` (edge-indexed)
 
+> **CRITICAL (review P1): `include/mbgl/shaders/gl/fill_extrusion_instanced.hpp` is GENERATED** ("// Generated code, do not modify this file!" banner). Editing it directly is wrong — it maps to `_empty.glsl` in `shaders/manifest.json:113-116`. Author the real GLSL as `shaders/*.glsl` sources, point the manifest at them, and regenerate via `node shaders/generate_shader_code.mjs`, then commit the regenerated header. (Contrast: `gl/shadow_depth*.hpp` in Task 11 are hand-written — no banner — and edited directly.)
+
 **Files:**
-- Modify: `include/mbgl/shaders/gl/fill_extrusion_instanced.hpp` (fill the empty placeholder)
+- Create: `shaders/fill_extrusion_instanced.vertex.glsl`, `shaders/fill_extrusion_instanced.fragment.glsl`
+- Modify: `shaders/manifest.json:115-116` (point `glsl_vert`/`glsl_frag` from `_empty.glsl` to the new files)
+- Regenerate (do not hand-edit): `include/mbgl/shaders/gl/fill_extrusion_instanced.hpp`
 
 **Interfaces:**
 - Consumes: per-vertex `a_pos` (static unit quad, divisor 0); per-instance `a_pos0`, `a_pos1`, `a_normal`, `a_edgedistance`, and data-driven `a_base`/`a_height`/`a_color` (divisor 1). UBOs `FillExtrusionDrawableUBO`, `FillExtrusionPropsUBO` (same layouts as `gl/fill_extrusion.hpp`).
@@ -445,13 +455,14 @@ git commit -m "feat(gl): DrawableGL instance attributes + instanced draw path"
 
 - [ ] **Step 1: Author the vertex shader (geometry from current instance only)**
 
-Replace the empty `vertex` string. The static quad vertex `a_pos` has `x ∈ {0,1}` (which endpoint) and `y ∈ {0,1}` (base/height):
+Write `shaders/fill_extrusion_instanced.vertex.glsl` with the body below (the generator prepends the `#version`/prelude and the `#pragma`-driven `HAS_UNIFORM_*` plumbing — match how `shaders/fill_extrusion.vertex.glsl` is structured). The static quad vertex `a_pos` has `x ∈ {0,1}` (which endpoint) and `y ∈ {0,1}` (base/height):
 ```glsl
 layout (location = 0) in vec2 a_pos;            // static unit quad: x=endpoint sel, y=base/height sel
 layout (location = 1) in vec2 a_pos0;           // instance: edge start (tile coords)
 layout (location = 2) in vec2 a_pos1;           // instance: edge end
-layout (location = 3) in vec3 a_normal;         // instance: smoothed wall normal * 2^13
-layout (location = 4) in highp float a_edgedistance;
+layout (location = 3) in vec3 a_normal0;        // instance: smoothed normal at pos0 * 2^13
+layout (location = 4) in vec3 a_normal1;        // instance: smoothed normal at pos1 * 2^13
+layout (location = 5) in highp float a_edgedistance;
 out vec4 v_color;
 
 layout (std140) uniform FillExtrusionDrawableUBO {
@@ -467,13 +478,13 @@ layout (std140) uniform FillExtrusionPropsUBO {
     highp float u_fade; highp float u_from_scale; highp float u_to_scale; lowp float props_pad2;
 };
 #ifndef HAS_UNIFORM_u_base
-layout (location = 5) in highp vec2 a_base;
+layout (location = 6) in highp vec2 a_base;
 #endif
 #ifndef HAS_UNIFORM_u_height
-layout (location = 6) in highp vec2 a_height;
+layout (location = 7) in highp vec2 a_height;
 #endif
 #ifndef HAS_UNIFORM_u_color
-layout (location = 7) in highp vec4 a_color;
+layout (location = 8) in highp vec4 a_color;
 #endif
 
 void main() {
@@ -496,11 +507,12 @@ void main() {
     base = max(0.0, base);
     height = max(0.0, height);
 
-    vec2 footprint = (a_pos.x < 0.5) ? a_pos0 : a_pos1; // endpoint selected by static-quad x
+    bool atStart = (a_pos.x < 0.5);
+    vec2 footprint = atStart ? a_pos0 : a_pos1;          // endpoint selected by static-quad x
     float t = a_pos.y;                                   // 0 = base, 1 = height
     gl_Position = u_matrix * vec4(footprint, t > 0.5 ? height : base, 1.0);
 
-    vec3 normal = a_normal;
+    vec3 normal = atStart ? a_normal0 : a_normal1;       // per-endpoint smoothed normal
     float colorvalue = color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
     v_color = vec4(0.0, 0.0, 0.0, 1.0);
     color += vec4(0.03, 0.03, 0.03, 1.0);
@@ -530,14 +542,20 @@ void main() {
 }
 ```
 
-- [ ] **Step 3: Build (registration comes in Task 8; this just compiles the header)**
+- [ ] **Step 3: Regenerate the header from the manifest**
+
+Run: `node shaders/generate_shader_code.mjs` (confirm exact invocation from `shaders/CMakeLists.txt` / the script's `--help`; it reads `manifest.json` and writes the `include/mbgl/shaders/{gl,mtl,vulkan}/*.hpp`).
+Expected: `git diff include/mbgl/shaders/gl/fill_extrusion_instanced.hpp` now shows the non-empty vertex/fragment matching your GLSL. **Guard:** confirm regeneration did NOT clobber the hand-written `gl/shadow_depth*.hpp` (Task 11) — if the generator touches them, they need the same .glsl-source treatment; record which files the generator owns.
+
+- [ ] **Step 4: Build**
 
 Run: `cmake --build build-gl-check --target mbgl-render -j`
-Expected: clean compile of the header.
+Expected: clean compile of the regenerated header.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit (source + regenerated output)**
 ```bash
-git add include/mbgl/shaders/gl/fill_extrusion_instanced.hpp
+git add shaders/fill_extrusion_instanced.vertex.glsl shaders/fill_extrusion_instanced.fragment.glsl \
+        shaders/manifest.json include/mbgl/shaders/gl/fill_extrusion_instanced.hpp
 git commit -m "feat(gl): author FillExtrusionInstancedShader (edge-indexed GLSL ES 3.0)"
 ```
 
@@ -545,24 +563,27 @@ git commit -m "feat(gl): author FillExtrusionInstancedShader (edge-indexed GLSL 
 
 ### Task 7: GL `FillExtrusionPatternInstancedShader`
 
+> Same generated-header workflow as Task 6 — author `.glsl` + manifest + regenerate. Do not hand-edit the `.hpp`.
+
 **Files:**
-- Create/Modify: `include/mbgl/shaders/gl/fill_extrusion_pattern_instanced.hpp`
+- Create: `shaders/fill_extrusion_pattern_instanced.vertex.glsl`, `shaders/fill_extrusion_pattern_instanced.fragment.glsl`
+- Modify: `shaders/manifest.json` (the `FillExtrusionPatternInstancedShader` entry — point its `glsl_vert`/`glsl_frag` away from `_empty.glsl`; if the entry/`header` is missing, add it mirroring the `FillExtrusionInstancedShader` entry)
+- Regenerate: `include/mbgl/shaders/gl/fill_extrusion_pattern_instanced.hpp`
 
 **Interfaces:**
-- Same edge-indexed geometry as Task 6; pattern sampling math copied from `gl/fill_extrusion_pattern.hpp` (non-instanced pattern shader). Consumes `a_pattern_from`/`a_pattern_to` as per-instance attributes + the pattern texture.
+- Same edge-indexed geometry (two endpoint normals) as Task 6; pattern sampling math copied from `shaders/fill_extrusion_pattern.{vertex,fragment}.glsl`. Consumes `a_pattern_from`/`a_pattern_to` as per-instance attributes + the pattern texture.
 
-- [ ] **Step 1: Confirm whether the header exists**
+- [ ] **Step 1: Author the vertex GLSL**
 
-Run: `ls include/mbgl/shaders/gl/fill_extrusion_pattern_instanced.hpp`
-Expected: may not exist. If absent, create it with the `ShaderSource<BuiltIn::FillExtrusionPatternInstancedShader, OpenGL>` specialization.
+Reuse Task 6's geometry assembly (footprint = `a_pos.x<0.5 ? a_pos0 : a_pos1`, `z = t>0.5 ? height : base`, normal = `atStart ? a_normal0 : a_normal1`) and graft the pattern-coordinate computation + lighting from `shaders/fill_extrusion_pattern.vertex.glsl` (the `pos = vec2(edgedistance, z*u_height_factor)` and `get_pattern_pos(...)` lines), using `a_edgedistance`.
 
-- [ ] **Step 2: Author the vertex shader**
+- [ ] **Step 2: Author the fragment GLSL**
 
-Reuse Task 6's geometry assembly (footprint = `a_pos.x<0.5 ? a_pos0 : a_pos1`, `z = t>0.5 ? height : base`) and graft the pattern-coordinate computation + lighting from the non-instanced `gl/fill_extrusion_pattern.hpp` (the `pos = vec2(edgedistance, z*u_height_factor)` and `get_pattern_pos(...)` lines), using `a_edgedistance` for `edgedistance`.
+Copy from `shaders/fill_extrusion_pattern.fragment.glsl` (two-texture mix by `u_fade`, multiplied by lighting) — pattern sampling is identical; only the vertex geometry differed.
 
-- [ ] **Step 3: Author the fragment shader**
+- [ ] **Step 3: Update manifest + regenerate**
 
-Copy verbatim from `gl/fill_extrusion_pattern.hpp` fragment (two-texture mix by `u_fade`, multiplied by lighting) — pattern sampling is identical; only the vertex geometry differed.
+Edit `shaders/manifest.json`, then `node shaders/generate_shader_code.mjs`. Confirm `git diff` shows the non-empty pattern-instanced header.
 
 - [ ] **Step 4: Build**
 
@@ -571,7 +592,8 @@ Expected: clean.
 
 - [ ] **Step 5: Commit**
 ```bash
-git add include/mbgl/shaders/gl/fill_extrusion_pattern_instanced.hpp
+git add shaders/fill_extrusion_pattern_instanced.vertex.glsl shaders/fill_extrusion_pattern_instanced.fragment.glsl \
+        shaders/manifest.json include/mbgl/shaders/gl/fill_extrusion_pattern_instanced.hpp
 git commit -m "feat(gl): author FillExtrusionPatternInstancedShader (edge-indexed)"
 ```
 
@@ -583,6 +605,7 @@ git commit -m "feat(gl): author FillExtrusionPatternInstancedShader (edge-indexe
 - Modify: `include/mbgl/shaders/gl/shader_info.hpp` (add `instanceAttributes` to `ShaderInfo` + decls for the 3 instanced shaders)
 - Modify: `src/mbgl/shaders/gl/shader_info.cpp` (attribute + instanceAttribute lists)
 - Modify: `src/mbgl/shaders/gl/shader_program_gl.cpp` (populate `instanceAttributes` in `create()`)
+- Modify: `include/mbgl/shaders/gl/shader_group_gl.hpp` (pass `instanceAttributes` + combined table/id-set to `create()`)
 - Modify: `src/mbgl/gl/renderer_backend.cpp:124` (`registerTypes<...>` list)
 
 **Interfaces:**
@@ -611,8 +634,9 @@ const std::vector<AttributeInfo> FEInstInfo::attributes = {       // divisor 0 (
 };
 const std::vector<AttributeInfo> FEInstInfo::instanceAttributes = { // divisor 1
     AttributeInfo{"a_pos0", idFillExtrusionOutlinePosAttribute},
-    AttributeInfo{"a_pos1", idFillExtrusionPos1Attribute},        // add this id in shader_defines.hpp
-    AttributeInfo{"a_normal", idFillExtrusionNormalEdVertexAttribute},
+    AttributeInfo{"a_pos1", idFillExtrusionPos1Attribute},          // new id (shader_defines.hpp)
+    AttributeInfo{"a_normal0", idFillExtrusionNormal0Attribute},    // new id
+    AttributeInfo{"a_normal1", idFillExtrusionNormal1Attribute},    // new id
     AttributeInfo{"a_edgedistance", idFillExtrusionEdDiscardAttribute},
     AttributeInfo{"a_base", idFillExtrusionBaseVertexAttribute},
     AttributeInfo{"a_height", idFillExtrusionHeightVertexAttribute},
@@ -620,11 +644,15 @@ const std::vector<AttributeInfo> FEInstInfo::instanceAttributes = { // divisor 1
 };
 const std::vector<TextureInfo> FEInstInfo::textures = {};
 ```
-Add a new attribute id `idFillExtrusionPos1Attribute` in `include/mbgl/shaders/shader_defines.hpp` (next to the other fill-extrusion ids). Repeat for the pattern + shadow instanced shaders with their attribute sets.
+Add new attribute ids `idFillExtrusionPos1Attribute`, `idFillExtrusionNormal0Attribute`, `idFillExtrusionNormal1Attribute` in `include/mbgl/shaders/shader_defines.hpp` (next to the other fill-extrusion ids). The location ordering in this combined table must match the shader `layout(location=N)` (Task 6: a_pos=0, a_pos0=1, a_pos1=2, a_normal0=3, a_normal1=4, a_edgedistance=5, a_base=6, a_height=7, a_color=8). Repeat for the pattern + shadow instanced shaders with their attribute sets.
 
-- [ ] **Step 3: Populate `instanceAttributes` in `ShaderProgramGL::create()`**
+- [ ] **Step 3: Populate `instanceAttributes` in `ShaderProgramGL::create()` WITHOUT breaking location-indexed lookup**
 
-In `shader_program_gl.cpp`, the active-attribute loop currently appends every attribute to one `attrs`. Change it to consult the shader's `instanceAttributes` id-set: if `attributesInfo[location].id` is in the instance set, add it to a second `instanceAttrs` array; else to `attrs`. Pass both into the `ShaderProgramGL` constructor (which already stores `vertexAttributes` + `instanceAttributes`). The `create()` signature gains the instance-attribute info list (thread it from where the generic shader group passes `attributesInfo`).
+**Review P1:** `create()` resolves every active attribute via `attributesInfo[location]` (`shader_program_gl.cpp:175`), so `attributesInfo` MUST stay a single table indexed by GL attribute location. Do NOT pass only a subset. Instead:
+- Pass a **combined** location-indexed `attributesInfo` (vertex + instance attrs together, as today) PLUS a separate **instance-id set** (the ids listed in `ShaderInfo::instanceAttributes`).
+- In the active-attribute loop, after `attributesInfo[location]` gives the id, route the resolved attribute into `instanceAttrs` if its id is in the instance set, else into `attrs`.
+- Thread both the combined table and the instance-id set from the shader group. Update `include/mbgl/shaders/gl/shader_group_gl.hpp` (which currently passes only `ShaderInfo::attributes`) to also pass `ShaderInfo::instanceAttributes` and build the combined table + id-set before calling `create()`.
+- Pass `attrs` + `instanceAttrs` into the `ShaderProgramGL` constructor (it already stores `vertexAttributes` + `instanceAttributes`).
 
 - [ ] **Step 4: Register the 3 instanced shaders for GL**
 
@@ -711,13 +739,18 @@ if (const auto& a = instanceAttrs->set(idFillExtrusionOutlinePosAttribute))
 if (const auto& a = instanceAttrs->set(idFillExtrusionPos1Attribute))
     a->setSharedRawData(bucket.sharedGLEdgeInstances, offsetof(GLEdgeInstanceVertex, a2) /*pos1*/,
                         0, sizeof(GLEdgeInstanceVertex), gfx::AttributeDataType::Short2);
-if (const auto& a = instanceAttrs->set(idFillExtrusionNormalEdVertexAttribute))
-    a->setSharedRawData(bucket.sharedGLEdgeInstances, offsetof(GLEdgeInstanceVertex, a3) /*normal*/,
+if (const auto& a = instanceAttrs->set(idFillExtrusionNormal0Attribute))
+    a->setSharedRawData(bucket.sharedGLEdgeInstances, offsetof(GLEdgeInstanceVertex, a3) /*normal0*/,
+                        0, sizeof(GLEdgeInstanceVertex), gfx::AttributeDataType::Short3);
+if (const auto& a = instanceAttrs->set(idFillExtrusionNormal1Attribute))
+    a->setSharedRawData(bucket.sharedGLEdgeInstances, offsetof(GLEdgeInstanceVertex, a4) /*normal1*/,
                         0, sizeof(GLEdgeInstanceVertex), gfx::AttributeDataType::Short3);
 if (const auto& a = instanceAttrs->set(idFillExtrusionEdDiscardAttribute))
-    a->setSharedRawData(bucket.sharedGLEdgeInstances, offsetof(GLEdgeInstanceVertex, a4) /*edgeDistance*/,
+    a->setSharedRawData(bucket.sharedGLEdgeInstances, offsetof(GLEdgeInstanceVertex, a5) /*edgeDistance*/,
                         0, sizeof(GLEdgeInstanceVertex), gfx::AttributeDataType::UShort);
-// data-driven base/height/color: instanceAttrs->readDataDrivenPaintProperties<...>(binders, evaluated, ...)
+// data-driven base/height/color: bind the EDGE-ALIGNED paint streams from Task 3 (one entry per
+// edge instance), NOT the vertex-aligned binders — set each as a divisor-1 instance attribute whose
+// element count equals glEdgeInstances.elements(). (Review P1: vertex binders are not edge-aligned.)
 ```
 Then `builder->setShader(instancedShader); builder->setRawVertices({}, staticDataVertices->elements(), Short2); builder->setVertexAttributes(vertexAttrs); builder->setInstanceAttributes(instanceAttrs); builder->setSegments(Triangles(), staticDataIndices, staticDataSegments->data(), staticDataSegments->size());` and flush, mirroring the Metal path.
 
@@ -736,8 +769,10 @@ git commit -m "feat(gl): render layer builds edge-instanced FE drawables (gated)
 
 ### Task 11: GL `ShadowDepthInstancedShader` (real port) + caster wiring
 
+> Unlike Tasks 6/7, `include/mbgl/shaders/gl/shadow_depth_instanced.hpp` is **hand-written** (no "Generated code" banner — verified), matching the hand-written `gl/shadow_depth.hpp`. Edit the `.hpp` directly. **Guard:** confirm `node shaders/generate_shader_code.mjs` (run in Tasks 6/7) does NOT overwrite it — if the manifest lists this shader and the generator owns it, switch to the `.glsl`+manifest workflow instead. Resolve this before authoring.
+
 **Files:**
-- Modify: `include/mbgl/shaders/gl/shadow_depth_instanced.hpp` (replace placeholder)
+- Modify: `include/mbgl/shaders/gl/shadow_depth_instanced.hpp` (replace placeholder; hand-written)
 - Modify: `src/mbgl/renderer/layers/render_fill_extrusion_layer.cpp` (gated GL wall-caster build)
 
 **Interfaces:**
@@ -835,5 +870,6 @@ git commit -m "docs: GL FE-instancing M1 on-device parity + perf results"
 ## Self-Review notes
 
 - Spec coverage: Layer 0 → Task 0; Layer 1 → Tasks 2,4,5; Layer 2 → Tasks 6,7,8,11; Layer 3 → Tasks 3,10; Layer 4 gate → Task 1 (used by 3,8,10,11); verification → Tasks 9,12. Cadence is intentionally Plan 2.
-- Type consistency: `glEdgeInstances`/`sharedGLEdgeInstances`, `GLEdgeInstanceVertex` (fields a1=pos0,a2=pos1,a3=normal,a4=edgeDistance), `instanceDivisor`, `Context::drawInstanced`, `DrawableGL::impl->instanceCount`, `idFillExtrusionPos1Attribute` — used consistently across tasks.
-- Known open detail flagged inline for execution: normal pack factor (2^13 in bucket) vs shader divisor (2^14 in `gl/fill_extrusion.hpp`) — reconcile during Task 10 Step 3 / Task 6 Step 1 against the headless golden.
+- Type consistency: `glEdgeInstances`/`sharedGLEdgeInstances`, `GLEdgeInstanceVertex` (fields a1=pos0, a2=pos1, a3=normal0, a4=normal1, a5=edgeDistance), `instanceDivisor`, `Context::drawInstanced`, `DrawableGL::impl->instanceCount`, ids `idFillExtrusionPos1Attribute`/`idFillExtrusionNormal0Attribute`/`idFillExtrusionNormal1Attribute` — used consistently across tasks. Shader attribute locations (0..8) match the combined `ShaderInfo` table (Task 8).
+- Review-incorporated (2026-06-17): two endpoint normals (P1), edge-aligned paint stream (P1), generated-header workflow for Tasks 6/7 vs hand-written Task 11 (P1), combined location-indexed `ShaderInfo` + instance-id set + `shader_group_gl.hpp` (P1), instance dirty/VAO invalidation (P2).
+- Known open detail flagged inline for execution: normal pack factor (2^13 in bucket) vs shader divisor (`/16384.0`=2^14 in `gl/fill_extrusion.hpp`) — reconcile during Task 10 Step 3 / Task 6 Step 1 against the headless golden.
