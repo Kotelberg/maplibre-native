@@ -8,6 +8,35 @@ state the problem precisely, and identify the *root cause* — not treat symptom
 
 ---
 
+## 0. Mapbox comparison update (2026-06-15)
+
+`~/Work/mapbox-maps-ios` is a Swift SDK wrapper around the binary `mapbox-core-maps-ios`
+dependency; it does **not** contain the renderer/shader implementation. So the exact Mapbox
+shadow-pass internals cannot be verified from that checkout alone.
+
+What the public API *does* verify:
+
+- `DirectionalLight` owns shadow enable/intensity and the ground insertion point:
+  `cast-shadows`, `shadow-intensity`, `shadow-draw-before-layer`.
+- `FillExtrusionLayer` only participates with `fill-extrusion-cast-shadows` (default true).
+- `ModelLayer` has both `model-cast-shadows` and `model-receive-shadows`.
+
+That is an architectural mismatch with the current MapLibre branch. Our implementation owns a
+separate `ShadowMap`, caster pass, and ground receiver inside **each** `RenderFillExtrusionLayer`.
+That can pass single-layer synthetic/headless tests while still being the wrong render graph for
+HataHub's real style, which has multiple extrusion layers (`building-3d`, hover/listing/selected,
+plus runtime highlight layers) and model layers. A Mapbox-style rewrite should make shadows
+light-/renderer-owned: collect all shadow-casting 3D drawables into one light pass, render the
+ground shadow once at a style-controlled insertion point, and let participating receiver layers
+sample the same light-owned shadow texture.
+
+Also verified live on 2026-06-15: `https://map.hatahub.com.ua/style/light.json` still serves
+legacy `light.anchor: "viewport"` (intensity `0.22`). A viewport-anchored legacy light rotates
+with camera bearing, so the HataHub app is not currently loading the world-fixed sun required by
+the user's spec.
+
+---
+
 ## 1. Symptoms (as reported by the user, repeatedly and consistently)
 
 On the HataHub iOS app, at a tilted 3D view of central Kyiv:

@@ -1,9 +1,119 @@
 # 3D Building Shadows — Cross-Platform Port Plan
 
 > **Status (2026-06-16):** iOS/Metal is **shipped and in production** in the HataHub app.
-> Android (GL + Vulkan) and Web (MapLibre GL JS) are **not started** — this document is the
-> hand-off for that work. It is written for an engineer with **zero prior context** on this
-> branch.
+> Android (GL) is **in progress**; Vulkan and Web (MapLibre GL JS) are **not started**. This
+> document is the hand-off for that work, written for an engineer with **zero prior context**.
+
+> ### ⚠️ Corrections discovered during the Android GL port (2026-06-16) — supersede claims below
+>
+> 1. **GL offscreen texture EXISTS** — at `src/mbgl/gl/offscreen_texture.{hpp,cpp}` (the doc looked
+>    in `include/mbgl/gl/`). It was **color-only**; `Context::createOffscreenTexture(size,type,depth,
+>    stencil)` *ignored* the depth flag. **✅ DONE:** depth now attaches a `DEPTH_STENCIL`
+>    renderbuffer to the color-texture FBO (`gl/offscreen_texture.cpp` + new
+>    `Context::createFramebuffer(Texture2D, Renderbuffer<DepthStencil>)`). The §3 "biggest blocker /
+>    spike it first" framing was **overstated** — GL already had `createFramebuffer`-with-depth code.
+> 2. **The C++ plumbing is NOT backend-agnostic.** §2.1's "reusable as-is" is **wrong** — it was
+>    POC-grade Metal gating. The shadow *wiring* is behind `#if MLN_RENDER_BACKEND_METAL`:
+>    `render_orchestrator.cpp` (4 gates: ShadowPass ctor, RenderTarget registration, `setShadowPass`/
+>    ground-owner), `render_fill_extrusion_layer.cpp` (12 gates, incl. `useShadows=false` hardcoded
+>    on non-Metal at L200), plus shadow refs in layer tweakers. Only the **math** is truly agnostic
+>    (`renderer/shadows/*` = 0 gates). **Un-gating these is a real, sizeable task** (new task, must
+>    land WITH the GL shaders so each step stays green; iOS must keep working). A backend macro
+>    `#if MLN_RENDER_BACKEND_OPENGL` already exists (Goldfish mitigation, orchestrator L1033).
+> 3. **No local GL verification on macOS.** Apple's GL driver rejects `#version 300 es` (GL backend
+>    hardcodes it, no desktop-GLSL fallback) even in a core profile, and GLSL compiles at **runtime**
+>    in the driver — so `build-gl-check` (compiles fine on macOS) validates **zero** shader code.
+>    **Verify loop = physical Android device** (or emulator) via `MapLibreAndroidTestApp` **opengl**
+>    flavor (builds the fork `.so` straight from this tree) + a `MapSnapshotter` instrumentation test
+>    `ShadowSnapshotTest.kt` (renders the live Kyiv style at a fixed pitched camera → PNG → `adb pull`).
+>    This is the on-device analog of Metal's `mbgl-render -o x.png`. **Baseline confirmed** (Kyiv 3D
+>    buildings render on GL on-device, no shadows = clean stock). Commands are in `ShadowSnapshotTest.kt`.
+> 4. **GL shaders have NO per-shader `.cpp`** (unlike Metal). GLSL source goes in `gl/X.hpp`
+>    (`ShaderSource<…,OpenGL>` with `vertex`/`fragment` strings); attribute/UBO/texture metadata goes
+>    in **`src/mbgl/shaders/gl/shader_info.cpp`** (`ShaderInfo<…,OpenGL>::{uniformBlocks,attributes,
+>    textures}`). Register the 3 BuiltIn IDs in `gl/renderer_backend.cpp` `initShaders` + include the
+>    3 new headers there (mirror how `mtl/renderer_backend.cpp` includes its shadow headers directly,
+>    not via the generated `shader_manifest.hpp`). Add the headers to `cmake/opengl.cmake` INCLUDE_FILES.
+>
+> **GL port: ✅ COMPLETE + on-device verified (2026-06-16).** verify loop + baseline · offscreen
+> depth target · 3 GL shaders (`gl/{shadow_depth,fill_extrusion_shadow,ground_shadow}.hpp`) +
+> `shader_info.cpp` entries · plumbing un-gated via `MLN_DRAWABLE_SHADOWS`
+> (`include/mbgl/renderer/shadows/shadow_support.hpp`, = Metal||OpenGL) · device A/B PROVES cast
+> shadows render through GL (cast-shadows:false → clean stock; true → ground + building shadows).
+> GL specifics that mattered: NO uv.y flip (GL FBO is bottom-left vs Metal top-left), `precision
+> highp float` in shadow fragments (packed depth), array varyings OK, static-sampler if-chain
+> (ES 3.0 forbids dynamic sampler-array indexing), unique UBO pad member names per block (no-instance
+> blocks share a global member namespace → `GroundShadow{Drawable,Props}UBO` both had `u_pad0/1` =
+> link error); caster must remap `gl_Position.z` `[0,1]`→`[-1,1]` (`clip.z=2z-w`, pack original z/w
+> separately) or the offscreen depth test runs at half precision → roof self-shadow acne.
+> **Remaining:** Vulkan (started — see below), then RN style-driven bindings.
+>
+> **Vulkan port: ✅ COMPLETE + on-device verified (2026-06-16, Honor/MediaTek).** 3D buildings + cast
+> shadows render through the Vulkan backend (A/B: `cast-shadows:false` → clean 3D buildings, no ground
+> shadows; `true` → ground + building cast shadows). **Decision = "Route B": flip Vulkan onto the
+> NON-instanced fill-extrusion path** (`MLN_USE_FILL_EXTRUSION_INSTANCING` → `(0)`, the macro the fork
+> already used for Metal) so the proven 3-shader architecture drops in — rather than authoring a new
+> *instanced* shadow path. Route B also FIXES the instanced path's building-height "snap" during the
+> z15→z16 grow and gains crease-aware facade normals; the instanced FE specializations are now
+> compiled-out dead code behind the macro on every backend.
+>
+> What it took (net): completed the Vulkan **non-instanced** FE building shader (it was a stub —
+> hardcoded `normal=(0,0,1)`, `t=1.0`; now unpacks `in ivec4 in_normal_ed` → `t=normal_ed.x&1`,
+> `normal=normal_ed.xyz/16384.0`, mirroring Metal) + gated the instanced specializations/registration
+> behind the macro; authored 3 Vulkan shadow shaders `vulkan/{shadow_depth,fill_extrusion_shadow,
+> ground_shadow}.{hpp,cpp}` (collision/custom_geometry plain-uniform binding template; 4 discrete
+> cascade samplers walked by a static if-chain; **Vulkan NDC z is [0,1] like Metal → NO GL `2z-w`
+> remap**; **GL convention for the offscreen origin → NO `applySurfaceTransform` on the caster, NO
+> `uv.y` flip on receivers** — caster-write and receiver-sample share the un-transformed light_matrix
+> so the conventions cancel); flipped `MLN_DRAWABLE_SHADOWS` to include Vulkan; registered the 3
+> shaders in `vulkan/renderer_backend.cpp` + `cmake/vulkan.cmake`.
+>
+> ⚠️ **THE two bugs that made buildings invisible (both Vulkan-only, neither caught by the C++
+> compile — Vulkan GLSL compiles at runtime on-device):**
+> 1. **Drawable-UBO off-by-one (the killer).** Vulkan binds the drawable descriptor set POSITIONALLY:
+>    SSBO bindings `[0, maxSSBOCountPerDrawable)`, then UBO bindings starting AT `maxSSBOCountPerDrawable`
+>    (`context.cpp::buildUniformDescriptorSetLayout` + `descriptor_set.cpp::UniformDescriptorSet::update`,
+>    `setDstBinding(index)`). The fill-extrusion instance buffer was the ONLY drawable SSBO, so flipping
+>    instancing off dropped `maxSSBOCountPerDrawable` 1→0 — but the GLSL prelude HARDCODED
+>    `drawableUBOStartId 1` (`vulkan/common.hpp`). Result: every drawable-set UBO (the receiver's
+>    **matrix**, props, the caster's matrix) bound one slot too high → read the dummy buffer → zero
+>    matrix → `gl_Position = 0` → degenerate triangles → **nothing renders** (no validation error). Fix:
+>    `common.hpp` now defines `drawableUBOStartId` = `MLN_VK_DRAWABLE_UBO_START` = `1` with instancing /
+>    `0` without (must equal `maxSSBOCountPerDrawable`). Affects ALL drawable-set Vulkan shaders
+>    (collision/custom_geometry too — they were only ever exercised with instancing on).
+> 2. **Props in the wrong descriptor set.** `FillExtrusionShadowTweaker` wrote the receiver's props to
+>    the LAYER group, but the Vulkan shader declares it at `DRAWABLE_UBO_SET_INDEX`; the layer set only
+>    binds ids in `[layerSSBOStartId, drawableSSBOStartId)`, so the props id (drawable-range) landed in
+>    an unbound slot → all-zero props (opacity/color = 0 → invisible). Metal (flat `[[buffer(id)]]`) /
+>    GL (named blocks) are unaffected. Fix: write props **per-drawable on Vulkan**, keep the cheaper
+>    **per-layer** write on Metal/GL (`#if MLN_RENDER_BACKEND_VULKAN` in the tweaker — props is
+>    layer-constant, so per-drawable is wasted uploads on the shipped backends).
+>
+> **Cascade default + perf:** Vulkan exhibits the SAME 2-cascade roof over-shadow latch as GL after a
+> zoom-out round-trip → defaulted Vulkan to **1 cascade** (`shadow_pass.cpp`, joined the GL gate). This
+> is also the headline perf lever: Vulkan was defaulting to 2 cascades vs GL's 1 = ~2× the shadow cost
+> (two caster passes + two-cascade receiver sampling); 1 cascade closes most of the GL-vs-Vulkan gap.
+> Residual Vulkan cost is per-drawable descriptor updates (matrix changes every frame), inherent to
+> the backend.
+>
+> **Net new/changed (fork, uncommitted):** new `vulkan/{shadow_depth,fill_extrusion_shadow,
+> ground_shadow}.{hpp,cpp}`; `vulkan/fill_extrusion.{hpp,cpp}` (normal_ed + macro gating);
+> `vulkan/common.hpp` (`MLN_VK_DRAWABLE_UBO_START`); `layer_ubo.hpp` (macro → 0); `shadow_support.hpp`
+> (+Vulkan); `shadow_tweakers.cpp` (per-drawable props on Vulkan); `shadow_pass.cpp` (Vulkan→1 cascade);
+> `vulkan/renderer_backend.cpp` + `cmake/vulkan.cmake` (register). Offscreen depth target was already
+> done. **Open/QA:** roof over-shadow latch only spot-checked (default-1 sidesteps it); assert
+> `depthReady` in `vulkan/offscreen_texture.cpp` (still silently degrades color-only); deeper perf
+> profiling if 1-cascade isn't enough.
+>
+> **On-device verify loop (Vulkan):** `gradlew :MapLibreAndroidTestApp:installVulkanDebug` then launch
+> `ShadowDemoActivity` (a live MapView → genuinely uses the Vulkan backend). Gotchas: the activity's
+> INIT camera (`cameraPosition=`/`moveCamera` in `getMapAsync`) does NOT apply (surface not ready), but
+> a button-driven `animateCamera(newCameraPosition(...))` (the added "GO" button) DOES — drive the
+> pitched z17.5 view that way. `ShadowSnapshotTest` (deterministic z18/pitch55) is blocked by a
+> pre-existing `FeatureOverviewActivity.loadFeaturesTask` NPE (`category!!` on the bundled
+> ShadowDemoActivity which has no category meta) — fix `category ?: ""` to use it. Vulkan GLSL compiles
+> at RUNTIME on-device, so the C++ gradle build validates only the C++ side — binding/GLSL bugs surface
+> as a blank render, not a build error.
 
 This is a fork-only feature in `Kotelberg/maplibre-native`. **Do not open upstream PRs and do
 not push fork branches without explicit instruction.** All shadow code lives behind the

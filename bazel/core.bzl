@@ -280,6 +280,7 @@ MLN_CORE_SOURCE = [
     "include/mbgl/renderer/shadows/shadow_pass.hpp",
     "src/mbgl/renderer/shadows/shadow_tweakers.cpp",
     "include/mbgl/renderer/shadows/shadow_tweakers.hpp",
+    "include/mbgl/renderer/shadows/shadow_support.hpp",
     "include/mbgl/renderer/shadows/depth_pack.hpp",
     "src/mbgl/renderer/render_orchestrator.cpp",
     "src/mbgl/renderer/render_orchestrator.hpp",

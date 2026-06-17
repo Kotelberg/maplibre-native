@@ -72,16 +72,19 @@ enum {
 };
 
 #define MLN_UBO_CONSOLIDATION (MLN_RENDER_BACKEND_METAL || MLN_RENDER_BACKEND_VULKAN || MLN_RENDER_BACKEND_WEBGPU)
-// Fork: Metal uses the NON-instancing fill-extrusion path (same as GLES/Android).
-// The instancing path rebuilds per-instance building geometry on tile/zoom
-// changes rather than per frame, so 3D buildings "snap" between heights under
-// continuous zoom while the zoom-interpolated model glides — visibly out of sync
-// on iOS. The non-instancing path interpolates height smoothly per frame (the path
-// Android runs in sync) and carries the crease-aware smooth curved-facade normals
-// (which were #if !INSTANCING). Trade-off: no fill-extrusion instancing memory
-// optimization on Metal, acceptable at this building density. (The non-instanced
-// Metal wall shader was completed in mtl/fill_extrusion.hpp for this.)
-#define MLN_USE_FILL_EXTRUSION_INSTANCING (MLN_RENDER_BACKEND_VULKAN)
+// Fork: Metal + GLES/Android use the NON-instancing fill-extrusion path; Vulkan stays
+// INSTANCED (upstream's memory optimization — "Optimize fill extrusion memory by using
+// instancing", #4256 — which matters most on the perf-first Vulkan/Android backend).
+// NOTE (2026-06-16, verified on Metal): the instanced path DOES interpolate building
+// height smoothly per frame (`unpack_mix_float(in_height, height_t)`; the OutlineInstance
+// buffer stores only xy + edge, no baked height) — at z15.5 buildings render at half
+// height. So the earlier "instanced snaps between heights" rationale was a misdiagnosis;
+// the real (and only) reason Metal/GLES are non-instanced is that the SHIPPED cast-shadow
+// caster/receiver consume per-vertex `normal_ed`, which the instanced bucket doesn't carry.
+// Vulkan keeps instancing for perf; its cast shadows are built on the instanced geometry
+// (reconstructing the wall normal in-shader from instance edges) rather than forcing it
+// non-instanced — see renderer/shadows + vulkan/{shadow_depth,fill_extrusion_shadow}.
+#define MLN_USE_FILL_EXTRUSION_INSTANCING (MLN_RENDER_BACKEND_METAL || MLN_RENDER_BACKEND_VULKAN)
 
 } // namespace shaders
 } // namespace mbgl

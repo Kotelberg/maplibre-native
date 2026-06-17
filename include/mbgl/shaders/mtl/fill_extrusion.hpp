@@ -3,11 +3,21 @@
 #include <mbgl/shaders/fill_extrusion_layer_ubo.hpp>
 #include <mbgl/shaders/shader_source.hpp>
 #include <mbgl/shaders/mtl/shader_program.hpp>
+#include <mbgl/shaders/layer_ubo.hpp>
 
 namespace mbgl {
 namespace shaders {
 
-constexpr auto fillExtrusionShaderPrelude = R"(
+// On the INSTANCED path the non-instanced FillExtrusionShader draws the building ROOF (the
+// sharedTriangles earcut over footprint verts, which carry ed_discard, NOT normal_ed). Inject
+// FE_INSTANCING so the roof uses the flat-cap constants normal=(0,0,1) / t=1 instead of normal_ed.
+constexpr auto fillExtrusionShaderPrelude =
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+    "#define FE_INSTANCING 1\n"
+#else
+    "#define FE_INSTANCING 0\n"
+#endif
+    R"(
 
 enum {
     idFillExtrusionDrawableUBO = idDrawableReservedVertexOnlyUBO,
@@ -69,7 +79,11 @@ struct ShaderSource<BuiltIn::FillExtrusionShader, gfx::Backend::Type::Metal> {
     static constexpr auto vertexMainFunction = "vertexMain";
     static constexpr auto fragmentMainFunction = "fragmentMain";
 
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+    static const std::array<AttributeInfo, 4> attributes; // pos, color, base, height (roof; no normal_ed)
+#else
     static const std::array<AttributeInfo, 5> attributes;
+#endif
     static constexpr std::array<AttributeInfo, 0> instanceAttributes{};
     static const std::array<TextureInfo, 0> textures;
 
@@ -78,6 +92,19 @@ struct ShaderSource<BuiltIn::FillExtrusionShader, gfx::Backend::Type::Metal> {
 
 struct VertexStage {
     short2 pos [[attribute(0)]];
+#if FE_INSTANCING
+    // Instanced path: this shader draws the roof cap (footprint verts, no normal_ed). color/base/height
+    // shift down one slot.
+#if !defined(HAS_UNIFORM_u_color)
+    float4 color [[attribute(1)]];
+#endif
+#if !defined(HAS_UNIFORM_u_base)
+    float2 base [[attribute(2)]];
+#endif
+#if !defined(HAS_UNIFORM_u_height)
+    float2 height [[attribute(3)]];
+#endif
+#else
     // Packed wall normal (xyz * 2^13 * 2) + edge distance; the LSB of x is the
     // top/bottom flag `t`. (Non-instanced path: per-vertex, like GLES.)
     short4 normal_ed [[attribute(1)]];
@@ -90,6 +117,7 @@ struct VertexStage {
 #endif
 #if !defined(HAS_UNIFORM_u_height)
     float2 height [[attribute(4)]];
+#endif
 #endif
 };
 
@@ -124,8 +152,14 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     // Unpack the per-vertex wall normal (matches the GLES non-instanced path):
     // raw components are nx,ny,nz * 16384 (+ the t flag in x's LSB). The unit
     // normal drives directional shading; t selects top (height) vs bottom (base).
+    // Instanced path: this shader draws the flat roof cap (always top) → normal=(0,0,1), t=1.
+#if FE_INSTANCING
+    const float t = 1.0;
+    const float3 normal = float3(0.0, 0.0, 1.0);
+#else
     const float t = float(vertx.normal_ed.x & 1);
     const float3 normal = float3(vertx.normal_ed.xyz) / 16384.0;
+#endif
     const float z = (t > 0.0) ? height : base;
     const float4 position = drawable.matrix * float4(float2(vertx.pos), z, 1);
 

@@ -6,7 +6,8 @@
 #include <mbgl/renderer/renderer_observer.hpp>
 #include <mbgl/renderer/render_source.hpp>
 #include <mbgl/renderer/render_layer.hpp>
-#if MLN_RENDER_BACKEND_METAL
+#include <mbgl/renderer/shadows/shadow_support.hpp>
+#if MLN_DRAWABLE_SHADOWS
 #include <mbgl/renderer/shadows/shadow_pass.hpp>
 #include <mbgl/renderer/layers/render_fill_extrusion_layer.hpp>
 #endif
@@ -972,7 +973,7 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
     std::vector<std::unique_ptr<ChangeRequest>> changes;
     changes.reserve(items.size() * 3);
 
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
     // Renderer-owned directional-shadow pass: one shared shadow map + light frustum for every
     // fill-extrusion layer (replaces per-layer ShadowMap ownership). Gated by the env kill-switch
     // AND the scene light's `cast-shadows` (default true; SHADOW_REWRITE_DESIGN.md §3.1) — so a
@@ -1021,7 +1022,7 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
     double totalUpdMs = 0.0, slowestMs = 0.0;
     std::string slowestId;
 
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
     // The first (lowest-index) fill-extrusion layer owns the single ground-shadow draw (ground-once;
     // items iterate in layer-index order). Highlight layers above it cast into the shared map but
     // draw no ground, so they never stack a second darkening pass over the same building.
@@ -1037,7 +1038,7 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
             renderLayer.removeAllDrawables();
         }
 #endif
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
         // Hand fill-extrusion layers the shared shadow pass so they register casters/receivers into
         // it instead of owning per-layer shadow maps. Null when shadows are disabled (stock path).
         // RTTI is off (-fno-rtti); identify the layer by its static type-info tag, like the rest of

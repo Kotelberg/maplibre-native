@@ -3,6 +3,7 @@
 #include <mbgl/shaders/fill_extrusion_shadow_ubo.hpp>
 #include <mbgl/shaders/shader_source.hpp>
 #include <mbgl/shaders/mtl/shader_program.hpp>
+#include <mbgl/shaders/layer_ubo.hpp>
 
 namespace mbgl {
 namespace shaders {
@@ -10,7 +11,17 @@ namespace shaders {
 // Shadow-receiving fill-extrusion shader. Mirrors the non-pattern FillExtrusionShader vertex
 // lighting verbatim, adds a light-space position varying, and a fragment that PCF-samples the
 // shadow map and attenuates the lit color. Non-consolidated single drawable UBO.
-constexpr auto fillExtrusionShadowShaderPrelude = R"(
+// On the INSTANCED path this shader receives shadows on the building ROOF (the sharedTriangles draw;
+// footprint verts carry ed_discard, not normal_ed). Inject FE_INSTANCING so the roof uses the flat-cap
+// constants normal=(0,0,1) / t=1 instead of the absent normal_ed. The walls draw via the plain
+// instanced FE shader (their cast shadow is intentionally suppressed by wallness anyway).
+constexpr auto fillExtrusionShadowShaderPrelude =
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+    "#define FE_INSTANCING 1\n"
+#else
+    "#define FE_INSTANCING 0\n"
+#endif
+    R"(
 
 enum {
     idFillExtrusionShadowDrawableUBO = idDrawableReservedVertexOnlyUBO,
@@ -53,7 +64,11 @@ struct ShaderSource<BuiltIn::FillExtrusionShadowShader, gfx::Backend::Type::Meta
     static constexpr auto vertexMainFunction = "vertexMain";
     static constexpr auto fragmentMainFunction = "fragmentMain";
 
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+    static const std::array<AttributeInfo, 4> attributes; // pos, color, base, height (roof; no normal_ed)
+#else
     static const std::array<AttributeInfo, 5> attributes;
+#endif
     static constexpr std::array<AttributeInfo, 0> instanceAttributes{};
     static const std::array<TextureInfo, 4> textures;
 
@@ -62,6 +77,18 @@ struct ShaderSource<BuiltIn::FillExtrusionShadowShader, gfx::Backend::Type::Meta
 
 struct VertexStage {
     short2 pos [[attribute(0)]];
+#if FE_INSTANCING
+    // Instanced roof receiver: no normal_ed; color/base/height shift down one slot.
+#if !defined(HAS_UNIFORM_u_color)
+    float4 color [[attribute(1)]];
+#endif
+#if !defined(HAS_UNIFORM_u_base)
+    float2 base [[attribute(2)]];
+#endif
+#if !defined(HAS_UNIFORM_u_height)
+    float2 height [[attribute(3)]];
+#endif
+#else
     short4 normal_ed [[attribute(1)]];
 
 #if !defined(HAS_UNIFORM_u_color)
@@ -72,6 +99,7 @@ struct VertexStage {
 #endif
 #if !defined(HAS_UNIFORM_u_height)
     float2 height [[attribute(4)]];
+#endif
 #endif
 };
 
@@ -115,8 +143,15 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const auto height = max(unpack_mix_float(vertx.height, drawable.height_t), 0.0);
 #endif
 
+    // Instanced path: this receiver draws the flat roof cap (always the top), so the normal is the
+    // up vector and t is 1. wallness = 1 - abs(normal.z) = 0 → roofs keep their crisp cast shadow.
+#if FE_INSTANCING
+    const float t = 1.0;
+    const float3 normal = float3(0.0, 0.0, 1.0);
+#else
     const float t = float(vertx.normal_ed.x & 1);
     const float3 normal = float3(vertx.normal_ed.xyz) / 16384.0;
+#endif
     const float z = (t > 0.0) ? height : base;
     const float4 worldLocal = float4(float2(vertx.pos), z, 1);
     const float4 position = drawable.matrix * worldLocal;

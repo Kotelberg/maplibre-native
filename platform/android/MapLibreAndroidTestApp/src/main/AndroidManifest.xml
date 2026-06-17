@@ -17,17 +17,21 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         tools:ignore="HardcodedDebugMode">
+        <!-- Verify build: launch straight into the interactive GL shadow demo. -->
+        <activity
+            android:name=".activity.maplayout.ShadowDemoActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".activity.FeatureOverviewActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:launchMode="singleTop">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:launchMode="singleTop" />
         <activity
             android:name=".activity.infowindow.InfoWindowActivity"
             android:description="@string/description_info_window"

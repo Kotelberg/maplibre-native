@@ -15,6 +15,7 @@
 #include <mbgl/renderer/image_manager_observer.hpp>
 #include <mbgl/text/placement.hpp>
 #include <mbgl/renderer/render_tree.hpp>
+#include <mbgl/renderer/shadows/shadow_support.hpp>
 
 #include <map>
 #include <memory>
@@ -246,7 +247,7 @@ private:
     std::vector<RenderTargetPtr> renderTargets;
     RenderItem::DebugLayerGroupMap debugLayerGroups;
 
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
     // Renderer-owned directional-shadow pass (light-owned architecture; SHADOW_REWRITE_DESIGN.md).
     // One shared shadow map + light frustum for all fill-extrusion layers, replacing per-layer
     // ownership. Created lazily under the Metal + shadowsEnabled + light-cast-shadows gate; its

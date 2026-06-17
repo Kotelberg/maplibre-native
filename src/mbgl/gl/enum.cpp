@@ -469,7 +469,11 @@ platform::GLenum Enum<gfx::RenderbufferPixelType>::to(const gfx::RenderbufferPix
         case gfx::RenderbufferPixelType::RGBA:
             return GL_RGBA8;
         case gfx::RenderbufferPixelType::Depth:
-            return GL_DEPTH_COMPONENT16;
+            // 32-bit float depth (was DEPTH_COMPONENT16). The shadow caster's offscreen target uses
+            // this depth-only attachment; lower precision caused roof-edge self-shadow acne (a roof
+            // and its sun-facing wall quantize to the same depth → wrong fragment wins → receiver
+            // mismatch). Matches Metal's Depth32Float shadow map. (Depth-only type is otherwise unused.)
+            return GL_DEPTH_COMPONENT32F;
         case gfx::RenderbufferPixelType::DepthStencil:
             return GL_DEPTH24_STENCIL8;
     }

@@ -4,6 +4,7 @@
 #include <mbgl/renderer/buckets/fill_extrusion_bucket.hpp>
 #include <mbgl/style/layers/fill_extrusion_layer_impl.hpp>
 #include <mbgl/style/layers/fill_extrusion_layer_properties.hpp>
+#include <mbgl/renderer/shadows/shadow_support.hpp>
 
 #include <memory>
 #include <vector>
@@ -17,7 +18,7 @@ public:
     explicit RenderFillExtrusionLayer(Immutable<style::FillExtrusionLayer::Impl>);
     ~RenderFillExtrusionLayer() override;
 
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
     /// Hand this layer the renderer-owned shared ShadowPass before update(). The layer registers its
     /// caster/receiver drawables into the shared pass instead of owning a per-layer ShadowMap. Set by
     /// RenderOrchestrator under the Metal + shadowsEnabled gate; null otherwise (stock FE path).
@@ -64,7 +65,7 @@ private:
     gfx::ShaderGroupPtr fillExtrusionGroup;
     gfx::ShaderGroupPtr fillExtrusionPatternGroup;
 
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
     // Directional-shadow path (S1, iOS/Metal-only). Gated at runtime by the 3D-enhancements
     // flag; when off, none of this is created and the stock FE path is used unchanged.
     void markLayerRenderable(bool willRender, UniqueChangeRequestVec&) override;
@@ -87,6 +88,11 @@ private:
     gfx::ShaderGroupPtr fillExtrusionShadowGroup;
     gfx::ShaderGroupPtr groundShadowGroup;
     gfx::ShaderGroupPtr shadowDepthGroup;
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+    // Instanced WALL caster shader. The roof-only sharedTriangles caster (shadowDepthGroup) leaves ground
+    // shadows detached from the base on the instanced path; this casts the walls so they reattach.
+    gfx::ShaderGroupPtr shadowDepthInstancedGroup;
+#endif
     // Strong refs (one per cascade) — the caster groups store only weak_ptrs (runTweakers drops
     // expired ones). Each tweaker is bound to its cascade index so it writes that cascade's matrix.
     std::vector<LayerTweakerPtr> shadowCasterTweakers;

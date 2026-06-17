@@ -9,6 +9,17 @@ namespace shaders {
 
 using FillExtrusionShaderSource = ShaderSource<BuiltIn::FillExtrusionShader, gfx::Backend::Type::Metal>;
 
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+// Instanced path: this shader draws the ROOF (sharedTriangles over footprint verts, which carry
+// ed_discard not normal_ed). Drop normal_ed (roof normal is the constant up vector); color/base/height
+// shift down to attribute slots 1/2/3.
+const std::array<AttributeInfo, 4> FillExtrusionShaderSource::attributes = {
+    AttributeInfo{0, gfx::AttributeDataType::Short2, fillExtrusionUBOCount + 0, idFillExtrusionPosVertexAttribute},
+    AttributeInfo{1, gfx::AttributeDataType::Float4, fillExtrusionUBOCount + 1, idFillExtrusionColorVertexAttribute},
+    AttributeInfo{2, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 1, idFillExtrusionBaseVertexAttribute},
+    AttributeInfo{3, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 1, idFillExtrusionHeightVertexAttribute},
+};
+#else
 const std::array<AttributeInfo, 5> FillExtrusionShaderSource::attributes = {
     AttributeInfo{0, gfx::AttributeDataType::Short2, fillExtrusionUBOCount + 0, idFillExtrusionPosVertexAttribute},
     // Per-vertex packed wall normal + edge distance, interleaved with pos in the
@@ -20,6 +31,7 @@ const std::array<AttributeInfo, 5> FillExtrusionShaderSource::attributes = {
     AttributeInfo{3, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 1, idFillExtrusionBaseVertexAttribute},
     AttributeInfo{4, gfx::AttributeDataType::Float2, fillExtrusionUBOCount + 1, idFillExtrusionHeightVertexAttribute},
 };
+#endif
 const std::array<TextureInfo, 0> FillExtrusionShaderSource::textures = {};
 
 //

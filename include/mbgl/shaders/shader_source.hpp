@@ -32,6 +32,7 @@ enum class BuiltIn {
     HeatmapTextureShader,
     ModelBloomShader,
     ShadowDepthShader,
+    ShadowDepthInstancedShader,
     FillExtrusionShadowShader,
     GroundShadowShader,
     HillshadePrepareShader,

@@ -133,6 +133,13 @@ public:
     RenderTargetPtr createRenderTarget(const Size size, const gfx::TextureChannelDataType type) override;
 
     Framebuffer createFramebuffer(const gfx::Texture2D& color);
+    // Color (sampled RGBA8 texture) + 32-bit-float depth-only renderbuffer. Used by the shadow
+    // caster's offscreen target: the color texture stores packed light-space depth that receivers
+    // sample, while the depth renderbuffer drives the hardware depth test so the nearest-to-light
+    // caster wins (reliable inter-building occlusion) instead of last-write. Depth-only (no stencil)
+    // at 32F to match Metal's shadow map and avoid roof-edge self-shadow acne from low precision.
+    Framebuffer createFramebuffer(const gfx::Texture2D& color,
+                                  const gfx::Renderbuffer<gfx::RenderbufferPixelType::Depth>& depth);
 
     gfx::VertexAttributeArrayPtr createVertexAttributeArray() const override;
 

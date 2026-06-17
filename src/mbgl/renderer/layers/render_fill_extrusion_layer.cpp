@@ -25,13 +25,16 @@
 #include <mbgl/renderer/update_parameters.hpp>
 #include <mbgl/shaders/fill_extrusion_layer_ubo.hpp>
 #include <mbgl/shaders/shader_program_base.hpp>
+#include <mbgl/renderer/shadows/shadow_support.hpp>
 
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
 #include <mbgl/renderer/change_request.hpp>
 #include <mbgl/renderer/shadows/shadow_pass.hpp>
 #include <mbgl/renderer/shadows/shadow_tweakers.hpp>
 #include <mbgl/shaders/shader_defines.hpp>
+#include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <string_view>
 #endif
 
@@ -60,7 +63,7 @@ RenderFillExtrusionLayer::RenderFillExtrusionLayer(Immutable<style::FillExtrusio
 
 RenderFillExtrusionLayer::~RenderFillExtrusionLayer() = default;
 
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
 void RenderFillExtrusionLayer::markLayerRenderable(bool willRender, UniqueChangeRequestVec& changes) {
     isRenderable = willRender;
 
@@ -148,7 +151,7 @@ void RenderFillExtrusionLayer::evaluate(const PropertyEvaluationParameters& para
     if (layerTweaker) {
         layerTweaker->updateProperties(evaluatedProperties);
     }
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
     if (groundShadowTweaker) {
         groundShadowTweaker->updateProperties(evaluatedProperties);
     }
@@ -198,7 +201,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
     }
 
     [[maybe_unused]] bool useShadows = false; // all reads are Metal-gated; unused on other backends
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
     // The shared shadow map + per-frame light frustum are owned by RenderOrchestrator's ShadowPass
     // (handed to this layer via setShadowPass() before update()). This layer no longer owns a
     // ShadowMap or registers the shadow RenderTarget — it only registers caster/receiver drawables
@@ -210,6 +213,11 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         if (!shadowDepthGroup) {
             shadowDepthGroup = shaders.getShaderGroup("ShadowDepthShader");
         }
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+        if (!shadowDepthInstancedGroup) {
+            shadowDepthInstancedGroup = shaders.getShaderGroup("ShadowDepthInstancedShader");
+        }
+#endif
         if (!fillExtrusionShadowGroup) {
             fillExtrusionShadowGroup = shaders.getShaderGroup("FillExtrusionShadowShader");
         }
@@ -276,7 +284,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
     }
 
     if (!layerTweaker) {
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
         if (useShadows) {
             layerTweaker = std::make_shared<FillExtrusionShadowTweaker>(
                 getID(), evaluatedProperties, shadowMapSize(), frustumState);
@@ -294,7 +302,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
     if (!fillExtrusionPatternGroup) {
         fillExtrusionPatternGroup = shaders.getShaderGroup("FillExtrusionPatternShader");
     }
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
     // Non-pattern buildings receive shadows: use the shadow-receiving shader group + texture.
     if (useShadows && fillExtrusionShadowGroup) {
         fillExtrusionGroup = fillExtrusionShadowGroup;
@@ -315,7 +323,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         }
         return false;
     });
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
     if (groundShadowLayerGroup) {
         stats.drawablesRemoved += groundShadowLayerGroup->removeDrawablesIf([&](gfx::Drawable& drawable) {
             const auto& tileID = drawable.getTileID();
@@ -416,7 +424,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             }
             return true;
         };
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
         bool missingShadowSidecar = false;
         if (useGroundShadows && groundShadowLayerGroup &&
             groundShadowLayerGroup->getDrawableCount(drawPass, tileID) == 0) {
@@ -474,6 +482,77 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                                                      FillExtrusionPattern>(
             binders, evaluated, instancePropertiesAsUniforms, idFillExtrusionBaseVertexAttribute);
 
+#if MLN_DRAWABLE_SHADOWS
+        // Pre-build the instanced WALL caster's attributes HERE, before the color/roof-caster builders
+        // flush() below — flush uploads + clears the binder vertex data, after which
+        // readDataDrivenPaintProperties marks data-driven props (base/height) as UNIFORM
+        // (getVertexCount()==0 path), zeroing the caster's per-instance height → zero-height walls cast
+        // nothing. Reading now captures the (shared) binder buffers; the caster is drawn further below.
+        StringIDSetsPair casterInstanceUniforms;
+        gfx::VertexAttributeArrayPtr casterStaticVertices;
+        gfx::VertexAttributeArrayPtr casterInstanceAttrs;
+        if (useShadows && shadowDepthInstancedGroup) {
+            casterStaticVertices = context.createVertexAttributeArray();
+            if (const auto& attr = casterStaticVertices->set(idFillExtrusionPosVertexAttribute)) {
+                attr->setSharedRawData(staticDataVertices,
+                                       offsetof(FillExtrusionStaticVertex, a1),
+                                       /*vertexOffset=*/0,
+                                       sizeof(FillExtrusionStaticVertex),
+                                       gfx::AttributeDataType::Short2);
+            }
+            casterInstanceAttrs = context.createVertexAttributeArray();
+            casterInstanceAttrs->readDataDrivenPaintProperties<FillExtrusionBase,
+                                                               FillExtrusionColor,
+                                                               FillExtrusionHeight,
+                                                               FillExtrusionPattern>(
+                binders, evaluated, casterInstanceUniforms, idFillExtrusionBaseVertexAttribute);
+            // The wall caster consumes base/height in a separate shader variant from the visible
+            // instanced walls. Copy those two float2 streams out of the shared paint byte buffer so
+            // Metal gives them independent instance layouts instead of reusing the interleaved binder
+            // buffer that was built for the visible FillExtrusionInstancedShader.
+            const auto deinterleaveFloat2 = [&](const std::size_t id) {
+                const auto& sharedAttr = casterInstanceAttrs->get(id);
+                if (!sharedAttr || !sharedAttr->getSharedRawData()) {
+                    return;
+                }
+                const auto raw = sharedAttr->getSharedRawData();
+                const auto offset = sharedAttr->getSharedOffset();
+                const auto stride = sharedAttr->getSharedStride();
+                const auto instanceCount = bucket.sharedVertices->elements();
+                const auto* bytes = static_cast<const std::byte*>(raw->getRawData());
+                const auto& copiedAttr =
+                    casterInstanceAttrs->set(id, -1, gfx::AttributeDataType::Float2, instanceCount);
+                if (!copiedAttr) {
+                    return;
+                }
+                std::vector<std::uint8_t> data(instanceCount * sizeof(gfx::VertexAttribute::float2));
+                for (std::size_t i = 0; i < instanceCount; ++i) {
+                    gfx::VertexAttribute::float2 value;
+                    std::memcpy(&value, bytes + i * stride + offset, sizeof(value));
+                    std::memcpy(data.data() + i * sizeof(value), &value, sizeof(value));
+                }
+                copiedAttr->setRawData(std::move(data));
+                copiedAttr->setStride(sizeof(gfx::VertexAttribute::float2));
+            };
+            deinterleaveFloat2(idFillExtrusionBaseVertexAttribute);
+            deinterleaveFloat2(idFillExtrusionHeightVertexAttribute);
+            if (const auto& attr = casterInstanceAttrs->set(idFillExtrusionOutlinePosAttribute)) {
+                attr->setSharedRawData(bucket.sharedVertices,
+                                       offsetof(FillExtrusionLayoutVertex, a1),
+                                       /*vertexOffset=*/0,
+                                       sizeof(FillExtrusionLayoutVertex),
+                                       gfx::AttributeDataType::Short2);
+            }
+            if (const auto& attr = casterInstanceAttrs->set(idFillExtrusionEdDiscardAttribute)) {
+                attr->setSharedRawData(bucket.sharedVertices,
+                                       offsetof(FillExtrusionLayoutVertex, a2),
+                                       /*vertexOffset=*/0,
+                                       sizeof(FillExtrusionLayoutVertex),
+                                       gfx::AttributeDataType::UShort2);
+            }
+        }
+#endif
+
         const auto instancedShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
             instancedShaderGroup->getOrCreateShader(context, instancePropertiesAsUniforms));
         if (!instancedShader) {
@@ -496,7 +575,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                 if (tweaker) {
                     builder->addTweaker(tweaker);
                 }
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
                 if (useShadows) {
                     // Bind one shadow texture per cascade; the receiver shader picks the tightest
                     // cascade that contains the fragment (idFillExtrusionShadowTexture0 + cascade).
@@ -524,7 +603,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                 if (tweaker) {
                     builder->addTweaker(tweaker);
                 }
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
                 if (useShadows) {
                     // Bind one shadow texture per cascade; the receiver shader picks the tightest
                     // cascade that contains the fragment (idFillExtrusionShadowTexture0 + cascade).
@@ -591,7 +670,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             depthBuilder->setVertexAttributes(vertexAttrs);
         }
 
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
         // Keep a reference to the (shared) vertex attributes for the shadow caster before
         // the color builder takes ownership.
         auto casterAttrs = useShadows ? vertexAttrs : decltype(vertexAttrs){};
@@ -628,7 +707,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         }
         finish(*colorBuilder);
 
-#if MLN_RENDER_BACKEND_METAL
+#if MLN_DRAWABLE_SHADOWS
         // Env toggle (diagnostic): MLN_GROUND_SHADOWS=1 enables the ground-shadow quads.
         if (useGroundShadows && groundShadowLayerGroup) {
             if (const auto groundShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
@@ -820,6 +899,56 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             finishInstance(*instancedDepthBuilder);
         }
         finishInstance(*instancedColorBuilder);
+
+#if MLN_DRAWABLE_SHADOWS
+        // Instanced WALL caster: the roof-only sharedTriangles caster (above) leaves ground shadows
+        // detached from the base on the instanced path, because the walls never enter the shadow map.
+        // Cast the walls too — same per-edge OutlineInstance geometry as the visible instanced walls, via
+        // the ShadowDepthInstancedShader (light-space depth). One drawable per cascade (each gets that
+        // cascade's light_matrix from shadowCasterTweakers[c]). Depth-only, so cull is disabled (both wall
+        // faces occlude). Together roof+wall casters fill the full building volume → shadows reattach.
+        if (useShadows && shadowDepthInstancedGroup && casterInstanceAttrs && casterStaticVertices &&
+            !shadowCasterGroups.empty() && bucket.sharedVertices->elements() && staticDataIndices->elements()) {
+            if (const auto instCasterShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
+                    shadowDepthInstancedGroup->getOrCreateShader(context, casterInstanceUniforms))) {
+                for (uint32_t c = 0; c < shadowCasterGroups.size(); ++c) {
+                    auto* casterGroup = shadowCasterGroups[c];
+                    if (!casterGroup) {
+                        continue;
+                    }
+                    if (auto wallCaster = context.createDrawableBuilder(layerPrefix + "shadowCasterWall")) {
+                        wallCaster->setShader(instCasterShader);
+                        wallCaster->setIs3D(true);
+                        wallCaster->setEnableColor(true);
+                        wallCaster->setColorMode(gfx::ColorMode::unblended()); // write packed depth (replace)
+                        wallCaster->setEnableDepth(true);
+                        wallCaster->setRenderPass(RenderPass::Opaque);
+                        wallCaster->setCullFaceMode(gfx::CullFaceMode::disabled()); // depth-only; both faces
+                        wallCaster->setRawVertices({}, instanceVertexCount, gfx::AttributeDataType::Short2);
+                        // Copy the shared attribute handles per cascade (shared GPU buffers; handles
+                        // are ref-counted, like the roof caster above).
+                        auto cascadeStatic = casterStaticVertices;
+                        auto cascadeInstance = casterInstanceAttrs;
+                        wallCaster->setVertexAttributes(std::move(cascadeStatic));
+                        wallCaster->setInstanceAttributes(std::move(cascadeInstance));
+                        wallCaster->setSegments(gfx::Triangles(),
+                                                staticDataIndices,
+                                                staticDataSegments->data(),
+                                                staticDataSegments->size());
+                        wallCaster->flush(context);
+                        for (auto& drawable : wallCaster->clearDrawables()) {
+                            drawable->setTileID(tileID);
+                            drawable->setLayerTweaker(shadowCasterTweakers[c]);
+                            drawable->setBinders(renderData.bucket, &binders);
+                            drawable->setRenderTile(renderTilesOwner, &tile);
+                            casterGroup->addDrawable(RenderPass::Opaque, tileID, std::move(drawable));
+                            ++stats.drawablesAdded;
+                        }
+                    }
+                }
+            }
+        }
+#endif
 #endif
     }
 }

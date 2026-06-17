@@ -256,6 +256,58 @@ const std::vector<TextureInfo> FillExtrusionPatternShaderInfo::textures = {
     TextureInfo{"u_image", idFillExtrusionImageTexture},
 };
 
+// Shadow caster (depth pack) — reuses the FE vertex attributes (pos/normal_ed/base/height).
+using ShadowDepthShaderInfo = ShaderInfo<BuiltIn::ShadowDepthShader, gfx::Backend::Type::OpenGL>;
+
+const std::vector<UniformBlockInfo> ShadowDepthShaderInfo::uniformBlocks = {
+    UniformBlockInfo{"ShadowDepthDrawableUBO", idShadowDepthDrawableUBO},
+};
+const std::vector<AttributeInfo> ShadowDepthShaderInfo::attributes = {
+    AttributeInfo{"a_pos", idFillExtrusionPosVertexAttribute},
+    AttributeInfo{"a_normal_ed", idFillExtrusionNormalEdVertexAttribute},
+    AttributeInfo{"a_base", idFillExtrusionBaseVertexAttribute},
+    AttributeInfo{"a_height", idFillExtrusionHeightVertexAttribute},
+};
+const std::vector<TextureInfo> ShadowDepthShaderInfo::textures = {};
+
+// Shadow-receiving fill-extrusion — reuses the FE vertex attributes + binds one map per cascade.
+using FillExtrusionShadowShaderInfo = ShaderInfo<BuiltIn::FillExtrusionShadowShader, gfx::Backend::Type::OpenGL>;
+
+const std::vector<UniformBlockInfo> FillExtrusionShadowShaderInfo::uniformBlocks = {
+    UniformBlockInfo{"FillExtrusionShadowDrawableUBO", idFillExtrusionShadowDrawableUBO},
+    UniformBlockInfo{"FillExtrusionShadowPropsUBO", idFillExtrusionShadowPropsUBO},
+};
+const std::vector<AttributeInfo> FillExtrusionShadowShaderInfo::attributes = {
+    AttributeInfo{"a_pos", idFillExtrusionPosVertexAttribute},
+    AttributeInfo{"a_normal_ed", idFillExtrusionNormalEdVertexAttribute},
+    AttributeInfo{"a_base", idFillExtrusionBaseVertexAttribute},
+    AttributeInfo{"a_height", idFillExtrusionHeightVertexAttribute},
+    AttributeInfo{"a_color", idFillExtrusionColorVertexAttribute},
+};
+const std::vector<TextureInfo> FillExtrusionShadowShaderInfo::textures = {
+    TextureInfo{"u_shadowmap0", idFillExtrusionShadowTexture0},
+    TextureInfo{"u_shadowmap1", idFillExtrusionShadowTexture1},
+    TextureInfo{"u_shadowmap2", idFillExtrusionShadowTexture2},
+    TextureInfo{"u_shadowmap3", idFillExtrusionShadowTexture3},
+};
+
+// Ground cast-shadow receiver.
+using GroundShadowShaderInfo = ShaderInfo<BuiltIn::GroundShadowShader, gfx::Backend::Type::OpenGL>;
+
+const std::vector<UniformBlockInfo> GroundShadowShaderInfo::uniformBlocks = {
+    UniformBlockInfo{"GroundShadowDrawableUBO", idGroundShadowDrawableUBO},
+    UniformBlockInfo{"GroundShadowPropsUBO", idGroundShadowPropsUBO},
+};
+const std::vector<AttributeInfo> GroundShadowShaderInfo::attributes = {
+    AttributeInfo{"a_pos", idGroundShadowPosVertexAttribute},
+};
+const std::vector<TextureInfo> GroundShadowShaderInfo::textures = {
+    TextureInfo{"u_shadowmap0", idGroundShadowTexture0},
+    TextureInfo{"u_shadowmap1", idGroundShadowTexture1},
+    TextureInfo{"u_shadowmap2", idGroundShadowTexture2},
+    TextureInfo{"u_shadowmap3", idGroundShadowTexture3},
+};
+
 // Heatmap
 using HeatmapShaderInfo = ShaderInfo<BuiltIn::HeatmapShader, gfx::Backend::Type::OpenGL>;
 

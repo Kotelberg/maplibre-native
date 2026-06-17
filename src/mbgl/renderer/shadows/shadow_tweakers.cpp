@@ -5,6 +5,7 @@
 #include <mbgl/renderer/shadows/shadow_pass.hpp>
 #include <mbgl/shaders/shadow_depth_ubo.hpp>
 #include <mbgl/shaders/fill_extrusion_shadow_ubo.hpp>
+#include <mbgl/shaders/fill_extrusion_layer_ubo.hpp>
 #include <mbgl/shaders/ground_shadow_ubo.hpp>
 #include <mbgl/shaders/shader_defines.hpp>
 #include <mbgl/gfx/context.hpp>
@@ -415,14 +416,50 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         // bounded light frustum (no coverage), so there is nothing to fade by pitch.
         .shadow_intensity = baseIntensity,
         .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
+        // BUILDING receiver bias stays 0.0015 (the shipped value): buildings CAST and so self-shadow —
+        // 0 here reintroduces horizontal roof acne stripes under a grazing sun (verified). The GROUND
+        // receiver (flat, never casts) keeps bias 0 so wall cast shadows reattach to the base.
         .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
         // Slope-scaled bias (×(1−n·L)): large on away/grazing faces (which the directional lighting
         // already darkens) so the building never self-shadows them into acne stripes (#8), ~0 on
         // sun-facing faces so a neighbour's cast shadow still lands. Headless-verified: kills the
         // wall/roof acne (HF energy 16/42→0) while inter-building + ground shadows survive.
         .shadow_slope_bias = envFloat("MLN_SHADOW_SLOPE_BIAS", 0.05f)};
+#if !MLN_RENDER_BACKEND_VULKAN
+    // Metal/GL: props is layer-constant and reaches the shader via a flat buffer index (Metal) or a
+    // named UBO block (GL), so upload it ONCE per layer (cheap; the shipped behavior).
     auto& layerUniforms = layerGroup.mutableUniformBuffers();
     layerUniforms.createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
+
+    // On the INSTANCED path the building WALLS are a separate drawable drawn by the PLAIN
+    // FillExtrusionInstancedShader (the receiver only draws the roof; walls don't show cast shadows —
+    // wallness suppresses them — so they intentionally stay on the plain shader). That shader reads the
+    // STANDARD FillExtrusionPropsUBO + DrawableUBO, normally provided by FillExtrusionLayerTweaker, which
+    // THIS tweaker replaces whenever shadows are on. Without them the walls read all-zero props (opacity 0
+    // → invisible). Both are written PER-DRAWABLE on the wall drawables in the visitor below — NOT at the
+    // layer level: the shadow RECEIVER's vertex buffers begin at buffer index `fillExtrusionShadowUBOCount`,
+    // which aliases idFillExtrusionPropsUBO, so the roof (drawn first) binds its pos buffer over a
+    // layer-bound props; only re-binding props in the wall's own draw (after the roof) survives.
+    const auto& crossfade = static_cast<const FillExtrusionLayerProperties&>(*evaluatedProperties).crossfade;
+    const FillExtrusionPropsUBO regularPropsUBO = {
+        .color = evaluated.get<FillExtrusionColor>().constantOr(Color::black()),
+        .light_color = lightColor,
+        .pad1 = 0,
+        .light_position = lightPos,
+        .base = base,
+        .height = evaluated.get<FillExtrusionHeight>().constantOr(0.0f),
+        .light_intensity = FillExtrusionBucket::lightIntensity(parameters.evaluatedLight),
+        .vertical_gradient = evaluated.get<FillExtrusionVerticalGradient>() ? 1.0f : 0.0f,
+        .opacity = evaluated.get<FillExtrusionOpacity>(),
+        .fade = crossfade.t,
+        .from_scale = crossfade.fromScale,
+        .to_scale = crossfade.toScale,
+        .pad2 = 0};
+#endif
+    // On Vulkan the receiver declares props at the DRAWABLE descriptor set, so a layer-group write
+    // would land in an unbound slot (idFillExtrusionShadowPropsUBO is a drawable-range id) and the
+    // receiver would read an all-zero buffer (opacity/color/light = 0 -> invisible buildings). It must
+    // be uploaded per-drawable instead (see the gated write in the visitor below).
 
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         const auto& tileID = drawable.getTileID();
@@ -451,14 +488,54 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
             lightMatrices[c] = util::cast<float>(lm);
         }
 
+        const float baseT = std::get<0>(binders->get<FillExtrusionBase>()->interpolationFactor(zoom));
+        const float heightT = std::get<0>(binders->get<FillExtrusionHeight>()->interpolationFactor(zoom));
+        const float colorT = std::get<0>(binders->get<FillExtrusionColor>()->interpolationFactor(zoom));
+
+#if !MLN_RENDER_BACKEND_VULKAN
+        if (drawable.getInstanceAttributes()) {
+            // INSTANCED WALL drawable (plain FillExtrusionInstancedShader): it reads the REGULAR
+            // FillExtrusionDrawableUBO (matrix + base_t/height_t/color_t) at idFillExtrusionDrawableUBO,
+            // NOT the shadow drawable UBO. That slot ALIASES idFillExtrusionShadowDrawableUBO, so write
+            // the regular layout here per-drawable (the receiver roof, below, writes the shadow layout to
+            // the same slot — per-drawable, so they don't collide). uboIndex 0: single per-drawable UBO.
+            const FillExtrusionDrawableUBO wallUBO = {
+                .matrix = util::cast<float>(matrix),
+                .pixel_coord_upper = {0, 0},
+                .pixel_coord_lower = {0, 0},
+                .height_factor = 0,
+                .tile_ratio = 0,
+                .base_t = baseT,
+                .height_t = heightT,
+                .color_t = colorT,
+                .pattern_from_t = 0,
+                .pattern_to_t = 0,
+                .pad1 = 0};
+            drawable.setUBOIndex(0);
+            drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionDrawableUBO, &wallUBO, context);
+            // PER-DRAWABLE props (NOT layer-level): the shadow RECEIVER roof draws before the wall and
+            // binds its own pos vertex buffer at buffer index `fillExtrusionShadowUBOCount` (5), which
+            // ALIASES idFillExtrusionPropsUBO (5) — clobbering the layer-bound props. Re-binding props
+            // in the wall's own per-drawable set restores it for the wall's draw (which happens after the
+            // roof's). Safe only on walls: the roof's slot 5 IS its vertex buffer, so writing props there
+            // would corrupt its geometry (the wall binds pos at slot 6, so slot 5 is free for props).
+            drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionPropsUBO, &regularPropsUBO, context);
+            return;
+        }
+#endif
+
         const FillExtrusionShadowDrawableUBO ubo = {
             .matrix = util::cast<float>(matrix),
             .light_matrix = lightMatrices,
-            .base_t = std::get<0>(binders->get<FillExtrusionBase>()->interpolationFactor(zoom)),
-            .height_t = std::get<0>(binders->get<FillExtrusionHeight>()->interpolationFactor(zoom)),
-            .color_t = std::get<0>(binders->get<FillExtrusionColor>()->interpolationFactor(zoom)),
+            .base_t = baseT,
+            .height_t = heightT,
+            .color_t = colorT,
             .cascade_count = static_cast<std::int32_t>(cascadeCount)};
         drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionShadowDrawableUBO, &ubo, context);
+#if MLN_RENDER_BACKEND_VULKAN
+        // Vulkan-only: props lives in the drawable descriptor set (see the comment above the visitor).
+        drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
+#endif
     });
 }
 
@@ -483,7 +560,7 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
                                            // height zoom ramp (#9) so flat low-zoom footprints cast none.
                                            .shadow_intensity = groundIntensity,
                                            .shadow_texel_size = 1.0f / static_cast<float>(mapSize),
-                                           .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0015f),
+                                           .shadow_bias = envFloat("MLN_SHADOW_BIAS", 0.0f),
                                            // UV-radial frustum-rim fade: softens the hard edge of the
                                            // bounded light frustum (a fixed WORLD radius around the
                                            // look-at point) so coverage tapers out in world space, not

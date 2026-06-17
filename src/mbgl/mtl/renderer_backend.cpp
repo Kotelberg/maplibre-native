@@ -132,6 +132,9 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
                   shaders::BuiltIn::HeatmapTextureShader,
                   shaders::BuiltIn::ModelBloomShader,
                   shaders::BuiltIn::ShadowDepthShader,
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+                  shaders::BuiltIn::ShadowDepthInstancedShader,
+#endif
                   shaders::BuiltIn::FillExtrusionShadowShader,
                   shaders::BuiltIn::GroundShadowShader,
                   shaders::BuiltIn::HillshadeShader,

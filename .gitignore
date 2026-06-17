@@ -61,3 +61,7 @@ out.png
 **/target/
 **/*.rs.bk
 **/*.profraw
+
+# Built fork framework — local build artifact (rebuild via bazel //platform/ios:MapLibre.dynamic)
+/dist-spm/MapLibre.xcframework/
+/dist-spm/*.xcframework.zip

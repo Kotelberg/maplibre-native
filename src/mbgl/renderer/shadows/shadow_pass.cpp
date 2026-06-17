@@ -32,7 +32,23 @@ uint32_t shadowMapSize() {
 uint32_t shadowCascadeCount() {
     static const uint32_t count = [] {
         const char* v = std::getenv("MLN_SHADOW_CASCADE_COUNT");
-        const uint32_t n = v ? static_cast<uint32_t>(std::atoi(v)) : 2u;
+        // Default: 2 cascades on Metal (iOS, shipped + verified). On OpenGL AND Vulkan (Android)
+        // default to 1: the 2-cascade NEAR cascade exhibits a localized over-shadow latch on building
+        // roofs after a zoom-OUT round-trip (tiles that went through the lower zoom render their roofs
+        // dark; fresh/panned-to tiles are clean). Proven receiver-side (shadow maps byte-identical
+        // baseline vs after; light matrix logged identical), reproduces on BOTH Android backends, and
+        // NOT fixed by rebuilding casters or all drawables — a state-level issue in the multi-shadow-
+        // texture path needing GPU frame capture to pin (see project_maplibre_shadows_atmosphere notes,
+        // item 7f). A single (far) cascade is 100% clean across the round-trip; the only cost is coarser
+        // near-field shadow resolution. It is also ~2x cheaper (one caster pass + one receiver sample
+        // instead of two) — the headline perf lever for the dense-building Android case. Env
+        // MLN_SHADOW_CASCADE_COUNT overrides on either backend (set =2 to test the multi-cascade bug).
+#if MLN_RENDER_BACKEND_OPENGL || MLN_RENDER_BACKEND_VULKAN
+        const uint32_t backendDefault = 1u;
+#else
+        const uint32_t backendDefault = 2u;
+#endif
+        const uint32_t n = v ? static_cast<uint32_t>(std::atoi(v)) : backendDefault;
         // Clamp to [1, kMaxShadowCascades]: 1 = legacy single map; the UBO/shader arrays are sized
         // to kMaxShadowCascades, so a larger value would overrun them.
         return n < 1u ? 1u : (n > kMaxShadowCascades ? kMaxShadowCascades : n);

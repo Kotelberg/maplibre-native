@@ -159,6 +159,13 @@
         "uses_ubos": true
     },
     {
+        "name": "ShadowDepthInstancedShader",
+        "header": "shadow_depth_instanced",
+        "glsl_vert": "_empty.glsl",
+        "glsl_frag": "_empty.glsl",
+        "uses_ubos": true
+    },
+    {
         "name": "FillExtrusionShadowShader",
         "header": "fill_extrusion_shadow",
         "glsl_vert": "_empty.glsl",
