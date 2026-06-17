@@ -262,6 +262,55 @@ void FillExtrusionBucket::addFeature(const GeometryTileFeature& feature,
 
                     edgeDistance += dist;
                 }
+#elif MLN_GL_FE_INSTANCING
+                // GL edge-indexed instancing: one roof vertex (for the earcut roof) + one wall
+                // instance per outline vertex describing the edge ring[i] -> ring[i+1]. The walls
+                // are drawn by the instanced shader from the static unit quad, so no explicit wall
+                // vertices/triangles are emitted here. glEdgeInstances stays in lockstep with the
+                // roof verts (1:1), so the data-driven paint binders index instances correctly.
+                vertices.emplace_back(
+                    FillExtrusionBucket::layoutVertex(p1, 0, 0, 1, 1, static_cast<uint16_t>(edgeDistance)));
+                flatIndices.emplace_back(triangleIndex);
+                triangleIndex++;
+
+                {
+                    const auto packN = [](double v) { return static_cast<int16_t>(std::floor(v * 16384.0)); };
+                    if (i + 1 < nVertices) {
+                        const auto& p2 = ring[i + 1];
+                        const std::size_t e = i; // edge ring[i] -> ring[i+1]
+                        const Point<double> perp = edgeNrm[e];
+                        const std::size_t prevE = (e == 0) ? nEdges - 1 : e - 1;
+                        const std::size_t nextE = (e + 1 >= nEdges) ? 0 : e + 1;
+                        const bool hasPrev = (e != 0) || ringClosed;
+                        const bool hasNext = (e + 1 < nEdges) || ringClosed;
+                        // Smoothed normal at each endpoint (blended across gentle turns, faceted at
+                        // corners) — matches the non-instanced #else path's nP2 (start) / nP1 (end).
+                        const Point<double> n0 = blendNormal(perp, prevE, hasPrev); // at ring[i]   (start)
+                        const Point<double> n1 = blendNormal(perp, nextE, hasNext); // at ring[i+1] (end)
+
+                        const auto d1 = convertPoint<double>(p1);
+                        const auto d2 = convertPoint<double>(p2);
+                        const size_t dist = util::dist<int16_t>(d1, d2);
+                        if (edgeDistance + dist > static_cast<size_t>(std::numeric_limits<int16_t>::max())) {
+                            edgeDistance = 0;
+                        }
+                        glEdgeInstances.emplace_back(GLEdgeInstanceVertex{{p1.x, p1.y},
+                                                                         {p2.x, p2.y},
+                                                                         {packN(n0.x), packN(n0.y), 0},
+                                                                         {packN(n1.x), packN(n1.y), 0},
+                                                                         {static_cast<uint16_t>(edgeDistance)}});
+                        edgeDistance += dist;
+                    } else {
+                        // Last outline vertex of the ring: no outgoing edge. Emit a degenerate
+                        // instance (pos1 == pos) so its wall has zero area and rasterizes nothing,
+                        // while keeping the 1:1 alignment with the roof verts / paint binders.
+                        glEdgeInstances.emplace_back(GLEdgeInstanceVertex{{p1.x, p1.y},
+                                                                         {p1.x, p1.y},
+                                                                         {0, 0, 0},
+                                                                         {0, 0, 0},
+                                                                         {static_cast<uint16_t>(edgeDistance)}});
+                    }
+                }
 #else
                 vertices.emplace_back(
                     FillExtrusionBucket::layoutVertex(p1, 0, 0, 1, 1, static_cast<uint16_t>(edgeDistance)));

@@ -867,6 +867,13 @@ git commit -m "docs: GL FE-instancing M1 on-device parity + perf results"
 - **Cadence sub-track (60fps):** separate Plan 2 (render-thread scheduling) — see spec §4.
 - **Vulkan backend, iOS/Metal changes, upstream PRs.**
 
+## Execution deviations (recorded during inline execution 2026-06-18)
+
+- **Pre-req fix (commit a98293e6):** `test/gl/gl_functions.test.cpp` asserted `glInvalidate{Sub,}Framebuffer != nullptr` unconditionally, but those are defined only for iOS/sim on Apple (`platform/darwin/src/gl_functions.cpp`); macOS desktop GL omits them, so `mbgl-test-runner` would not link in `build-gl-check`. Guarded the asserts to match the production platform guard. This unblocks the entire headless TDD surface.
+- **Task 2:** `vertex_array.cpp` needed NO change — the divisor rides through `AttributeBinding` into `VertexAttribute::Set` (the field + the `value.cpp` call are sufficient). The plan over-listed it.
+- **Task 3 DATA MODEL — adopt Metal's "one instance per outline vertex" instead of "one instance per edge + separate edge-aligned paint stream":** Reading `render_fill_extrusion_layer.cpp`'s Metal path showed the walls are drawn with **instance count == `bucket.sharedVertices.elements()`** and base/height/color bound via `instanceAttrs->readDataDrivenPaintProperties(binders, …)`, whose vectors are sized to `vertices.elements()` — so paint aligns 1:1 with instances **for free**. Mirroring that (one `glEdgeInstance` per outline/roof vertex, in lockstep with `vertices`) lets the GL path reuse `readDataDrivenPaintProperties` verbatim — NO separate edge-aligned paint stream, eliminating the review-P1 misalignment risk entirely. The only GLES-specific addition is that each instance carries `pos1`/`normal0`/`normal1` precomputed (GLES can't fetch `outline[instanceID+1]`). The last vertex of each ring emits a **degenerate** instance (`pos1 = pos0` → zero-area wall → no fragments), so no discard attribute is needed. `glEdgeInstances` therefore has exactly one entry per `vertices` entry.
+- **Normal pack factor reconciled to 2^14 (16384):** the non-instanced `layoutVertex` packs normals at `ny*16384` and the shader divides by `16384`. The bucket packs `normal0`/`normal1` at `floor(n*16384)` and the GL instanced shader divides by `16384.0` — exact magnitude parity (resolves the previously-flagged 2^13-vs-2^14 open detail). The static-quad `a_pos.y` carries base/top, so no LSB is stolen for `t`.
+
 ## Self-Review notes
 
 - Spec coverage: Layer 0 → Task 0; Layer 1 → Tasks 2,4,5; Layer 2 → Tasks 6,7,8,11; Layer 3 → Tasks 3,10; Layer 4 gate → Task 1 (used by 3,8,10,11); verification → Tasks 9,12. Cadence is intentionally Plan 2.

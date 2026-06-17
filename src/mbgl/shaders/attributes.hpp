@@ -29,6 +29,17 @@ MBGL_DEFINE_ATTRIBUTE(uint16_t, 2, ed_discard);
 MBGL_DEFINE_ATTRIBUTE(int16_t, 4, normal_ed);
 #endif
 
+#if MLN_GL_FE_INSTANCING
+// GL edge-indexed fill-extrusion instance attributes (Plan 1). One instance per outline
+// vertex carries the current footprint endpoint (pos), the NEXT endpoint (pos1), and the
+// smoothed wall normal at each endpoint (normal0/normal1) — GLES 3.0 cannot fetch the
+// neighbor by gl_InstanceID, so they are precomputed. edgedistance wraps fill patterns.
+MBGL_DEFINE_ATTRIBUTE(int16_t, 2, pos1);
+MBGL_DEFINE_ATTRIBUTE(int16_t, 3, normal0);
+MBGL_DEFINE_ATTRIBUTE(int16_t, 3, normal1);
+MBGL_DEFINE_ATTRIBUTE(uint16_t, 1, edgedistance);
+#endif
+
 template <typename T, std::size_t N>
 struct data {
     using Type = gfx::AttributeType<T, N>;

@@ -23,6 +23,19 @@ using FillExtrusionLayoutVertex = gfx::Vertex<TypeList<attributes::pos, attribut
 using FillExtrusionLayoutVertex = gfx::Vertex<TypeList<attributes::pos, attributes::normal_ed>>;
 #endif
 
+#if MLN_GL_FE_INSTANCING
+// One per outline vertex (in lockstep with FillExtrusionLayoutVertex roof verts), describing
+// the wall edge starting at this vertex: pos = this endpoint, pos1 = next endpoint, normal0/1 =
+// smoothed wall normals at each endpoint (packed * 2^14). The render layer binds this with a
+// divisor of 1; the static unit quad selects endpoint/base/top in the shader. The last vertex
+// of each ring is emitted degenerate (pos1 == pos) so its wall has zero area and draws nothing.
+using GLEdgeInstanceVertex = gfx::Vertex<TypeList<attributes::pos,
+                                                  attributes::pos1,
+                                                  attributes::normal0,
+                                                  attributes::normal1,
+                                                  attributes::edgedistance>>;
+#endif
+
 class FillExtrusionBucket final : public Bucket {
 public:
     ~FillExtrusionBucket() override;
@@ -88,6 +101,12 @@ public:
     TriangleIndexVector& triangles = *sharedTriangles;
 
     SegmentVector triangleSegments;
+
+#if MLN_GL_FE_INSTANCING
+    using GLEdgeInstanceVector = gfx::VertexVector<GLEdgeInstanceVertex>;
+    const std::shared_ptr<GLEdgeInstanceVector> sharedGLEdgeInstances = std::make_shared<GLEdgeInstanceVector>();
+    GLEdgeInstanceVector& glEdgeInstances = *sharedGLEdgeInstances;
+#endif
 
     std::unordered_map<std::string, FillExtrusionBinders> paintPropertyBinders;
 };
