@@ -82,10 +82,24 @@ already captured → GL receiver samples an empty texture → no cast shadows. T
 Single-cascade GL shadows restored — pixel-diff ≈ working `4758809`, far from broken. Headless GL
 build + 10 GL unit tests still green.
 
-**2-pass / multi-cascade enabled on GL (commit d48e6fe):** with the orphaning fixed, the multi-cascade
-path works on OpenGL. Defaulted OpenGL to 2 cascades like Metal; the existing pitch gate
-(`activeShadowCascadeCount`: 1 flat / 2 when pitch ≥ 20°) gives the crisp near cascade only when
-buildings are viewed at an angle — matching Metal's "second pass only when pitched." **On-device
-(Honor, tilt 60°): 2-cascade renders correctly AND the zoom-out round-trip shows no over-shadow latch**
-(before/after pixel diff = 3696, camera noise only). Vulkan left single-cascade (separate issues).
-QA screenshots 04–07 in `~/Work/maplibre-model-layer-qa/gl-instancing/`.
+**2-pass / multi-cascade on GL — renders, but a cold-start bug remains (commits d48e6fe, efd5532a8):**
+with the orphaning fixed, the multi-cascade path RENDERS correctly on OpenGL, and the persistent
+zoom-round-trip *latch* is gone (the idempotent-create fix cured it: WARM before/after pixel diff =
+3696, camera noise only). The pitch gate (`activeShadowCascadeCount`: 1 flat / 2 when pitch ≥ 20°)
+gives the crisp near cascade only when buildings are viewed at an angle — matching Metal's "second
+pass only when pitched."
+
+**But a COLD-START over-shadow survives, 2-cascade only.** Repro (Honor, tilt 60°): kill the app →
+cold-launch ShadowDemoActivity → zoom out ~2 steps → buildings are over-darkened (cold mean 0.889 vs
+warm 0.904 at the same camera). It clears after one zoom in/out cycle. This is NOT the latch (that's
+fixed) and NOT a caster/receiver height desync (both use `interpolationFactor(zoom)` per frame); it
+is a multi-shadow-texture **state-init** issue — the GPU-frame-capture class flagged in
+`project_maplibre_shadows_atmosphere` item 7f. Single-cascade is 100% clean across cold start +
+round-trip.
+
+**Decision: GL ships single-cascade by default** (commit efd5532a8 reverts the d48e6fe default from
+2→1). Single is correct, blackout-free, and ~2× cheaper (one caster pass + one receiver sample). The
+2-cascade path stays compiled and reachable via `MLN_SHADOW_CASCADE_COUNT=2` for the continued
+cold-start hunt (needs RenderDoc/GPU capture on device to pin). Metal keeps its shipped 2-cascade
+default; Vulkan stays single (separate issues). QA screenshots 04–07 in
+`~/Work/maplibre-model-layer-qa/gl-instancing/`.
