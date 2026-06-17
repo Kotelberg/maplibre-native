@@ -82,6 +82,14 @@ public:
 
     void draw(const gfx::DrawMode&, std::size_t indexOffset, std::size_t indexLength);
 
+    // Instanced draw: replays the index range `instanceCount` times (glDrawElementsInstanced).
+    // Per-instance attributes (divisor 1) advance once per replay. Used by the GL fill-extrusion
+    // instancing path (MLN_GL_FE_INSTANCING).
+    void drawInstanced(const gfx::DrawMode&,
+                       std::size_t indexOffset,
+                       std::size_t indexLength,
+                       std::size_t instanceCount);
+
     void finish();
 
     std::shared_ptr<gl::Fence> getCurrentFrameFence() const;

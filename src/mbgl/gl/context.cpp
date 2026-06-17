@@ -798,6 +798,33 @@ void Context::draw(const gfx::DrawMode& drawMode, std::size_t indexOffset, std::
     stats.totalDrawCalls++;
 }
 
+void Context::drawInstanced(const gfx::DrawMode& drawMode,
+                            std::size_t indexOffset,
+                            std::size_t indexLength,
+                            std::size_t instanceCount) {
+    MLN_TRACE_FUNC();
+    MLN_TRACE_FUNC_GL();
+
+    switch (drawMode.type) {
+        case gfx::DrawModeType::Lines:
+        case gfx::DrawModeType::LineLoop:
+        case gfx::DrawModeType::LineStrip:
+            lineWidth = drawMode.size;
+            break;
+        default:
+            break;
+    }
+
+    MBGL_CHECK_ERROR(glDrawElementsInstanced(Enum<gfx::DrawModeType>::to(drawMode.type),
+                                             static_cast<GLsizei>(indexLength),
+                                             GL_UNSIGNED_SHORT,
+                                             reinterpret_cast<GLvoid*>(sizeof(uint16_t) * indexOffset),
+                                             static_cast<GLsizei>(instanceCount)));
+
+    stats.numDrawCalls++;
+    stats.totalDrawCalls++;
+}
+
 void Context::performCleanup() {
     MLN_TRACE_FUNC();
 #ifndef NDEBUG
