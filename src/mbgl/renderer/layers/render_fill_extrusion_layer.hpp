@@ -99,7 +99,7 @@ private:
     LayerTweakerPtr groundShadowTweaker;
 #endif
 
-#if MLN_USE_FILL_EXTRUSION_INSTANCING
+#if MLN_USE_FILL_EXTRUSION_INSTANCING || MLN_GL_FE_INSTANCING
     gfx::ShaderGroupPtr fillExtrusionInstancedGroup;
     gfx::ShaderGroupPtr fillExtrusionPatternInstancedGroup;
 

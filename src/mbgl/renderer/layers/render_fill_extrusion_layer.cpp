@@ -355,7 +355,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
 
     tileLayerGroup->setStencilTiles(renderTiles);
 
-#if MLN_USE_FILL_EXTRUSION_INSTANCING
+#if MLN_USE_FILL_EXTRUSION_INSTANCING || MLN_GL_FE_INSTANCING
     if (!fillExtrusionInstancedGroup) {
         fillExtrusionInstancedGroup = shaders.getShaderGroup("FillExtrusionInstancedShader");
     }
@@ -495,7 +495,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             continue;
         }
 
-#if MLN_USE_FILL_EXTRUSION_INSTANCING
+#if MLN_USE_FILL_EXTRUSION_INSTANCING || MLN_GL_FE_INSTANCING
         if (instancedDepthBuilder) {
             instancedDepthBuilder->clearTweakers();
         }
@@ -506,6 +506,9 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         instancePropertiesAsUniforms.first.clear();
         instancePropertiesAsUniforms.second.clear();
 
+        // Read the data-driven base/height/color (and pattern) as per-instance attributes. MUST
+        // happen before any builder flush() below — flush clears the binder vertex data, after which
+        // a later read would mark these as uniforms (zero-height walls). Mirrors the Metal ordering.
         auto instanceAttrs = context.createVertexAttributeArray();
         instanceAttrs->readDataDrivenPaintProperties<FillExtrusionBase,
                                                      FillExtrusionColor,
@@ -513,6 +516,48 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                                                      FillExtrusionPattern>(
             binders, evaluated, instancePropertiesAsUniforms, idFillExtrusionBaseVertexAttribute);
 
+#if MLN_GL_FE_INSTANCING
+        // GL edge-indexed geometry: one instance per outline vertex carries both endpoints + the
+        // smoothed wall normal at each (GLES can't fetch outline[gl_InstanceID + 1]). Bound from
+        // bucket.sharedGLEdgeInstances; DrawableGL flags these divisor 1.
+        if (const auto& a = instanceAttrs->set(idFillExtrusionOutlinePosAttribute)) {
+            a->setSharedRawData(bucket.sharedGLEdgeInstances,
+                                offsetof(GLEdgeInstanceVertex, a1) /*pos0*/,
+                                /*vertexOffset=*/0,
+                                sizeof(GLEdgeInstanceVertex),
+                                gfx::AttributeDataType::Short2);
+        }
+        if (const auto& a = instanceAttrs->set(idFillExtrusionPos1Attribute)) {
+            a->setSharedRawData(bucket.sharedGLEdgeInstances,
+                                offsetof(GLEdgeInstanceVertex, a2) /*pos1*/,
+                                /*vertexOffset=*/0,
+                                sizeof(GLEdgeInstanceVertex),
+                                gfx::AttributeDataType::Short2);
+        }
+        if (const auto& a = instanceAttrs->set(idFillExtrusionNormal0Attribute)) {
+            a->setSharedRawData(bucket.sharedGLEdgeInstances,
+                                offsetof(GLEdgeInstanceVertex, a3) /*normal0*/,
+                                /*vertexOffset=*/0,
+                                sizeof(GLEdgeInstanceVertex),
+                                gfx::AttributeDataType::Short3);
+        }
+        if (const auto& a = instanceAttrs->set(idFillExtrusionNormal1Attribute)) {
+            a->setSharedRawData(bucket.sharedGLEdgeInstances,
+                                offsetof(GLEdgeInstanceVertex, a4) /*normal1*/,
+                                /*vertexOffset=*/0,
+                                sizeof(GLEdgeInstanceVertex),
+                                gfx::AttributeDataType::Short3);
+        }
+        if (const auto& a = instanceAttrs->set(idFillExtrusionEdgeDistanceAttribute)) {
+            a->setSharedRawData(bucket.sharedGLEdgeInstances,
+                                offsetof(GLEdgeInstanceVertex, a5) /*edgeDistance*/,
+                                /*vertexOffset=*/0,
+                                sizeof(GLEdgeInstanceVertex),
+                                gfx::AttributeDataType::UShort);
+        }
+#endif
+
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
 #if MLN_DRAWABLE_SHADOWS
         // Pre-build the instanced WALL caster's attributes HERE, before the color/roof-caster builders
         // flush() below — flush uploads + clears the binder vertex data, after which
@@ -582,7 +627,8 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                                        gfx::AttributeDataType::UShort2);
             }
         }
-#endif
+#endif // MLN_DRAWABLE_SHADOWS
+#endif // MLN_USE_FILL_EXTRUSION_INSTANCING (shadow caster prebuild is Metal-only)
 
         const auto instancedShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
             instancedShaderGroup->getOrCreateShader(context, instancePropertiesAsUniforms));
@@ -845,7 +891,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         }
 #endif
 
-#if MLN_USE_FILL_EXTRUSION_INSTANCING
+#if MLN_USE_FILL_EXTRUSION_INSTANCING || MLN_GL_FE_INSTANCING
         if (doDepthPass && !instancedDepthBuilder) {
             if (auto builder = context.createDrawableBuilder(layerPrefix + "depthInstanced")) {
                 builder->setShader(instancedShader);
@@ -884,6 +930,10 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                                    sizeof(FillExtrusionStaticVertex),
                                    gfx::AttributeDataType::Short2);
         }
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+        // Metal indexes the outline buffer by gl_InstanceID in-shader, so it binds the raw outline
+        // pos + ed_discard here. The GL path already bound its edge-indexed geometry (pos0/pos1/
+        // normal0/normal1/edgedistance) onto instanceAttrs in the early block above.
         if (const auto& attr = instanceAttrs->set(idFillExtrusionOutlinePosAttribute)) {
             attr->setSharedRawData(bucket.sharedVertices,
                                    offsetof(FillExtrusionLayoutVertex, a1),
@@ -898,6 +948,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                                    sizeof(FillExtrusionLayoutVertex),
                                    gfx::AttributeDataType::UShort2);
         }
+#endif
 
         if (doDepthPass) {
             instancedDepthBuilder->setRawVertices({}, instanceVertexCount, gfx::AttributeDataType::Short2);
@@ -937,13 +988,14 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             finishInstance(*instancedColorBuilder);
         }
 
-#if MLN_DRAWABLE_SHADOWS
-        // Instanced WALL caster: the roof-only sharedTriangles caster (above) leaves ground shadows
-        // detached from the base on the instanced path, because the walls never enter the shadow map.
-        // Cast the walls too — same per-edge OutlineInstance geometry as the visible instanced walls, via
-        // the ShadowDepthInstancedShader (light-space depth). One drawable per cascade (each gets that
+#if MLN_USE_FILL_EXTRUSION_INSTANCING && MLN_DRAWABLE_SHADOWS
+        // Instanced WALL caster (Metal): the roof-only sharedTriangles caster (above) leaves ground
+        // shadows detached from the base on the instanced path, because the walls never enter the shadow
+        // map. Cast the walls too — same per-edge OutlineInstance geometry as the visible instanced walls,
+        // via the ShadowDepthInstancedShader (light-space depth). One drawable per cascade (each gets that
         // cascade's light_matrix from shadowCasterTweakers[c]). Depth-only, so cull is disabled (both wall
         // faces occlude). Together roof+wall casters fill the full building volume → shadows reattach.
+        // (The GL instanced wall caster is wired in Task 11.)
         if (buildCasters && useShadows && shadowDepthInstancedGroup && casterInstanceAttrs && casterStaticVertices &&
             !shadowCasterGroups.empty() && bucket.sharedVertices->elements() && staticDataIndices->elements()) {
             if (const auto instCasterShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
