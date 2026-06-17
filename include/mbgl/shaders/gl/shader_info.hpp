@@ -27,6 +27,20 @@ struct TextureInfo {
     std::size_t id;
 };
 
+// Per-instance attribute metadata (glVertexAttribDivisor 1) for GL instanced shaders.
+// Empty by default; specialized for the fill-extrusion instancing shaders. The GL shader
+// group passes this to ShaderProgramGL::create() so it can classify which attributes the
+// shader advances per instance vs per vertex.
+template <BuiltIn T>
+inline const std::vector<AttributeInfo>& instanceAttributes() {
+    static const std::vector<AttributeInfo> none;
+    return none;
+}
+template <>
+const std::vector<AttributeInfo>& instanceAttributes<BuiltIn::FillExtrusionInstancedShader>();
+template <>
+const std::vector<AttributeInfo>& instanceAttributes<BuiltIn::FillExtrusionPatternInstancedShader>();
+
 template <BuiltIn T, gfx::Backend::Type>
 struct ShaderInfo;
 
@@ -131,6 +145,20 @@ struct ShaderInfo<BuiltIn::FillExtrusionShader, gfx::Backend::Type::OpenGL> {
 template <>
 struct ShaderInfo<BuiltIn::FillExtrusionPatternShader, gfx::Backend::Type::OpenGL> {
     static const std::vector<AttributeInfo> attributes;
+    static const std::vector<UniformBlockInfo> uniformBlocks;
+    static const std::vector<TextureInfo> textures;
+};
+
+template <>
+struct ShaderInfo<BuiltIn::FillExtrusionInstancedShader, gfx::Backend::Type::OpenGL> {
+    static const std::vector<AttributeInfo> attributes; // combined, location-indexed (vertex + instance)
+    static const std::vector<UniformBlockInfo> uniformBlocks;
+    static const std::vector<TextureInfo> textures;
+};
+
+template <>
+struct ShaderInfo<BuiltIn::FillExtrusionPatternInstancedShader, gfx::Backend::Type::OpenGL> {
+    static const std::vector<AttributeInfo> attributes; // combined, location-indexed (vertex + instance)
     static const std::vector<UniformBlockInfo> uniformBlocks;
     static const std::vector<TextureInfo> textures;
 };

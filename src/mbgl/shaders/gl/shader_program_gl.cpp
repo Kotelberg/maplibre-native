@@ -8,6 +8,7 @@
 #include <mbgl/shaders/shader_manifest.hpp>
 
 #include <cstring>
+#include <unordered_set>
 #include <utility>
 
 namespace mbgl {
@@ -95,10 +96,21 @@ ShaderProgramGL::ShaderProgramGL(UniqueProgram&& program,
       vertexAttributes(std::move(attributes_)),
       samplerLocations(std::move(samplerLocations_)) {}
 
+ShaderProgramGL::ShaderProgramGL(UniqueProgram&& program,
+                                 VertexAttributeArrayGL&& attributes_,
+                                 VertexAttributeArrayGL&& instanceAttributes_,
+                                 SamplerLocationArray&& samplerLocations_)
+    : ShaderProgramBase(),
+      glProgram(std::move(program)),
+      vertexAttributes(std::move(attributes_)),
+      instanceAttributes(std::move(instanceAttributes_)),
+      samplerLocations(std::move(samplerLocations_)) {}
+
 ShaderProgramGL::ShaderProgramGL(ShaderProgramGL&& other)
     : ShaderProgramBase(std::forward<ShaderProgramBase&&>(other)),
       glProgram(std::move(other.glProgram)),
       vertexAttributes(std::move(other.vertexAttributes)),
+      instanceAttributes(std::move(other.instanceAttributes)),
       samplerLocations(std::move(other.samplerLocations)) {}
 
 std::optional<size_t> ShaderProgramGL::getSamplerLocation(const size_t id) const {
@@ -114,7 +126,8 @@ std::shared_ptr<ShaderProgramGL> ShaderProgramGL::create(
     const std::vector<shaders::AttributeInfo>& attributesInfo,
     const std::string& vertexSource,
     const std::string& fragmentSource,
-    const std::string& additionalDefines) noexcept(false) {
+    const std::string& additionalDefines,
+    const std::vector<shaders::AttributeInfo>& instanceAttributesInfo) noexcept(false) {
     try {
         context.getObserver().onPreCompileShader(
             programParameters.getProgramType(), gfx::Backend::Type::OpenGL, additionalDefines);
@@ -158,7 +171,16 @@ std::shared_ptr<ShaderProgramGL> ShaderProgramGL::create(
             }
         }
 
+        // Attributes whose id appears here advance per instance (divisor 1) and are routed into
+        // the program's separate instanceAttributes set; everything else is a per-vertex attribute.
+        std::unordered_set<std::size_t> instanceIds;
+        instanceIds.reserve(instanceAttributesInfo.size());
+        for (const auto& ia : instanceAttributesInfo) {
+            instanceIds.insert(ia.id);
+        }
+
         VertexAttributeArrayGL attrs;
+        VertexAttributeArrayGL instanceAttrs;
         GLint count = 0;
         GLint maxLength = 0;
         MBGL_CHECK_ERROR(glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &count));
@@ -173,11 +195,19 @@ std::shared_ptr<ShaderProgramGL> ShaderProgramGL::create(
                 continue;
             }
             const GLint location = MBGL_CHECK_ERROR(glGetAttribLocation(program, name.data()));
+            // attributesInfo stays the single location-indexed table (vertex + instance), so the
+            // assert + location resolution are unchanged; only the destination array is selected.
             assert(attributesInfo[location].name == std::string_view(name.data()));
-            addAttr(attrs, attributesInfo[location].id, location, length, size, glType);
+            const auto id = attributesInfo[location].id;
+            if (instanceIds.count(id)) {
+                addAttr(instanceAttrs, id, location, length, size, glType);
+            } else {
+                addAttr(attrs, id, location, length, size, glType);
+            }
         }
 
-        return std::make_shared<ShaderProgramGL>(std::move(program), std::move(attrs), std::move(samplerLocations));
+        return std::make_shared<ShaderProgramGL>(
+            std::move(program), std::move(attrs), std::move(instanceAttrs), std::move(samplerLocations));
     } catch (const std::exception& e) {
         context.getObserver().onShaderCompileFailed(
             programParameters.getProgramType(), gfx::Backend::Type::OpenGL, additionalDefines);

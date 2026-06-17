@@ -3,6 +3,7 @@
 #include <mbgl/gfx/shader_registry.hpp>
 #include <mbgl/gl/context.hpp>
 #include <mbgl/gl/extension.hpp>
+#include <mbgl/shaders/layer_ubo.hpp> // MLN_GL_FE_INSTANCING
 #include <mbgl/shaders/shader_manifest.hpp>
 #include <mbgl/util/instrumentation.hpp>
 #include <mbgl/util/logging.hpp>
@@ -139,6 +140,10 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
                   shaders::BuiltIn::FillOutlineTriangulatedShader,
                   shaders::BuiltIn::FillExtrusionShader,
                   shaders::BuiltIn::FillExtrusionPatternShader,
+#if MLN_GL_FE_INSTANCING
+                  shaders::BuiltIn::FillExtrusionInstancedShader,
+                  shaders::BuiltIn::FillExtrusionPatternInstancedShader,
+#endif
                   shaders::BuiltIn::ShadowDepthShader,
                   shaders::BuiltIn::FillExtrusionShadowShader,
                   shaders::BuiltIn::GroundShadowShader,

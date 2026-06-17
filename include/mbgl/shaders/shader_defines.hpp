@@ -519,6 +519,15 @@ enum {
 #if MLN_USE_FILL_EXTRUSION_INSTANCING
     idFillExtrusionOutlinePosAttribute,
     idFillExtrusionEdDiscardAttribute,
+#elif MLN_GL_FE_INSTANCING
+    // The roof drawable still uses the non-instanced FillExtrusionShader (normal_ed).
+    idFillExtrusionNormalEdVertexAttribute,
+    // GL edge-indexed wall instance attributes (one instance per outline vertex).
+    idFillExtrusionOutlinePosAttribute,   // pos0 — edge start
+    idFillExtrusionPos1Attribute,         // pos1 — edge end
+    idFillExtrusionNormal0Attribute,      // smoothed wall normal at pos0
+    idFillExtrusionNormal1Attribute,      // smoothed wall normal at pos1
+    idFillExtrusionEdgeDistanceAttribute, // edge distance (pattern wrap)
 #else
     idFillExtrusionNormalEdVertexAttribute,
 #endif

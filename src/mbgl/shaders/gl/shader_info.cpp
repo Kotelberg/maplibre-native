@@ -256,6 +256,88 @@ const std::vector<TextureInfo> FillExtrusionPatternShaderInfo::textures = {
     TextureInfo{"u_image", idFillExtrusionImageTexture},
 };
 
+#if MLN_GL_FE_INSTANCING
+// Fill Extrusion Instanced (GL edge-indexed walls). The combined `attributes` list is
+// location-indexed (index == GL layout location); `instanceAttributes()` is the subset that
+// advances per instance (divisor 1) — everything except the static-quad a_pos.
+using FillExtrusionInstancedShaderInfo = ShaderInfo<BuiltIn::FillExtrusionInstancedShader, gfx::Backend::Type::OpenGL>;
+
+const std::vector<UniformBlockInfo> FillExtrusionInstancedShaderInfo::uniformBlocks = {
+    UniformBlockInfo{"FillExtrusionDrawableUBO", idFillExtrusionDrawableUBO},
+    UniformBlockInfo{"FillExtrusionTilePropsUBO", idFillExtrusionTilePropsUBO},
+    UniformBlockInfo{"FillExtrusionPropsUBO", idFillExtrusionPropsUBO},
+};
+const std::vector<AttributeInfo> FillExtrusionInstancedShaderInfo::attributes = {
+    AttributeInfo{"a_pos", idFillExtrusionPosVertexAttribute},               // 0 — static quad (per-vertex)
+    AttributeInfo{"a_pos0", idFillExtrusionOutlinePosAttribute},             // 1 — instance
+    AttributeInfo{"a_pos1", idFillExtrusionPos1Attribute},                   // 2 — instance
+    AttributeInfo{"a_normal0", idFillExtrusionNormal0Attribute},             // 3 — instance
+    AttributeInfo{"a_normal1", idFillExtrusionNormal1Attribute},             // 4 — instance
+    AttributeInfo{"a_edgedistance", idFillExtrusionEdgeDistanceAttribute},   // 5 — instance
+    AttributeInfo{"a_base", idFillExtrusionBaseVertexAttribute},             // 6 — instance (data-driven)
+    AttributeInfo{"a_height", idFillExtrusionHeightVertexAttribute},         // 7 — instance (data-driven)
+    AttributeInfo{"a_color", idFillExtrusionColorVertexAttribute},           // 8 — instance (data-driven)
+};
+const std::vector<TextureInfo> FillExtrusionInstancedShaderInfo::textures = {};
+
+template <>
+const std::vector<AttributeInfo>& instanceAttributes<BuiltIn::FillExtrusionInstancedShader>() {
+    static const std::vector<AttributeInfo> attrs = {
+        AttributeInfo{"a_pos0", idFillExtrusionOutlinePosAttribute},
+        AttributeInfo{"a_pos1", idFillExtrusionPos1Attribute},
+        AttributeInfo{"a_normal0", idFillExtrusionNormal0Attribute},
+        AttributeInfo{"a_normal1", idFillExtrusionNormal1Attribute},
+        AttributeInfo{"a_edgedistance", idFillExtrusionEdgeDistanceAttribute},
+        AttributeInfo{"a_base", idFillExtrusionBaseVertexAttribute},
+        AttributeInfo{"a_height", idFillExtrusionHeightVertexAttribute},
+        AttributeInfo{"a_color", idFillExtrusionColorVertexAttribute},
+    };
+    return attrs;
+}
+
+// Fill Extrusion Pattern Instanced.
+using FillExtrusionPatternInstancedShaderInfo =
+    ShaderInfo<BuiltIn::FillExtrusionPatternInstancedShader, gfx::Backend::Type::OpenGL>;
+
+const std::vector<UniformBlockInfo> FillExtrusionPatternInstancedShaderInfo::uniformBlocks = {
+    UniformBlockInfo{"GlobalPaintParamsUBO", idGlobalPaintParamsUBO},
+    UniformBlockInfo{"FillExtrusionDrawableUBO", idFillExtrusionDrawableUBO},
+    UniformBlockInfo{"FillExtrusionTilePropsUBO", idFillExtrusionTilePropsUBO},
+    UniformBlockInfo{"FillExtrusionPropsUBO", idFillExtrusionPropsUBO},
+};
+const std::vector<AttributeInfo> FillExtrusionPatternInstancedShaderInfo::attributes = {
+    AttributeInfo{"a_pos", idFillExtrusionPosVertexAttribute},               // 0 — static quad (per-vertex)
+    AttributeInfo{"a_pos0", idFillExtrusionOutlinePosAttribute},             // 1 — instance
+    AttributeInfo{"a_pos1", idFillExtrusionPos1Attribute},                   // 2 — instance
+    AttributeInfo{"a_normal0", idFillExtrusionNormal0Attribute},             // 3 — instance
+    AttributeInfo{"a_normal1", idFillExtrusionNormal1Attribute},             // 4 — instance
+    AttributeInfo{"a_edgedistance", idFillExtrusionEdgeDistanceAttribute},   // 5 — instance
+    AttributeInfo{"a_base", idFillExtrusionBaseVertexAttribute},             // 6 — instance (data-driven)
+    AttributeInfo{"a_height", idFillExtrusionHeightVertexAttribute},         // 7 — instance (data-driven)
+    AttributeInfo{"a_pattern_from", idFillExtrusionPatternFromVertexAttribute}, // 8 — instance (data-driven)
+    AttributeInfo{"a_pattern_to", idFillExtrusionPatternToVertexAttribute},  // 9 — instance (data-driven)
+};
+const std::vector<TextureInfo> FillExtrusionPatternInstancedShaderInfo::textures = {
+    TextureInfo{"u_image", idFillExtrusionImageTexture},
+};
+
+template <>
+const std::vector<AttributeInfo>& instanceAttributes<BuiltIn::FillExtrusionPatternInstancedShader>() {
+    static const std::vector<AttributeInfo> attrs = {
+        AttributeInfo{"a_pos0", idFillExtrusionOutlinePosAttribute},
+        AttributeInfo{"a_pos1", idFillExtrusionPos1Attribute},
+        AttributeInfo{"a_normal0", idFillExtrusionNormal0Attribute},
+        AttributeInfo{"a_normal1", idFillExtrusionNormal1Attribute},
+        AttributeInfo{"a_edgedistance", idFillExtrusionEdgeDistanceAttribute},
+        AttributeInfo{"a_base", idFillExtrusionBaseVertexAttribute},
+        AttributeInfo{"a_height", idFillExtrusionHeightVertexAttribute},
+        AttributeInfo{"a_pattern_from", idFillExtrusionPatternFromVertexAttribute},
+        AttributeInfo{"a_pattern_to", idFillExtrusionPatternToVertexAttribute},
+    };
+    return attrs;
+}
+#endif // MLN_GL_FE_INSTANCING
+
 // Shadow caster (depth pack) — reuses the FE vertex attributes (pos/normal_ed/base/height).
 using ShadowDepthShaderInfo = ShaderInfo<BuiltIn::ShadowDepthShader, gfx::Backend::Type::OpenGL>;
 

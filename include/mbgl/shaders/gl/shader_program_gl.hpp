@@ -20,6 +20,10 @@ public:
 
     ShaderProgramGL(UniqueProgram&& glProgram_);
     ShaderProgramGL(UniqueProgram&&, VertexAttributeArrayGL&& attributes, SamplerLocationArray&& samplerLocations);
+    ShaderProgramGL(UniqueProgram&&,
+                    VertexAttributeArrayGL&& attributes,
+                    VertexAttributeArrayGL&& instanceAttributes,
+                    SamplerLocationArray&& samplerLocations);
     ShaderProgramGL(ShaderProgramGL&& other);
     ~ShaderProgramGL() noexcept override = default;
 
@@ -34,7 +38,9 @@ public:
                                                    const std::vector<shaders::AttributeInfo>& attributesInfo,
                                                    const std::string& vertexSource,
                                                    const std::string& fragmentSource,
-                                                   const std::string& additionalDefines = "") noexcept(false);
+                                                   const std::string& additionalDefines = "",
+                                                   const std::vector<shaders::AttributeInfo>& instanceAttributesInfo =
+                                                       {}) noexcept(false);
 
     std::optional<size_t> getSamplerLocation(const size_t id) const override;
 

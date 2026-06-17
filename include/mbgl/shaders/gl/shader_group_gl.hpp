@@ -60,7 +60,8 @@ public:
                                          shaders::ShaderInfo<ShaderID, gfx::Backend::Type::OpenGL>::attributes,
                                          vert,
                                          frag,
-                                         additionalDefines);
+                                         additionalDefines,
+                                         shaders::instanceAttributes<ShaderID>());
         if (!shader || !registerShader(shader, shaderName)) {
             throw std::runtime_error("Failed to register " + shaderName + " with shader group!");
         }
