@@ -249,7 +249,8 @@ public class GLTextureViewRenderThread extends TextureViewRenderThread {
         eglContext = EGL10.EGL_NO_CONTEXT;
       } else if (eglContext == EGL10.EGL_NO_CONTEXT) {
         eglConfig = new EGLConfigChooser(translucentSurface).chooseConfig(egl, eglDisplay);
-        int[] attrib_list = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL10.EGL_NONE};
+        // ES3 required for fill-extrusion instancing (glDrawElementsInstanced)
+        int[] attrib_list = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL10.EGL_NONE};
         eglContext = egl.eglCreateContext(eglDisplay, eglConfig, EGL10.EGL_NO_CONTEXT, attrib_list);
       }
 

@@ -16,7 +16,8 @@ public class EGLContextFactory implements GLSurfaceView.EGLContextFactory {
     if (display == null || config == null) {
       return EGL10.EGL_NO_CONTEXT;
     }
-    int[] attrib_list = {0x3098, 2, EGL10.EGL_NONE};
+    // 0x3098 == EGL_CONTEXT_CLIENT_VERSION; request ES3 for fill-extrusion instancing (glDrawElementsInstanced)
+    int[] attrib_list = {0x3098, 3, EGL10.EGL_NONE};
     return egl.eglCreateContext(display, config, EGL10.EGL_NO_CONTEXT, attrib_list);
   }
 

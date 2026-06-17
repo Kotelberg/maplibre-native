@@ -169,6 +169,15 @@ void Context::initializeExtensions(const std::function<gl::ProcAddress(const cha
             return r;
         }();
 
+        // One-time GL_VERSION log: confirms the ES3 context required by the fill-extrusion
+        // instancing path (glDrawElementsInstanced / glVertexAttribDivisor). On Android, a
+        // "< 3.0" line here means the GL_EXT_instanced_arrays fallback is required.
+        static const std::string glVersion = []() {
+            std::string v = reinterpret_cast<const char*>(MBGL_CHECK_ERROR(glGetString(GL_VERSION)));
+            Log::Info(Event::OpenGL, "GL_VERSION: " + v);
+            return v;
+        }();
+
         // Block ANGLE on Direct3D since the debugging extension is causing crashes
         if (!(renderer.find("ANGLE") != std::string::npos && renderer.find("Direct3D") != std::string::npos)) {
             debugging = std::make_unique<extension::Debugging>(fn);
