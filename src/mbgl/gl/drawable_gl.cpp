@@ -70,7 +70,11 @@ void DrawableGL::draw(PaintParameters& parameters) const {
         const auto& mlSeg = glSeg.getSegment();
         if (mlSeg.indexLength > 0 && glSeg.getVertexArray().isValid()) {
             context.bindVertexArray = glSeg.getVertexArray().getID();
-            context.draw(glSeg.getMode(), mlSeg.indexOffset, mlSeg.indexLength);
+            if (impl->instanceCount > 0) {
+                context.drawInstanced(glSeg.getMode(), mlSeg.indexOffset, mlSeg.indexLength, impl->instanceCount);
+            } else {
+                context.draw(glSeg.getMode(), mlSeg.indexOffset, mlSeg.indexLength);
+            }
         }
     }
     // Unbind the VAO so that future buffer commands outside Drawable do not change the current VAO state
@@ -175,6 +179,9 @@ void DrawableGL::upload(gfx::UploadPass& uploadPass) {
         impl->indexes->setDirty(false);
     }
 
+    // Track whether any binding array was (re)built this upload so the VAOs get rebuilt below.
+    bool bindingsRebuilt = false;
+
     // Build the vertex attributes and bindings, if necessary
     if (impl->attributeBindings.empty() ||
         (vertexAttributes && (!attributeUpdateTime || vertexAttributes->isModifiedAfter(*attributeUpdateTime)))) {
@@ -199,6 +206,47 @@ void DrawableGL::upload(gfx::UploadPass& uploadPass) {
                                                                     vertexBuffers);
 
         impl->attributeBuffers = std::move(vertexBuffers);
+        bindingsRebuilt = true;
+    }
+
+    // Build per-instance attribute bindings (divisor 1), if any. Mirrors the Metal drawable's
+    // instance path; the GL-specific part is that these are merged into the same VAO below and
+    // flagged with instanceDivisor = 1 so VertexAttribute::Set issues glVertexAttribDivisor.
+    if (instanceAttributes && (impl->instanceAttributeBindings.empty() || !attributeUpdateTime ||
+                               instanceAttributes->isModifiedAfter(*attributeUpdateTime))) {
+        MLN_TRACE_ZONE(build instance attributes);
+
+        std::vector<std::unique_ptr<gfx::VertexBufferResource>> instanceBuffers;
+        auto instanceBindings = uploadPass.buildAttributeBindings(instanceAttributes->getMinCount(),
+                                                                  gfx::AttributeDataType::Byte,
+                                                                  /*vertexAttributeIndex=*/static_cast<std::size_t>(-1),
+                                                                  /*vertexData=*/{},
+                                                                  shader->getInstanceAttributes(),
+                                                                  *instanceAttributes,
+                                                                  usage,
+                                                                  attributeUpdateTime,
+                                                                  instanceBuffers);
+
+        for (auto& binding : instanceBindings) {
+            if (binding) {
+                binding->instanceDivisor = 1;
+            }
+        }
+
+        impl->instanceAttributeBindings = std::move(instanceBindings);
+        impl->instanceAttributeBuffers = std::move(instanceBuffers);
+        impl->instanceCount = instanceAttributes->getMinCount();
+        instanceAttributes->visitAttributes([](gfx::VertexAttribute& attrib) { attrib.setDirty(false); });
+        bindingsRebuilt = true;
+    }
+
+    // If any binding array changed, invalidate the existing VAOs so they are rebuilt from the
+    // merged vertex+instance bindings below (review P2: instance data set after the first upload
+    // would otherwise be silently ignored by an already-valid VAO).
+    if (bindingsRebuilt) {
+        for (const auto& seg : impl->segments) {
+            static_cast<DrawSegmentGL&>(*seg).setVertexArray(VertexArray{{nullptr, false}});
+        }
     }
 
     // Bind a VAO for each group of vertexes described by a segment
@@ -211,6 +259,9 @@ void DrawableGL::upload(gfx::UploadPass& uploadPass) {
             continue;
         }
 
+        // The segment vertex offset applies to the per-vertex attributes only. Instance
+        // attributes (divisor 1) advance per instance, not per segment vertex, so their offset
+        // stays 0 (the fill-extrusion instanced path uses a single static-quad segment anyway).
         for (auto& binding : impl->attributeBindings) {
             if (binding) {
                 binding->vertexOffset = static_cast<uint32_t>(mlSeg.vertexOffset);
@@ -220,7 +271,24 @@ void DrawableGL::upload(gfx::UploadPass& uploadPass) {
         if (!glSeg.getVertexArray().isValid() && impl->indexes) {
             auto vertexArray = glContext.createVertexArray();
             const auto& indexBuffer = static_cast<IndexBufferGL&>(*impl->indexes->getBuffer());
-            vertexArray.bind(glContext, *indexBuffer.buffer, impl->attributeBindings);
+
+            if (impl->instanceAttributeBindings.empty()) {
+                vertexArray.bind(glContext, *indexBuffer.buffer, impl->attributeBindings);
+            } else {
+                // Merge per-vertex (divisor 0) and per-instance (divisor 1) bindings into one
+                // location-indexed array so both live in the same VAO. Locations never collide:
+                // the shader's vertex vs instance attribute metadata assigns disjoint locations.
+                AttributeBindingArray merged = impl->attributeBindings;
+                for (std::size_t loc = 0; loc < impl->instanceAttributeBindings.size(); ++loc) {
+                    if (impl->instanceAttributeBindings[loc]) {
+                        if (merged.size() <= loc) {
+                            merged.resize(loc + 1);
+                        }
+                        merged[loc] = impl->instanceAttributeBindings[loc];
+                    }
+                }
+                vertexArray.bind(glContext, *indexBuffer.buffer, merged);
+            }
             assert(vertexArray.isValid());
             if (vertexArray.isValid()) {
                 glSeg.setVertexArray(std::move(vertexArray));

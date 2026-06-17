@@ -39,6 +39,12 @@ public:
     AttributeBindingArray attributeBindings;
     std::vector<gfx::UniqueVertexBufferResource> attributeBuffers;
 
+    // Per-instance attribute bindings (glVertexAttribDivisor 1), merged into each segment VAO
+    // alongside attributeBindings. Non-empty only on the GL fill-extrusion instancing path.
+    AttributeBindingArray instanceAttributeBindings;
+    std::vector<gfx::UniqueVertexBufferResource> instanceAttributeBuffers;
+    std::size_t instanceCount = 0;
+
     UniformBufferArrayGL uniformBuffers;
 
     gfx::DepthMode depthMode = gfx::DepthMode::disabled();
