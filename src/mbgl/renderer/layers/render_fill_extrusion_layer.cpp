@@ -424,29 +424,60 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
             }
             return true;
         };
+
+        // Does the VISIBLE building drawable (roof + instanced walls) already exist for this tile and
+        // match the current style? updateTile returns true when it does (and prunes stale ones). This
+        // is now evaluated BEFORE any shadow-sidecar bookkeeping so that a missing sidecar can no
+        // longer force the visible drawable to be destroyed and re-uploaded.
+        const bool visiblePresent = updateTile(drawPass, tileID, std::move(updateExisting));
+
 #if MLN_DRAWABLE_SHADOWS
-        bool missingShadowSidecar = false;
+        // Detect a missing shadow SIDECAR (the ground-shadow quad and/or the per-cascade casters)
+        // WITHOUT touching the visible drawable. The old code removeTile'd the visible building to force
+        // a full rebuild whenever a sidecar flapped — e.g. the ground-shadow owner being reassigned
+        // between fill-extrusion layers during a pan — re-uploading every building's geometry on each
+        // such frame (the "visible tile rebuild spikes" hotspot). Now the visible drawable is left
+        // intact and ONLY the missing sidecar piece is refilled below; its cost is a fraction of the
+        // roof+wall rebuild.
+        bool missingGroundSidecar = false;
+        bool missingCasterSidecar = false;
         if (useGroundShadows && groundShadowLayerGroup &&
             groundShadowLayerGroup->getDrawableCount(drawPass, tileID) == 0) {
-            missingShadowSidecar = true;
+            missingGroundSidecar = true;
         }
         if (useShadows && shadowDepthGroup && bucket.sharedTriangles->elements()) {
-            // If ANY cascade is missing this tile's casters, rebuild (the build loop refills all
-            // cascades together, so a partial set means the whole sidecar must be regenerated).
+            // If ANY cascade is missing this tile's casters, refill all (the caster build refills every
+            // cascade together, so a partial set means the whole caster sidecar must be regenerated).
             for (auto* casterGroup : shadowCasterGroups) {
                 if (casterGroup && casterGroup->getDrawableCount(RenderPass::Opaque, tileID) == 0) {
-                    missingShadowSidecar = true;
+                    missingCasterSidecar = true;
                     break;
                 }
             }
         }
-        if (missingShadowSidecar) {
-            removeTile(drawPass, tileID);
+        if (visiblePresent && !missingGroundSidecar && !missingCasterSidecar) {
+            continue; // visible drawable + every shadow sidecar already current — nothing to rebuild
         }
-#endif
-        if (updateTile(drawPass, tileID, std::move(updateExisting))) {
+        // A partial caster set (some cascades have this tile, some don't) would duplicate on refill, so
+        // clear the tile from every caster group first and let the build below repopulate them cleanly.
+        if (visiblePresent && missingCasterSidecar) {
+            for (auto* casterGroup : shadowCasterGroups) {
+                if (casterGroup) {
+                    stats.drawablesRemoved += casterGroup->removeDrawables(RenderPass::Opaque, tileID).size();
+                }
+            }
+        }
+        // Which pieces to (re)build this iteration. When the visible drawable is intact we skip the
+        // expensive roof/wall rebuild and refill only the missing sidecar piece(s).
+        const bool buildVisible = !visiblePresent;
+        const bool buildGround = !visiblePresent || missingGroundSidecar;
+        const bool buildCasters = !visiblePresent || missingCasterSidecar;
+#else
+        if (visiblePresent) {
             continue;
         }
+        constexpr bool buildVisible = true;
+#endif
 
         propertiesAsUniforms.first.clear();
         propertiesAsUniforms.second.clear();
@@ -702,14 +733,18 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                 ++stats.drawablesAdded;
             }
         };
-        if (doDepthPass) {
-            finish(*depthBuilder);
+        // Visible roof drawables: only when the visible drawable is being (re)built. When we are here
+        // solely to refill a missing shadow sidecar, the existing roof/walls are kept (buildVisible=0).
+        if (buildVisible) {
+            if (doDepthPass) {
+                finish(*depthBuilder);
+            }
+            finish(*colorBuilder);
         }
-        finish(*colorBuilder);
 
 #if MLN_DRAWABLE_SHADOWS
         // Env toggle (diagnostic): MLN_GROUND_SHADOWS=1 enables the ground-shadow quads.
-        if (useGroundShadows && groundShadowLayerGroup) {
+        if (buildGround && useGroundShadows && groundShadowLayerGroup) {
             if (const auto groundShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
                     groundShadowGroup->getOrCreateShader(context, {}))) {
                 if (auto groundBuilder = context.createDrawableBuilder(layerPrefix + "groundShadow")) {
@@ -745,7 +780,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
 
         // Build a depth-only caster drawable from the same geometry into this layer's caster group
         // in the shared shadow map (rendered from the sun's POV by the shadow RenderTarget).
-        if (useShadows && shadowDepthGroup && casterAttrs && bucket.sharedTriangles->elements()) {
+        if (buildCasters && useShadows && shadowDepthGroup && casterAttrs && bucket.sharedTriangles->elements()) {
             if (const auto casterShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
                     shadowDepthGroup->getOrCreateShader(context, propertiesAsUniforms))) {
                 // One caster drawable per cascade — each renders into its cascade's shadow map with
@@ -895,10 +930,12 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                 ++stats.drawablesAdded;
             }
         };
-        if (doDepthPass) {
-            finishInstance(*instancedDepthBuilder);
+        if (buildVisible) {
+            if (doDepthPass) {
+                finishInstance(*instancedDepthBuilder);
+            }
+            finishInstance(*instancedColorBuilder);
         }
-        finishInstance(*instancedColorBuilder);
 
 #if MLN_DRAWABLE_SHADOWS
         // Instanced WALL caster: the roof-only sharedTriangles caster (above) leaves ground shadows
@@ -907,7 +944,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         // the ShadowDepthInstancedShader (light-space depth). One drawable per cascade (each gets that
         // cascade's light_matrix from shadowCasterTweakers[c]). Depth-only, so cull is disabled (both wall
         // faces occlude). Together roof+wall casters fill the full building volume → shadows reattach.
-        if (useShadows && shadowDepthInstancedGroup && casterInstanceAttrs && casterStaticVertices &&
+        if (buildCasters && useShadows && shadowDepthInstancedGroup && casterInstanceAttrs && casterStaticVertices &&
             !shadowCasterGroups.empty() && bucket.sharedVertices->elements() && staticDataIndices->elements()) {
             if (const auto instCasterShader = std::static_pointer_cast<gfx::ShaderProgramBase>(
                     shadowDepthInstancedGroup->getOrCreateShader(context, casterInstanceUniforms))) {

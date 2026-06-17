@@ -19,3 +19,17 @@ build:linux --repo_env=CXX=g++
 
 # disables telemetry https://github.com/aspect-build/tools_telemetry
 common --repo_env=ASPECT_TOOLS_TELEMETRY=
+
+# Release config for the SHIPPED iOS xcframework (the Kotelberg/maplibre-spm artifact).
+# Production binaries MUST be built with this so MapLibre's diagnostic assertions are compiled out
+# and the render path DEGRADES GRACEFULLY instead of SIGABRT'ing on-device. The default fastbuild
+# leaves both kinds of assertion live, which is why fork builds aborted where official (Release)
+# MapLibre does not:
+#   - compilation_mode=opt defines NDEBUG  -> kills C assert() (e.g. mtl Texture2D::bind
+#     assert(!textureDirty); mtl::Context::createProgram assert(false) on shader-compile failure)
+#   - NS_BLOCK_ASSERTIONS kills Obj-C NSAssert / MLNAssert (e.g. -[MLNMapView annotationTagAtPoint:])
+# Build the framework with:
+#   bazel build --config=release //platform/ios:MapLibre.dynamic --//:renderer=metal
+build:release --compilation_mode=opt
+build:release --copt=-DNS_BLOCK_ASSERTIONS=1
+build:release --objccopt=-DNS_BLOCK_ASSERTIONS=1

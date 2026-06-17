@@ -985,26 +985,41 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
             shadowPass = std::make_unique<ShadowPass>(shadowMapSize(), shadowCascadeCount());
         }
         shadowPass->ensure(context);
-        if (!shadowTargetRegistered && shadowPass->ready()) {
-            // Register every cascade's RenderTarget (one shadow map per cascade — Metal has no
-            // texture-array render targets in this gfx layer, so N maps are N targets).
-            for (uint32_t c = 0; c < shadowPass->cascadeCount(); ++c) {
+        if (shadowPass->ready()) {
+            // Register only the cascade RenderTargets that render THIS frame (one shadow map per
+            // cascade — Metal has no texture-array render targets in this gfx layer, so N maps are N
+            // targets). Pitch-gated: a flat view renders just cascade 0 (a single full-density frustum),
+            // a pitched view renders up to shadowPass->cascadeCount(). The far cascade's caster pass is
+            // a full re-rasterization of every building every frame, so skipping it flat is the headline
+            // per-frame GPU lever. This count MUST equal the receiver's activeShadowCascadeCount(pitch)
+            // — both read this frame's pitch — so a receiver never samples an unrendered cascade map.
+            // The maps + caster drawables persist across the gate (no rebuild churn); only registration
+            // toggles, and cascade 1's casters are already built when it re-activates on pitch-up.
+            const uint32_t wantCascades = activeShadowCascadeCount(state.getPitch());
+            for (uint32_t c = registeredShadowCascades; c < wantCascades; ++c) {
                 if (auto cascadeTarget = shadowPass->target(c)) {
                     changes.emplace_back(std::make_unique<AddRenderTargetRequest>(cascadeTarget));
                 }
             }
-            shadowTargetRegistered = true;
+            for (uint32_t c = wantCascades; c < registeredShadowCascades; ++c) {
+                if (auto cascadeTarget = shadowPass->target(c)) {
+                    changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(cascadeTarget));
+                }
+            }
+            registeredShadowCascades = wantCascades;
+            shadowTargetRegistered = (wantCascades > 0);
         }
-    } else if (shadowPass && shadowTargetRegistered) {
+    } else if (shadowPass && registeredShadowCascades > 0) {
         // Shadows went inactive at runtime (cast-shadows:false or env off after being on): tear the
         // pass down so its RenderTargets stop rendering stale casters into the shadow maps every frame
         // and the orphaned caster drawables are freed. The maps + groups are retained and refill if
         // shadows re-activate. (Without this the declarative kill-switch leaked GPU work — #30.)
-        for (uint32_t c = 0; c < shadowPass->cascadeCount(); ++c) {
+        for (uint32_t c = 0; c < registeredShadowCascades; ++c) {
             if (auto cascadeTarget = shadowPass->target(c)) {
                 changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(cascadeTarget));
             }
         }
+        registeredShadowCascades = 0;
         shadowTargetRegistered = false;
         shadowPass->clearCasters();
     }

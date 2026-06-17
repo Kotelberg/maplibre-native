@@ -71,6 +71,42 @@ struct alignas(16) FillExtrusionPropsUBO {
 };
 static_assert(sizeof(FillExtrusionPropsUBO) == 5 * 16, "wrong size");
 
+// Crease-aware smooth wall normal for the INSTANCED fill-extrusion path. Reproduces the per-vertex
+// normals the bucket bakes for the NON-instanced path (fill_extrusion_bucket.cpp): an edge's flat
+// perpendicular (here computed exactly like the legacy instanced normal: (-d.y, d.x) for unit edge
+// dir d) blended with the neighbouring edge's perpendicular when the turn between them is gentle
+// (dot > cos 60deg = 0.5). Curved facades (many short edges) get a smooth gradient because each quad
+// endpoint carries the normal at its own footprint vertex and the fragment stage interpolates; sharp
+// building corners (turn > 60deg) keep their distinct edge normal and stay crisp. Without this the
+// instanced walls were flat-shaded per facet -> buildings read flat/dark vs the non-instanced path.
+inline float2 feSafeNormalize(float2 v) {
+    const float m = sqrt(v.x * v.x + v.y * v.y);
+    return (m > 0.0) ? (v / m) : float2(0.0);
+}
+inline float3 feSmoothWallNormal(float2 e0, float2 e1, bool atStart,
+                                 bool hasPrev, float2 prevPos,
+                                 bool hasNext, float2 nextPos) {
+    const float2 d = feSafeNormalize(e1 - e0);
+    const float2 thisN = float2(-d.y, d.x);
+    float2 n = thisN;
+    if (atStart) {
+        if (hasPrev) {
+            const float2 dp = feSafeNormalize(e0 - prevPos);
+            const float2 pe = float2(-dp.y, dp.x);
+            if (dot(thisN, pe) > 0.5) {
+                n = feSafeNormalize(thisN + pe);
+            }
+        }
+    } else if (hasNext) {
+        const float2 dn = feSafeNormalize(nextPos - e1);
+        const float2 pe = float2(-dn.y, dn.x);
+        if (dot(thisN, pe) > 0.5) {
+            n = feSafeNormalize(thisN + pe);
+        }
+    }
+    return float3(n, 0.0);
+}
+
 )";
 
 template <>
@@ -292,15 +328,23 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const auto height = max(unpack_mix_float(vertx.height, drawable.height_t), 0.0);
 #endif
 
-    float2 p1 = float2(outline[instanceID + 1].pos);
-    float2 p2 = float2(outline[instanceID + 0].pos);
-    float2 perp = p1 - p2;
-    float magnitude = sqrt(perp.x * perp.x + perp.y * perp.y);
-    if (magnitude > 0) {
-        perp = perp / magnitude;
-    }
-
-    const float3 normal = float3(-perp.y, perp.x, 0.0);
+    // Crease-aware smooth wall normal (see feSmoothWallNormal). Read the two endpoints of THIS edge
+    // plus the adjacent edges' far endpoints; ed_discard.y marks a ring's last vertex, so it gates
+    // whether the previous/next edge belongs to the same ring (and keeps the neighbour reads in
+    // bounds: hasPrev short-circuits before reading outline[instanceID - 1], and outline[instanceID + 2]
+    // is only read when outline[instanceID + 1] is not the ring's last vertex).
+    const float2 e0 = float2(outline[instanceID + 0].pos);
+    const float2 e1 = float2(outline[instanceID + 1].pos);
+    const bool atStart = (vertx.pos.x == 0);
+    // Clamp neighbour indices so every outline[] read is provably in bounds (no -1 underflow / no read
+    // past the last ring vertex); hasPrev/hasNext then gate whether the value is actually used.
+    const uint prevIdx = (instanceID > 0) ? (instanceID - 1) : 0;
+    const bool hasPrev = (instanceID > 0) && (outline[prevIdx].ed_discard.y == 0);
+    const float2 prevPos = float2(outline[prevIdx].pos);
+    const bool hasNext = (outline[instanceID + 1].ed_discard.y == 0);
+    const uint nextIdx = hasNext ? (instanceID + 2) : (instanceID + 1);
+    const float2 nextPos = float2(outline[nextIdx].pos);
+    const float3 normal = feSmoothWallNormal(e0, e1, atStart, hasPrev, prevPos, hasNext, nextPos);
     const float t = float(vertx.pos.y);
     const float z = (t != 0.0) ? height : base;     // TODO: This would come out wrong on GL for negative values, check it...
     const float4 position = drawable.matrix * float4(float2(outline[instanceID + vertx.pos.x].pos), z, 1);
@@ -640,15 +684,19 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const auto height = max(unpack_mix_float(vertx.height, drawable.height_t), 0.0);
 #endif
 
-    float2 p1 = float2(outline[instanceID + 1].pos);
-    float2 p2 = float2(outline[instanceID + 0].pos);
-    float2 perp = p1 - p2;
-    float magnitude = sqrt(perp.x * perp.x + perp.y * perp.y);
-    if (magnitude > 0) {
-        perp = perp / magnitude;
-    }
-
-    const float3 normal = float3(-perp.y, perp.x, 0.0);
+    // Crease-aware smooth wall normal (see feSmoothWallNormal) — same blend as the non-pattern
+    // instanced walls so curved facades shade smoothly and sharp corners stay crisp.
+    const float2 e0 = float2(outline[instanceID + 0].pos);
+    const float2 e1 = float2(outline[instanceID + 1].pos);
+    const bool atStart = (vertx.pos.x == 0);
+    // Clamp neighbour indices so every outline[] read is provably in bounds (see the non-pattern shader).
+    const uint prevIdx = (instanceID > 0) ? (instanceID - 1) : 0;
+    const bool hasPrev = (instanceID > 0) && (outline[prevIdx].ed_discard.y == 0);
+    const float2 prevPos = float2(outline[prevIdx].pos);
+    const bool hasNext = (outline[instanceID + 1].ed_discard.y == 0);
+    const uint nextIdx = hasNext ? (instanceID + 2) : (instanceID + 1);
+    const float2 nextPos = float2(outline[nextIdx].pos);
+    const float3 normal = feSmoothWallNormal(e0, e1, atStart, hasPrev, prevPos, hasNext, nextPos);
     const float edgedistance = outline[instanceID + 1 - vertx.pos.x].ed_discard.x;
     const float t = float(vertx.pos.y);
     const float z = (t != 0.0) ? height : base;     // TODO: This would come out wrong on GL for negative values, check it...

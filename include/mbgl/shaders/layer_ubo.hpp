@@ -77,8 +77,9 @@ enum {
 // instancing", #4256 — which matters most on the perf-first Vulkan/Android backend).
 // NOTE (2026-06-16, verified on Metal): the instanced path DOES interpolate building
 // height smoothly per frame (`unpack_mix_float(in_height, height_t)`; the OutlineInstance
-// buffer stores only xy + edge, no baked height) — at z15.5 buildings render at half
-// height. So the earlier "instanced snaps between heights" rationale was a misdiagnosis;
+// buffer stores only xy + edge, no baked height) — at the configured ramp midpoint,
+// buildings render at half height. So the earlier "instanced snaps between heights"
+// rationale was a misdiagnosis;
 // the real (and only) reason Metal/GLES are non-instanced is that the SHIPPED cast-shadow
 // caster/receiver consume per-vertex `normal_ed`, which the instanced bucket doesn't carry.
 // Vulkan keeps instancing for perf; its cast shadows are built on the instanced geometry

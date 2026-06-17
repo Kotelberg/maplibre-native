@@ -256,6 +256,11 @@ private:
     // backends, where shadow_pass.hpp is not included).
     std::unique_ptr<ShadowPass> shadowPass;
     bool shadowTargetRegistered = false;
+    // How many cascade RenderTargets are currently registered for rendering (pitch-gated). A flat
+    // frame registers 1 (the full cascade); a pitched frame registers up to shadowPass->cascadeCount().
+    // Kept in lock-step with the receiver's active sample count (activeShadowCascadeCount) so the
+    // receiver never samples a cascade map that wasn't rendered this frame.
+    uint32_t registeredShadowCascades = 0;
 #endif
 };
 

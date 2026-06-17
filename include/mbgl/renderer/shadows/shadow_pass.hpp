@@ -37,10 +37,22 @@ uint32_t shadowMapSize();
 /// varyings). The runtime count (`shadowCascadeCount`) is clamped to [1, this].
 inline constexpr uint32_t kMaxShadowCascades = 4;
 
-/// Number of concentric, bearing-invariant shadow cascades. `MLN_SHADOW_CASCADE_COUNT` override;
-/// default 2 (near = crisp building/near shadows, far = pitched-horizon coverage). Clamped to
-/// [1, kMaxShadowCascades]; =1 reproduces the legacy single-map path exactly.
+/// Number of concentric, bearing-invariant shadow cascades the pass ALLOCATES (maps + caster
+/// groups). `MLN_SHADOW_CASCADE_COUNT` override; default 2 (near = crisp building/near shadows, far =
+/// pitched-horizon coverage). Clamped to [1, kMaxShadowCascades]; =1 reproduces the legacy single-map
+/// path exactly. This is the ceiling; the per-frame ACTIVE count is `activeShadowCascadeCount`.
 uint32_t shadowCascadeCount();
+
+/// Per-frame ACTIVE cascade count, gated on camera pitch. A flat (near top-down) view sees no far
+/// horizon, so a single auto-sized frustum covers the visible screen at full density — there the near
+/// cascade is pure overhead (an extra full caster pass + a second shadow map rendered every frame).
+/// A pitched view reaches a forward trapezoid thousands of world-units out, which needs the far
+/// cascade for coverage AND the near cascade for crisp near buildings. So: pitch < threshold → 1
+/// cascade (the full one); pitch ≥ threshold → `shadowCascadeCount()`. Threshold default 20° via
+/// `MLN_SHADOW_PITCH_GATE_DEG`; `MLN_SHADOW_PITCH_GATE=0` disables the gate (always allocate-count).
+/// The pass keeps ALL `shadowCascadeCount()` maps + caster groups allocated regardless (no per-frame
+/// rebuild churn); only WHICH cascade targets render + how many the receiver samples track this count.
+uint32_t activeShadowCascadeCount(double pitchRadians);
 
 /// Concentric split factor: cascade 0's radius = max(minRadius, split * farRadius); intermediate
 /// cascades interpolate geometrically up to the full far radius. `MLN_SHADOW_CASCADE_SPLIT`

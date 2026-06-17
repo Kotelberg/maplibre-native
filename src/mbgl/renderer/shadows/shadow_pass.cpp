@@ -20,11 +20,14 @@ bool shadowsEnabled() {
 uint32_t shadowMapSize() {
     static const uint32_t size = [] {
         const char* v = std::getenv("MLN_SHADOW_MAP_SIZE");
-        // 2048 default: at 1024 the casters fill only ~10% of the map (the frustum over-covers), so
-        // effective texel density on the buildings was coarse → staircased shadow edges. 2048 is the
-        // balanced midpoint (1024 staircased, 4096 crisp; 4x cheaper than 4096) and, with the tighter
-        // radius floor, restores crisp edges. iOS-Metal target handles it; env-override for low-end.
-        return v ? static_cast<uint32_t>(std::atoi(v)) : 2048u;
+        // 1024 default (was 2048): the shadow caster pass re-rasterizes every visible building into a
+        // mapSize×mapSize depth target per cascade EVERY frame, so fill cost is O(mapSize²) — 2048 is 4×
+        // the GPU fill of 1024. The texel-density loss that previously staircased 1024 edges is now
+        // recovered another way: the pitch-gated cascade scheme (shadowCascadeCount/activeShadowCascade-
+        // Count) gives the FLAT top-down view a single auto-sized frustum (radius ≈ the visible screen,
+        // ~0.5 world-px/texel at 1024) and the PITCHED view a tight near cascade — so near buildings keep
+        // crisp edges without paying 2048 everywhere. Bump back to 2048 via env on a GPU that can spare it.
+        return v ? static_cast<uint32_t>(std::atoi(v)) : 1024u;
     }();
     return size;
 }
@@ -54,6 +57,31 @@ uint32_t shadowCascadeCount() {
         return n < 1u ? 1u : (n > kMaxShadowCascades ? kMaxShadowCascades : n);
     }();
     return count;
+}
+
+uint32_t activeShadowCascadeCount(double pitchRadians) {
+    const uint32_t allocated = shadowCascadeCount();
+    if (allocated <= 1u) {
+        return allocated; // nothing to gate
+    }
+    static const bool gateEnabled = [] {
+        const char* v = std::getenv("MLN_SHADOW_PITCH_GATE");
+        return !(v && std::string_view(v) == "0");
+    }();
+    if (!gateEnabled) {
+        return allocated;
+    }
+    // Threshold in radians (env in DEGREES). Default 20°: HataHub auto-pitches buildings to ~50° and
+    // flattens to 0° below the building zoom, so 20° cleanly separates the two regimes and a manual
+    // top-down look at buildings (pitch≈0 at z16) drops to the single full-density cascade. A pitch
+    // gesture crosses the threshold ONCE (no flapping) while the camera is already moving, so the
+    // brief near-cascade pop-in is hidden.
+    static const double thresholdRad = [] {
+        const char* v = std::getenv("MLN_SHADOW_PITCH_GATE_DEG");
+        const double deg = v ? std::atof(v) : 20.0;
+        return deg * 0.017453292519943295; // π/180
+    }();
+    return pitchRadians >= thresholdRad ? allocated : 1u;
 }
 
 float shadowCascadeSplit() {

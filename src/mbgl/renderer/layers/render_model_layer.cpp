@@ -6,6 +6,7 @@
 #include <mbgl/gfx/drawable_builder.hpp>
 #include <mbgl/gfx/drawable_tweaker.hpp>
 #include <mbgl/gfx/vertex_attribute.hpp>
+#include <mbgl/renderer/building_extrusion_zoom_ramp.hpp>
 #include <mbgl/renderer/change_request.hpp>
 #include <mbgl/renderer/layer_group.hpp>
 #include <mbgl/renderer/model/placeholder_mesh.hpp>
@@ -28,6 +29,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <optional>
 #include <unordered_set>
 
@@ -79,19 +81,19 @@ std::shared_ptr<PremultipliedImage> makeContactShadowImage() {
     return image;
 }
 
-// Models grow from the ground across z15→16 — the same linear ramp the style
-// applies to fill-extrusion-height — so they rise in sync with the buildings
-// around them (a full-size model fading in over half-grown buildings read as
-// unsynced).
+// Models grow from the ground across the configured building extrusion ramp,
+// the same linear ramp the style applies to fill-extrusion-height, so they rise
+// in sync with the buildings around them (a full-size model fading in over
+// half-grown buildings read as unsynced).
 //
 inline float zoomGrow(double zoom) {
-    return static_cast<float>(std::clamp(zoom - 15.0, 0.0, 1.0));
+    return buildingExtrusionGrowFactor(zoom);
 }
 
 // Short alpha ramp at the start of the growth window: at grow≈0 the mesh is
 // collapsed onto the ground plane (every face coplanar), which z-fights.
 inline float zoomFade(double zoom) {
-    return static_cast<float>(std::clamp((zoom - 15.0) / 0.12, 0.0, 1.0));
+    return buildingExtrusionModelFadeFactor(zoom);
 }
 
 // ── Bloom tuning ────────────────────────────────────────────────────
@@ -225,10 +227,27 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         coverSig = (coverSig ^ ((std::uint64_t(c.z) << 58) ^ (std::uint64_t(c.x) << 29) ^ std::uint64_t(c.y))) *
                    1099511628211ull;
     }
-    if (coverSig == lastCoverSig && lastData == data.get() && lastImpl == baseImpl.get()) {
+    const bool sourceSame = (lastData == data.get() && lastImpl == baseImpl.get());
+    // Already built drawables for exactly this cover + source — nothing to do.
+    if (coverSig == builtCoverSig && sourceSame) {
+        return;
+    }
+    // Debounce the expensive synchronous feature walk during fast camera motion: rebuild only once the
+    // viewport cover has held steady for a frame. While the cover is still churning (fling / fast zoom)
+    // the existing world-anchored model drawables keep rendering correctly; new tiles' models pop in
+    // when motion settles. This keeps the up-to-64-tile getTile() walk (thousands of features for the
+    // tree source) off the render-thread hot path during gestures. A SOURCE/style change is never
+    // debounced — rebuild immediately. MLN_MODEL_NO_DEBOUNCE=1 disables.
+    static const bool debounce = [] {
+        const char* v = std::getenv("MLN_MODEL_NO_DEBOUNCE");
+        return !(v && v[0] == '1');
+    }();
+    if (debounce && sourceSame && coverSig != lastCoverSig) {
+        lastCoverSig = coverSig; // record this cover; rebuild next frame if it still holds
         return;
     }
     lastCoverSig = coverSig;
+    builtCoverSig = coverSig; // committing to (re)build the drawables for this cover this frame
 
     struct PlacedFeature {
         mapbox::feature::feature<std::int16_t> feature;

@@ -45,6 +45,10 @@ private:
     std::size_t lastFeatureCount = 0;
     std::uint64_t lastPlacementKey = 0;
     std::uint64_t lastCoverSig = 0;
+    // The viewport cover the drawables were last (re)built for. Distinct from lastCoverSig (the cover
+    // seen on the PREVIOUS update) so the heavy feature walk can be debounced: rebuilt only once a new
+    // cover has held steady for a frame, keeping the synchronous getTile() walk off the gesture hot path.
+    std::uint64_t builtCoverSig = 0;
 
     std::vector<util::SimpleIdentity> drawableIds;
 

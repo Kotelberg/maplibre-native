@@ -3,6 +3,7 @@
 #include <mbgl/renderer/shadows/shadow_sun.hpp>
 #include <mbgl/renderer/shadows/shadow_frustum.hpp>
 #include <mbgl/renderer/shadows/shadow_pass.hpp>
+#include <mbgl/renderer/building_extrusion_zoom_ramp.hpp>
 #include <mbgl/shaders/shadow_depth_ubo.hpp>
 #include <mbgl/shaders/fill_extrusion_shadow_ubo.hpp>
 #include <mbgl/shaders/fill_extrusion_layer_ubo.hpp>
@@ -48,13 +49,11 @@ float envFloat(const char* name, float fallback) {
 
 // Shadows are a 3D-building effect: fade their strength in with the building-height zoom ramp so
 // near-flat buildings (height interpolated to ~0 at low zoom) don't cast footprint-shaped shadow
-// blobs on the 2D map. Defaults match HataHub's fill-extrusion-height interpolate(zoom,15,0,15.05,H):
-// 0 below z15, ramping to full by z15.05 (the buildings "pop up" almost immediately past z15 rather
-// than growing over a whole zoom level). Keep this HI in lock-step with the style's upper height stop —
-// if they diverge, shadows lag or lead the buildings. Env-tunable for other styles.
+// blobs on the 2D map. Defaults match HataHub's fill-extrusion-height ramp; keep this HI in lock-step
+// with the style's upper height stop or shadows lag/lead the buildings. Env-tunable for other styles.
 float shadowHeightFade(float zoom) {
-    const float lo = envFloat("MLN_SHADOW_GROW_ZOOM_LO", 15.0f);
-    const float hi = envFloat("MLN_SHADOW_GROW_ZOOM_HI", 15.05f);
+    const float lo = envFloat("MLN_SHADOW_GROW_ZOOM_LO", kBuildingExtrusionGrowZoomStart);
+    const float hi = envFloat("MLN_SHADOW_GROW_ZOOM_HI", kBuildingExtrusionGrowZoomEnd);
     if (hi <= lo) {
         return 1.0f;
     }
@@ -138,7 +137,11 @@ uint8_t cameraFocalZoom(const TransformState& state) {
 const std::vector<mat4>& worldToLightClipForFrame(ShadowFrustumState& frustumState,
                                                   const PaintParameters& parameters,
                                                   uint32_t mapSize) {
-    const uint32_t count = shadowCascadeCount();
+    // Per-frame ACTIVE cascade count (pitch-gated): a flat view samples 1 full-density cascade, a
+    // pitched view the full allocated set. MUST match the count the orchestrator registers shadow
+    // RenderTargets for this frame (both read the same frame pitch) — otherwise the receiver could
+    // sample a cascade map that wasn't rendered. frustumState re-fits when this count changes.
+    const uint32_t count = activeShadowCascadeCount(parameters.state.getPitch());
     if (!frustumState.valid || frustumState.frameCount != parameters.frameCount ||
         frustumState.mapSize != mapSize || frustumState.cascadeCount != count) {
         frustumState.cascades = computeWorldToLightClipCascades(parameters, mapSize, count, shadowCascadeSplit());
@@ -491,10 +494,17 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         // tile-local -> light clip for each cascade (kMaxShadowCascades slots; unused slots replicate
         // cascade 0 so the UBO is fully initialized — the receiver only reads the first cascade_count).
         std::array<std::array<float, 16>, 4> lightMatrices{};
-        for (uint32_t c = 0; c < 4; ++c) {
+        // One matrix multiply per DISTINCT cascade (the slots past cascadeCount used to recompute the
+        // same far-cascade product up to 3 extra times per drawable). Pitch-gated flat frames run a
+        // single cascade, so this is 1 multiply instead of 4 per building; remaining slots replicate the
+        // last so the UBO stays fully initialized (receiver reads only the first cascade_count).
+        for (uint32_t c = 0; c < cascadeCount && c < 4u; ++c) {
             mat4 lm;
-            matrix::multiply(lm, cascades[std::min(c, cascadeCount - 1u)], tileWorld);
+            matrix::multiply(lm, cascades[c], tileWorld);
             lightMatrices[c] = util::cast<float>(lm);
+        }
+        for (uint32_t c = cascadeCount; c < 4u; ++c) {
+            lightMatrices[c] = lightMatrices[cascadeCount - 1u];
         }
 
         const float baseT = std::get<0>(binders->get<FillExtrusionBase>()->interpolationFactor(zoom));
@@ -650,10 +660,17 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
         // tile-local -> light clip per cascade (unused slots replicate cascade 0; the receiver reads
         // only the first cascade_count, plus the last for the rim fade).
         std::array<std::array<float, 16>, 4> lightMatrices{};
-        for (uint32_t c = 0; c < 4; ++c) {
+        // One matrix multiply per DISTINCT cascade (the slots past cascadeCount used to recompute the
+        // same far-cascade product up to 3 extra times per drawable). Pitch-gated flat frames run a
+        // single cascade, so this is 1 multiply instead of 4 per building; remaining slots replicate the
+        // last so the UBO stays fully initialized (receiver reads only the first cascade_count).
+        for (uint32_t c = 0; c < cascadeCount && c < 4u; ++c) {
             mat4 lm;
-            matrix::multiply(lm, cascades[std::min(c, cascadeCount - 1u)], tileWorld);
+            matrix::multiply(lm, cascades[c], tileWorld);
             lightMatrices[c] = util::cast<float>(lm);
+        }
+        for (uint32_t c = cascadeCount; c < 4u; ++c) {
+            lightMatrices[c] = lightMatrices[cascadeCount - 1u];
         }
 
         const GroundShadowDrawableUBO ubo = {.matrix = util::cast<float>(matrix),

@@ -326,6 +326,14 @@ objc_library(
         "//platform/ios:ios_app_objcpp_srcs",
     ],
     copts = CPP_FLAGS + MAPLIBRE_FLAGS + WARNING_FLAGS["ios"],
+    # PluginLayerExampleMetalRendering.mm includes MLNBackendResource.h, whose Metal interface
+    # (the one exposing `mtkView`) is gated on MLN_RENDER_BACKEND_METAL. The SDK gets this via the
+    # generated MLNDefines.h; mirror the same //:metal_renderer select here so the app's objcpp
+    # example sources resolve the Metal interface too (raw `bazel build //platform/ios:App`).
+    defines = select({
+        "//:metal_renderer": ["MLN_RENDER_BACKEND_METAL=1"],
+        "//conditions:default": [],
+    }),
     includes = [
         "darwin/app",
         "darwin/src",

@@ -425,7 +425,23 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
         }
       });
     }
+    // Benchmark aids: install the core logging observer at the most permissive level so mbgl
+    // Log::Warning lines (e.g. MLN_PERF_LOG's "[perf] ...") reach os_log (subsystem
+    // org.maplibre.Native), and — with MLN_SHADOW_TEST_SPIN — drive a CADisplayLink that nudges the
+    // bearing every frame so the renderer never idles, yielding a steady stream of per-frame [perf]
+    // samples (and re-rendering the bearing-invariant shadow pass each frame for steady-state numbers).
+    [MLNLoggingConfiguration sharedConfiguration].loggingLevel = MLNLoggingLevelVerbose;
+    if (getenv("MLN_SHADOW_TEST_SPIN")) {
+      CADisplayLink *spin = [CADisplayLink displayLinkWithTarget:self
+                                                        selector:@selector(mlnBenchmarkSpin:)];
+      [spin addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    }
   }
+}
+
+- (void)mlnBenchmarkSpin:(CADisplayLink *)link {
+  (void)link;
+  self.mapView.direction = fmod(self.mapView.direction + 0.5, 360.0);
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {

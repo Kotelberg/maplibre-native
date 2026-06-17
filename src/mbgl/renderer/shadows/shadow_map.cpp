@@ -24,6 +24,20 @@ void ShadowMap::ensure(gfx::Context& context, const std::string& layerID) {
         context, Size{mapSize, mapSize}, gfx::TextureChannelDataType::UnsignedByte, /*withDepth=*/true);
     renderTarget->addLayerGroup(context.createTileLayerGroup(0, /*initialCapacity=*/64, layerID + "-shadow-casters"),
                                 /*replace=*/true);
+
+    // Eagerly materialise the sampled (color/packed-depth) texture now, at allocation, instead of
+    // letting it be created lazily on first render (the mtl OffscreenTextureResource only calls
+    // colorTexture->create() inside bind(), i.e. when the target actually renders). Receivers bind
+    // ALL allocated cascades' shadow textures up-front, fixed at drawable-build time (see the
+    // idFillExtrusionShadowTexture0 loop in render_fill_extrusion_layer.cpp), but a cascade only
+    // renders when it is ACTIVE for the frame (activeShadowCascadeCount is pitch-gated). On a
+    // low-pitch view the far cascade never renders, so its texture would stay textureDirty and the
+    // first 3D receiver to draw trips mtl::Texture2D::bind's assert(!textureDirty) -> SIGABRT.
+    // Creating it here keeps every bound cascade texture valid regardless of which cascades render;
+    // an unrendered cascade just holds an empty texture the receiver shader never samples (it loops
+    // only to the active cascade count). Idempotent: create() is a no-op once the texture exists,
+    // so the cascade's normal render path is unaffected.
+    renderTarget->getTexture()->create();
 }
 
 TileLayerGroup* ShadowMap::casterGroup() const {

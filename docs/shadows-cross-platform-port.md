@@ -252,7 +252,7 @@ positions are passed as **flattened** `shadow_pos0..3` varyings — MSL forbids 
 | `MLN_SHADOW_INTENSITY` | (style) | override `shadow-intensity` |
 | `MLN_SHADOW_MAP_SIZE` | 2048 | caster texture resolution |
 | `MLN_SHADOW_BIAS` / `MLN_SHADOW_SLOPE_BIAS` | tuned | depth-comparison bias |
-| `MLN_SHADOW_GROW_ZOOM_LO` / `_HI` | 15 / 15.05 | building grow-in ramp; **HI must match the style's `fill-extrusion-height` interpolate stop** |
+| `MLN_SHADOW_GROW_ZOOM_LO` / `_HI` | 15 / 15.2 | building grow-in ramp; **HI must match the style's `fill-extrusion-height` interpolate stop** |
 | `MLN_SHADOW_TEST` | off | demo harness: `_SUN="az,polar"`, `_ZOOM`, `_PITCH`, `_LAT`, `_LON` |
 
 ### 1.6 Notable fixes & root causes (carry these forward to every backend)
@@ -271,8 +271,8 @@ positions are passed as **flattened** `shadow_pos0..3` varyings — MSL forbids 
    near-cascade radius at `minRadius` (== far cascade), so near/far displacements were identical —
    the TDD test caught it. Fix: remove the `std::max(minRadius, …)` floor on near cascades.
 4. **Grow-ramp alignment (`9cfea93e74c2`, `bfc4a7fcd6a5`).** `fill-extrusion-height`/`base`
-   interpolate `15,0 → 15.05,H` (buildings pop to full height fast); `shadowHeightFade`'s
-   `MLN_SHADOW_GROW_ZOOM_HI` default **must** equal the style's high stop (`15.05`) or shadows
+   interpolate `15,0 → 15.2,H` (buildings reach full height shortly after z15); `shadowHeightFade`'s
+   `MLN_SHADOW_GROW_ZOOM_HI` default **must** equal the style's high stop (`15.2`) or shadows
    detach from half-grown buildings.
 5. **MSL array-member ban.** `float4 shadow_pos[4]` is illegal in a vertex-output struct → flatten
    to `shadow_pos0..3` + an if-chain. (GLSL/SPIR-V allow arrays in varyings — Android can keep them
