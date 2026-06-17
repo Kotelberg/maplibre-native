@@ -425,21 +425,13 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         // sun-facing faces so a neighbour's cast shadow still lands. Headless-verified: kills the
         // wall/roof acne (HF energy 16/42→0) while inter-building + ground shadows survive.
         .shadow_slope_bias = envFloat("MLN_SHADOW_SLOPE_BIAS", 0.05f)};
-#if !MLN_RENDER_BACKEND_VULKAN
-    // Metal/GL: props is layer-constant and reaches the shader via a flat buffer index (Metal) or a
-    // named UBO block (GL), so upload it ONCE per layer (cheap; the shipped behavior).
-    auto& layerUniforms = layerGroup.mutableUniformBuffers();
-    layerUniforms.createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
-
     // On the INSTANCED path the building WALLS are a separate drawable drawn by the PLAIN
     // FillExtrusionInstancedShader (the receiver only draws the roof; walls don't show cast shadows —
     // wallness suppresses them — so they intentionally stay on the plain shader). That shader reads the
-    // STANDARD FillExtrusionPropsUBO + DrawableUBO, normally provided by FillExtrusionLayerTweaker, which
-    // THIS tweaker replaces whenever shadows are on. Without them the walls read all-zero props (opacity 0
-    // → invisible). Both are written PER-DRAWABLE on the wall drawables in the visitor below — NOT at the
-    // layer level: the shadow RECEIVER's vertex buffers begin at buffer index `fillExtrusionShadowUBOCount`,
-    // which aliases idFillExtrusionPropsUBO, so the roof (drawn first) binds its pos buffer over a
-    // layer-bound props; only re-binding props in the wall's own draw (after the roof) survives.
+    // STANDARD FillExtrusionPropsUBO + FillExtrusionDrawableUBO, normally provided by
+    // FillExtrusionLayerTweaker, which THIS tweaker replaces whenever shadows are on. Without them the
+    // walls read all-zero props (opacity 0 → invisible). Build the regular props once here; HOW the walls
+    // receive props + the drawable UBO differs per backend (below).
     const auto& crossfade = static_cast<const FillExtrusionLayerProperties&>(*evaluatedProperties).crossfade;
     const FillExtrusionPropsUBO regularPropsUBO = {
         .color = evaluated.get<FillExtrusionColor>().constantOr(Color::black()),
@@ -455,11 +447,28 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         .from_scale = crossfade.fromScale,
         .to_scale = crossfade.toScale,
         .pad2 = 0};
+
+#if !MLN_RENDER_BACKEND_VULKAN
+    // Metal/GL: the shadow props is layer-constant and reaches the receiver via a flat buffer index
+    // (Metal) or a named UBO block (GL), so upload it ONCE per layer (cheap; the shipped behavior). The
+    // walls' regular props + drawable UBO are bound PER-DRAWABLE in the visitor below — NOT at the layer
+    // level: the shadow RECEIVER's vertex buffers begin at buffer index `fillExtrusionShadowUBOCount`,
+    // which aliases idFillExtrusionPropsUBO, so the roof (drawn first) binds its pos buffer over a
+    // layer-bound props; only re-binding in the wall's own draw (after the roof) survives.
+    auto& layerUniforms = layerGroup.mutableUniformBuffers();
+    layerUniforms.createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
 #endif
-    // On Vulkan the receiver declares props at the DRAWABLE descriptor set, so a layer-group write
-    // would land in an unbound slot (idFillExtrusionShadowPropsUBO is a drawable-range id) and the
-    // receiver would read an all-zero buffer (opacity/color/light = 0 -> invisible buildings). It must
-    // be uploaded per-drawable instead (see the gated write in the visitor below).
+
+#if MLN_RENDER_BACKEND_VULKAN
+    // Vulkan: the receiver declares its shadow props at the DRAWABLE descriptor set, so it's uploaded
+    // per-drawable in the visitor (a layer-group write would land in an unbound slot — idFillExtrusion-
+    // ShadowPropsUBO is a drawable-range id — and the receiver would read all-zero -> invisible). The
+    // visible WALLS, by contrast, read the regular CONSOLIDATED FillExtrusionDrawableUBO vector (LAYER
+    // set, indexed by ubo_index) + the layer FillExtrusionPropsUBO — the same model FillExtrusionLayer-
+    // Tweaker uses. Per-drawable writes can't reach a LAYER-set binding on Vulkan, so rebuild the wall
+    // drawable-UBO vector across the visitor and bind it + the layer props after the visitor.
+    std::vector<FillExtrusionDrawableUBO> wallDrawableUBOs;
+#endif
 
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         const auto& tileID = drawable.getTileID();
@@ -491,6 +500,29 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         const float baseT = std::get<0>(binders->get<FillExtrusionBase>()->interpolationFactor(zoom));
         const float heightT = std::get<0>(binders->get<FillExtrusionHeight>()->interpolationFactor(zoom));
         const float colorT = std::get<0>(binders->get<FillExtrusionColor>()->interpolationFactor(zoom));
+
+#if MLN_RENDER_BACKEND_VULKAN
+        if (drawable.getInstanceAttributes()) {
+            // INSTANCED WALL drawable (plain FillExtrusionInstancedShader): collect its REGULAR
+            // FillExtrusionDrawableUBO into the consolidated wall vector (bound at the LAYER level after
+            // the visitor) and index into it. The walls read the regular drawable UBO + layer props, NOT
+            // the shadow UBOs the receiver roof uses.
+            drawable.setUBOIndex(static_cast<std::uint32_t>(wallDrawableUBOs.size()));
+            wallDrawableUBOs.push_back(FillExtrusionDrawableUBO{
+                .matrix = util::cast<float>(matrix),
+                .pixel_coord_upper = {0, 0},
+                .pixel_coord_lower = {0, 0},
+                .height_factor = 0,
+                .tile_ratio = 0,
+                .base_t = baseT,
+                .height_t = heightT,
+                .color_t = colorT,
+                .pattern_from_t = 0,
+                .pattern_to_t = 0,
+                .pad1 = 0});
+            return;
+        }
+#endif
 
 #if !MLN_RENDER_BACKEND_VULKAN
         if (drawable.getInstanceAttributes()) {
@@ -537,6 +569,19 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
 #endif
     });
+
+#if MLN_RENDER_BACKEND_VULKAN
+    // Bind the consolidated wall drawable-UBO vector + the layer props so the visible instanced walls
+    // (plain FillExtrusionInstancedShader) render — mirroring FillExtrusionLayerTweaker, which this
+    // tweaker replaces when shadows are on. The roof receivers use the separate per-drawable shadow UBOs.
+    if (!wallDrawableUBOs.empty()) {
+        auto& layerUniforms = layerGroup.mutableUniformBuffers();
+        const std::size_t wallVectorSize = sizeof(FillExtrusionDrawableUBO) * wallDrawableUBOs.size();
+        layerUniforms.set(idFillExtrusionDrawableUBO,
+                          context.createUniformBuffer(wallDrawableUBOs.data(), wallVectorSize, false, true));
+        layerUniforms.createOrUpdate(idFillExtrusionPropsUBO, &regularPropsUBO, context);
+    }
+#endif
 }
 
 void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParameters& parameters) {
