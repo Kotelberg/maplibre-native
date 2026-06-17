@@ -878,6 +878,23 @@ git commit -m "docs: GL FE-instancing M1 on-device parity + perf results"
 - **Task 5 test relocated:** A standalone DrawableGL instanced-draw test needs a full pipeline (shader program, uniform buffers, a render pass, framebuffer readback + pixel asserts) — no lightweight harness exists, and it would largely duplicate the render-parity gate. The functional verification of the instanced draw path (merged VAO, divisor-1 bindings, `drawInstanced`) is therefore relocated to the headless render-parity test (Task 9/10), which drives the exact same path with the real shader + golden comparison. `setInstanceAttributes` is NOT overridden (the base setter stores into the protected `instanceAttributes` member; DrawableGL reads it in `upload()` and handles dirty/VAO-invalidation there, mirroring the Metal drawable).
 - **Normal pack factor reconciled to 2^14 (16384):** the non-instanced `layoutVertex` packs normals at `ny*16384` and the shader divides by `16384`. The bucket packs `normal0`/`normal1` at `floor(n*16384)` and the GL instanced shader divides by `16384.0` — exact magnitude parity (resolves the previously-flagged 2^13-vs-2^14 open detail). The static-quad `a_pos.y` carries base/top, so no LSB is stolen for `t`.
 
+## ⚠️ Environmental blocker: headless GL rendering impossible on macOS (discovered Task 9)
+
+`build-gl-check`'s `mbgl-render` on this Mac gets `GL_VERSION: 2.1 Metal - 90.5` — the CGL
+headless backend (`platform/darwin/src/headless_backend_cgl.mm`) requests
+`kCGLOGLPVersion_Legacy` (GL 2.1). The mbgl GL shaders are all `#version 300 es` (GLES 3.0), so
+they fail to compile (`version '300' is not supported`) and `mbgl-render` aborts — for EVERY
+shader, not just the instanced ones (reproduced on a stock fill-extrusion render). Apple desktop
+GL has no GLES profile, so even switching to `kCGLOGLPVersion_3_2_Core` (GL 4.1) would not accept
+`#version 300 es`. **Headless GL render-parity (Tasks 9 golden / 10 / 11 render checks) cannot run
+on macOS.** It can run on a GLES environment (Android device, or a Linux EGL+Mesa/SwiftShader
+headless build / CI). Unit tests + C++ build (gate on AND off) DO work on macOS and are green.
+
+Consequence for inline execution: Tasks 9–11 are authored + compile-verified (gate on/off) on
+macOS; render-correctness (GLSL compile + geometry/winding/parity) is verified on-device (Task 12,
+Android), which is the milestone's real target anyway. The Task 9 harness (style.json +
+run-render-test.sh) is committed for use on a GLES environment; the golden must be generated there.
+
 ## Self-Review notes
 
 - Spec coverage: Layer 0 → Task 0; Layer 1 → Tasks 2,4,5; Layer 2 → Tasks 6,7,8,11; Layer 3 → Tasks 3,10; Layer 4 gate → Task 1 (used by 3,8,10,11); verification → Tasks 9,12. Cadence is intentionally Plan 2.

@@ -1,0 +1,64 @@
+{
+  "version": 8,
+  "name": "fill-extrusion-instancing-render-test",
+  "sources": {
+    "buildings": {
+      "type": "geojson",
+      "data": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "properties": { "height": 80, "base": 0 },
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [30.5228, 50.4505],
+                  [30.5240, 50.4505],
+                  [30.5240, 50.4497],
+                  [30.5228, 50.4497],
+                  [30.5228, 50.4505]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": { "height": 45, "base": 0 },
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [30.5244, 50.4503],
+                  [30.5251, 50.4503],
+                  [30.5251, 50.4499],
+                  [30.5244, 50.4499],
+                  [30.5244, 50.4503]
+                ]
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": { "background-color": "#e8e6e2" }
+    },
+    {
+      "id": "buildings-3d",
+      "type": "fill-extrusion",
+      "source": "buildings",
+      "paint": {
+        "fill-extrusion-color": "#b5c4d8",
+        "fill-extrusion-height": ["get", "height"],
+        "fill-extrusion-base": ["get", "base"],
+        "fill-extrusion-opacity": 1.0
+      }
+    }
+  ]
+}
