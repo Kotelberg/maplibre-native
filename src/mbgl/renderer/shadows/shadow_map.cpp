@@ -35,8 +35,12 @@ void ShadowMap::ensure(gfx::Context& context, const std::string& layerID) {
     // first 3D receiver to draw trips mtl::Texture2D::bind's assert(!textureDirty) -> SIGABRT.
     // Creating it here keeps every bound cascade texture valid regardless of which cascades render;
     // an unrendered cascade just holds an empty texture the receiver shader never samples (it loops
-    // only to the active cascade count). Idempotent: create() is a no-op once the texture exists,
-    // so the cascade's normal render path is unaffected.
+    // only to the active cascade count). Idempotent on every backend now: mtl::Texture2D::create()
+    // always was, and gl::Texture2D::create() is too (it guards allocateTexture on !texture) — so this
+    // no longer orphans the GL texture the way it did at 0a81f793 (the GL shadow-blackout bug). This
+    // eager materialize is REQUIRED for the multi-cascade (pitch-gated) path on every backend: the
+    // far cascade that doesn't render on a flat view still needs a valid texture for the receiver to
+    // bind up-front.
     renderTarget->getTexture()->create();
 }
 

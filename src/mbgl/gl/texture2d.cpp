@@ -89,7 +89,15 @@ void Texture2D::updateTextureData(const void* data) noexcept {
 }
 
 void Texture2D::create() {
-    allocateTexture();
+    // Idempotent (matches mtl::Texture2D::create): allocate the GL texture object only if we don't
+    // already have one. allocateTexture() unconditionally makes a NEW UniqueTexture, so calling
+    // create() twice (e.g. ShadowMap's eager materialize + OffscreenTextureResource::bind) would
+    // orphan the first texture — the FBO would attach the second while a receiver that captured the
+    // first samples an empty texture (the GL shadow-blackout bug). Resizes go through upload(), which
+    // reallocates explicitly, so guarding here does not affect them.
+    if (!texture) {
+        allocateTexture();
+    }
     if (storageDirty) {
         updateTextureData();
     }
