@@ -621,8 +621,12 @@ void VertexAttribute::Set(const Type& binding, Context& context, AttributeLocati
             static_cast<GLboolean>(false),
             static_cast<GLsizei>(binding->vertexStride),
             reinterpret_cast<GLvoid*>(binding->attribute.offset + (binding->vertexStride * binding->vertexOffset))));
+        // 0 = advance per vertex (default); 1 = advance per instance (fill-extrusion instancing).
+        MBGL_CHECK_ERROR(glVertexAttribDivisor(location, binding->instanceDivisor));
     } else {
         MBGL_CHECK_ERROR(glDisableVertexAttribArray(location));
+        // Reset divisor so a recycled attribute location doesn't keep a stale per-instance divisor.
+        MBGL_CHECK_ERROR(glVertexAttribDivisor(location, 0));
     }
 }
 
