@@ -46,7 +46,11 @@ uint32_t shadowCascadeCount() {
         // near-field shadow resolution. It is also ~2x cheaper (one caster pass + one receiver sample
         // instead of two) — the headline perf lever for the dense-building Android case. Env
         // MLN_SHADOW_CASCADE_COUNT overrides on either backend (set =2 to test the multi-cascade bug).
-#if MLN_RENDER_BACKEND_OPENGL || MLN_RENDER_BACKEND_VULKAN
+        // Metal + OpenGL: 2 cascades, pitch-gated (activeShadowCascadeCount → 1 flat / 2 pitched) so
+        // the crisp near cascade only costs a second caster pass when buildings are viewed at an angle.
+        // The GL multi-cascade path was previously off (the eager shadow-texture materialize orphaned
+        // the GL texture — now fixed via idempotent gl::Texture2D::create()). Vulkan stays single.
+#if MLN_RENDER_BACKEND_VULKAN
         const uint32_t backendDefault = 1u;
 #else
         const uint32_t backendDefault = 2u;
