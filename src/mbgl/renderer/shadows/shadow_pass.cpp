@@ -46,14 +46,17 @@ uint32_t shadowCascadeCount() {
         // near-field shadow resolution. It is also ~2x cheaper (one caster pass + one receiver sample
         // instead of two) — the headline perf lever for the dense-building Android case. Env
         // MLN_SHADOW_CASCADE_COUNT overrides on either backend (set =2 to test the multi-cascade bug).
-        // Metal + OpenGL: 2 cascades, pitch-gated (activeShadowCascadeCount → 1 flat / 2 pitched) so
-        // the crisp near cascade only costs a second caster pass when buildings are viewed at an angle.
-        // The GL multi-cascade path was previously off (the eager shadow-texture materialize orphaned
-        // the GL texture — now fixed via idempotent gl::Texture2D::create()). Vulkan stays single.
-#if MLN_RENDER_BACKEND_VULKAN
-        const uint32_t backendDefault = 1u;
-#else
+        // Metal: 2 cascades (pitch-gated), shipped + stable. OpenGL + Vulkan: default to 1. The GL
+        // blackout/latch from the eager shadow-texture materialize is fixed (idempotent
+        // gl::Texture2D::create()), but 2-cascade on GL still has a COLD-START over-shadow: right after
+        // a cold launch, zooming out a couple steps over-darkens the buildings (clears after a zoom
+        // in/out cycle). It is a multi-shadow-texture state-init issue (the same class flagged for GPU
+        // frame capture); single-cascade is unaffected, so GL ships single until that is pinned. Set
+        // MLN_SHADOW_CASCADE_COUNT=2 to exercise the 2-cascade path on GL/Vulkan.
+#if MLN_RENDER_BACKEND_METAL
         const uint32_t backendDefault = 2u;
+#else
+        const uint32_t backendDefault = 1u;
 #endif
         const uint32_t n = v ? static_cast<uint32_t>(std::atoi(v)) : backendDefault;
         // Clamp to [1, kMaxShadowCascades]: 1 = legacy single map; the UBO/shader arrays are sized
