@@ -4,6 +4,10 @@
 
 #include <mbgl/platform/gl_functions.hpp>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 using namespace mbgl::platform;
 
 TEST(GLFunctions, OpenGLES) {
@@ -253,8 +257,13 @@ TEST(GLFunctions, OpenGLES) {
     EXPECT_NE(glGetProgramBinary, nullptr);
     EXPECT_NE(glProgramBinary, nullptr);
     EXPECT_NE(glProgramParameteri, nullptr);
+    // glInvalidate{Sub,}Framebuffer are GL ES 3.0 / GL 4.3 functions. On Apple they are only
+    // defined for iOS/simulator (see platform/darwin/src/gl_functions.cpp); macOS desktop GL caps
+    // at 4.1 and omits them. Skip the non-null assertion on macOS desktop; keep it everywhere else.
+#if !defined(__APPLE__) || TARGET_OS_IPHONE || TARGET_OS_SIMULATOR
     EXPECT_NE(glInvalidateFramebuffer, nullptr);
     EXPECT_NE(glInvalidateSubFramebuffer, nullptr);
+#endif
     EXPECT_NE(glTexStorage2D, nullptr);
     EXPECT_NE(glTexStorage3D, nullptr);
     EXPECT_NE(glGetInternalformativ, nullptr);
