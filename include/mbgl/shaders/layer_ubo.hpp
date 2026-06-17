@@ -87,5 +87,13 @@ enum {
 // non-instanced — see renderer/shadows + vulkan/{shadow_depth,fill_extrusion_shadow}.
 #define MLN_USE_FILL_EXTRUSION_INSTANCING (MLN_RENDER_BACKEND_METAL || MLN_RENDER_BACKEND_VULKAN)
 
+// GL-only edge-indexed fill-extrusion instancing (Plan 1). Independent of
+// MLN_USE_FILL_EXTRUSION_INSTANCING (which stays Metal/Vulkan). Default off during bring-up;
+// flip to 1 to enable the OpenGL instanced path.
+// See docs/superpowers/specs/2026-06-17-android-gl-fill-extrusion-instancing-design.md
+#if !defined(MLN_GL_FE_INSTANCING)
+#define MLN_GL_FE_INSTANCING 0
+#endif
+
 } // namespace shaders
 } // namespace mbgl
