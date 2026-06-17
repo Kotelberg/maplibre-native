@@ -1,5 +1,11 @@
 # Learnings
 
+## GL fill-extrusion edge instancing needs edge-owned shading data
+
+- What we learned: the GL edge-indexed fill-extrusion plan cannot reuse the current vertex-indexed paint binder stream unchanged, and one normal per edge is not enough for the existing smooth curved-facade shading. The explicit GLES path stores endpoint normals (`nP1`/`nP2`) per wall edge and populates paint binders by `vertices.elements()`, while a separate `sharedGLEdgeInstances` stream has a different count/order after the first feature.
+- Why it matters: if GL edge instances read base/height/color from the existing binder buffer by instance index, later features can sample paint data at the wrong offset. If each edge carries a single normal, the wall still shades flat per edge instead of interpolating across endpoints.
+- How to apply it: make the GL edge-instance stream own edge-aligned paint attributes or a separate edge paint binder path, and carry endpoint normals (`normal0`/`normal1`, or an equivalent packed pair) selected/interpolated by the static quad x coordinate. Edit GL shader source via `shaders/*.glsl` plus `shaders/manifest.json`, then regenerate `include/mbgl/shaders/gl/*.hpp`; those headers are generated artifacts.
+
 ## Metal instanced wall casters need owned base/height buffers
 
 - What we learned: `ShadowDepthInstancedShader` cannot safely consume `fill-extrusion-base` and `fill-extrusion-height` by reusing the visible `FillExtrusionInstancedShader` shared/interleaved paint byte buffer. The source bytes were valid, but the wall-caster shader variant needed its own `Float2` instance buffers and independent Metal buffer slots for `base` and `height`.
