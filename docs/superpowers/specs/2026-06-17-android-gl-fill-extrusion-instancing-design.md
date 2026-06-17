@@ -35,8 +35,16 @@ Vulkan is explicitly **out of scope** for this milestone (GL first).
   (`src/mbgl/gl/context.cpp:767`) calls plain `glDrawElements`; there is no instance-divisor concept
   in the GL vertex-attribute code, and `glVertexAttribDivisor` is never called anywhere.
 - The GL backend already compiles `#version 300 es` (`src/mbgl/shaders/gl/shader_program_gl.cpp:126`),
-  so `glDrawElementsInstanced` and `glVertexAttribDivisor` are **core in GLES 3.0** — no extension
-  needed.
+  so `glDrawElementsInstanced` and `glVertexAttribDivisor` are **core in GLES 3.0**.
+  **CAVEAT (must verify on device):** Android requests an **ES2** context —
+  `EGL_CONTEXT_CLIENT_VERSION = 2` in `platform/.../egl/EGLContextFactory.java:19` and likewise in
+  `.../textureview/GLTextureViewRenderThread.java:252` — even though the config asks for
+  `EGL_OPENGL_ES3_BIT` (`.../egl/EGLConfigChooser.java:283`). The map renders today only because
+  drivers hand back a ≥ES3-capable context. Relying on that for ES3-core instancing is unsafe, so
+  Layer 0 (below) **explicitly requests an ES3 context and logs `GL_VERSION` on device** before any
+  instancing path is enabled. If a target device only yields a true ES2 context, the fallback is the
+  `GL_EXT_instanced_arrays` extension (`glDrawElementsInstancedEXT` / `glVertexAttribDivisorEXT`),
+  assessed at that point — not assumed.
 - `include/mbgl/shaders/gl/shadow_depth_instanced.hpp` is an explicit placeholder: its own header
   comment says it exists only so the all-backend shader manifest compiles, and "If a GL instancing
   path is ever added, replace this with a real port of mtl/shadow_depth.hpp's ShadowDepthInstancedShader."
@@ -72,18 +80,42 @@ time, adding code deleted at collapse anyway. Revisit only if a deployed in-app 
 Rejected: **Approach A** (big-bang macro flip, no fallback — too risky on GLES); **Approach C**
 (instance only visible walls, leave shadows/smooth-normals behind — fails the parity + unification goals).
 
-## Architecture — four independent layers (bottom-up)
+## Architecture — five layers (bottom-up)
+
+### Layer 0 — ES3 context guarantee (new, small, must land first)
+Before any instanced GL draw can be relied on, the backend must run on a real ES3 context.
+- Bump `EGL_CONTEXT_CLIENT_VERSION` 2 → 3 in `platform/.../egl/EGLContextFactory.java:19` and the
+  TextureView path `.../textureview/GLTextureViewRenderThread.java:252` (config already requests
+  `EGL_OPENGL_ES3_BIT`).
+- Log `glGetString(GL_VERSION)` on the render thread at context creation; the GL instancing gate
+  (Layer 4) refuses to enable if the runtime context reports < ES 3.0.
+- If a real target device only yields ES2, branch to the `GL_EXT_instanced_arrays` extension entry
+  points — assessed then, not assumed.
 
 ### Layer 1 — GL instanced-draw primitives (backend-local, new)
-The only genuinely new GL capability. Changes nothing about Metal/Vulkan.
-- Add a **per-attribute instance divisor** to `gfx::VertexAttribute` / `VertexAttributeArrayGL`
-  (default 0 = per-vertex; 1 = per-instance).
-- Add `gl::Context::drawInstanced(drawMode, indexOffset, indexLength, instanceCount)` calling
-  `glDrawElementsInstanced`, alongside the existing `draw`.
-- In the VAO attribute-bind path (`src/mbgl/gl/value.cpp`), call `glVertexAttribDivisor` for any
-  attribute whose divisor is 1.
-- `DrawableGL` carries an `instanceCount` (0 → existing `draw`; >0 → `drawInstanced`).
-- **Interface:** other backends untouched; unit-testable with a trivial instanced quad.
+The only genuinely new GL capability. Changes nothing about Metal/Vulkan. This layer is **larger than
+a divisor flag** — verified against the current code, *all* of the following must land together or the
+shared render-layer path compiles while per-instance data is silently unbound:
+- **Divisor carried end-to-end, not just on `VertexAttribute`.** Today the VAO setter receives only
+  `gfx::AttributeBinding` (`src/mbgl/gl/value.cpp:610`), which has **no divisor field**
+  (`src/mbgl/gfx/attribute.hpp:116`). Add divisor to `gfx::AttributeBinding` and thread it through
+  `buildAttributeBindings`, the binding equality/state caching, and `value::VertexAttribute::Set` so
+  it survives to the `glVertexAttribPointer` + `glVertexAttribDivisor` call.
+- **GL shader instance-attribute metadata.** `ShaderProgramGL::create()` currently funnels every
+  active GLSL attribute into one `vertexAttributes` array and leaves `instanceAttributes` empty
+  (`src/mbgl/shaders/gl/shader_program_gl.cpp:161` ff). Populate per-attribute instance classification
+  (from the shader's attribute info / instance set) so the drawable knows which attributes are
+  per-instance.
+- **Separate instance buffer upload + merged VAO bindings.** `DrawableGL` upload today builds
+  bindings only from `shader->getVertexAttributes()` + `vertexAttributes`
+  (`src/mbgl/gl/drawable_gl.cpp:178`). Add instance vertex-attribute upload (own buffer(s)) and merge
+  per-vertex + per-instance bindings into the VAO, with the instance bindings marked divisor 1.
+- **Instanced draw.** Add `gl::Context::drawInstanced(drawMode, indexOffset, indexLength,
+  instanceCount)` calling `glDrawElementsInstanced`, alongside the existing `draw`. `DrawableGL`
+  carries an `instanceCount` (0 → existing `draw`; >0 → `drawInstanced`).
+- **VAO cache invalidation:** divisor changes must invalidate the cached binding state.
+- **Interface:** other backends untouched; unit-testable with a trivial instanced quad
+  (divisor + `glDrawElementsInstanced` drawing N quads correctly).
 
 ### Layer 2 — GL instanced shaders (new GLSL ES 3.0 ports)
 Real ports of the three shaders the manifest already enumerates for GL as placeholders:
@@ -116,12 +148,26 @@ the GLES `#else` wall-quad path.
 3. **Draw → GL backend.** `DrawableGL` with `instanceCount = edgeCount` → `Context::drawInstanced`
    → `glDrawElementsInstanced(GL_TRIANGLES, 6, …, instanceCount)`. The vertex shader extrudes each
    wall from the unit quad using the instance's two endpoints + base/height.
-4. **Shadows** reuse the same instance buffer through `ShadowDepthInstancedShader`.
+4. **Shadows** through `ShadowDepthInstancedShader`. The static/outline geometry and the per-edge
+   instance positions may be shared, **but the wall caster's base/height are NOT a plain reuse of the
+   visible drawable's buffer.** The current code deliberately creates separate wall-caster instance
+   attributes and de-interleaves base/height into owned `Float2` buffers
+   (`src/mbgl/renderer/layers/render_fill_extrusion_layer.cpp:540`), then binds those independently to
+   the instanced caster (`:967`). The GL path must preserve this independent-layout handling, not
+   collapse it into a single shared interleaved buffer.
 
 ## §4 — Cadence sub-track (60fps lever; orthogonal, bundled)
 
-Touches only Android render scheduling (`platform/android/.../renderer/MapRenderer*.java`,
-`MapLibreSurfaceView.java`, `src/cpp/map_renderer.cpp`) — none of Layers 1–4. Investigation order:
+Touches only Android render scheduling — none of Layers 0–4. The active GL render-thread loops (the
+files that actually drive frames, verified) are:
+- `platform/.../renderer/surfaceview/MapLibreGLSurfaceView.java:499` — GL SurfaceView render loop
+  (this is the surface the 2026-06-13 benchmark measured).
+- `platform/.../renderer/textureview/GLTextureViewRenderThread.java:87` — TextureView's separate
+  request loop (if any HataHub screen uses TextureView).
+- `platform/.../cpp/android_renderer_frontend.cpp:121` — native invalidation / `requestRender` path.
+- plus the shared `MapRenderer*.java` / `MapRendererScheduler` and `src/cpp/map_renderer.cpp` wake path.
+
+Investigation order:
 - **Render mode:** confirm whether MapLibre-RN drives the SurfaceView renderer with a request/wait
   handoff that adds a vsync of latency vs. continuous; inspect `MapRendererRunnable` /
   `MapRendererScheduler` and the C++ wake path.
@@ -134,6 +180,8 @@ Touches only Android render scheduling (`platform/android/.../renderer/MapRender
 
 ## Verification
 
+- **Layer 0:** on-device log confirming `GL_VERSION` ≥ ES 3.0 after the context-version bump (Honor
+  + at least one second device).
 - **Layer 1:** minimal headless-GL instanced-quad render test (divisor + `glDrawElementsInstanced`).
 - **Layer 2/3 parity:** render HataHub style z16/pitch — new instanced build vs. current
   non-instanced build; pixel-diff (AE threshold like existing model render tests).
