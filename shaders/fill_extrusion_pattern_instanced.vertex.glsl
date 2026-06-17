@@ -1,14 +1,4 @@
-// Generated code, do not modify this file!
-#pragma once
-#include <mbgl/shaders/shader_source.hpp>
-
-namespace mbgl {
-namespace shaders {
-
-template <>
-struct ShaderSource<BuiltIn::FillExtrusionPatternInstancedShader, gfx::Backend::Type::OpenGL> {
-    static constexpr const char* name = "FillExtrusionPatternInstancedShader";
-    static constexpr const char* vertex = R"(layout (location = 0) in vec2 a_pos;            // static unit quad: x = endpoint sel, y = base/top sel
+layout (location = 0) in vec2 a_pos;            // static unit quad: x = endpoint sel, y = base/top sel
 layout (location = 1) in vec2 a_pos0;           // instance: edge start (tile coords)
 layout (location = 2) in vec2 a_pos1;           // instance: edge end
 layout (location = 3) in vec3 a_normal0;        // instance: smoothed wall normal at pos0 * 2^14
@@ -70,44 +60,16 @@ layout (std140) uniform FillExtrusionPropsUBO {
     lowp float props_pad2;
 };
 
-#ifndef HAS_UNIFORM_u_base
-layout (location = 6) in lowp vec2 a_base;
-out lowp float base;
-#endif
-#ifndef HAS_UNIFORM_u_height
-layout (location = 7) in lowp vec2 a_height;
-out lowp float height;
-#endif
-#ifndef HAS_UNIFORM_u_pattern_from
-layout (location = 8) in mediump vec4 a_pattern_from;
-out mediump vec4 pattern_from;
-#endif
-#ifndef HAS_UNIFORM_u_pattern_to
-layout (location = 9) in mediump vec4 a_pattern_to;
-out mediump vec4 pattern_to;
-#endif
+#pragma mapbox: define lowp float base
+#pragma mapbox: define lowp float height
+#pragma mapbox: define mediump vec4 pattern_from
+#pragma mapbox: define mediump vec4 pattern_to
 
 void main() {
-    #ifndef HAS_UNIFORM_u_base
-base = unpack_mix_vec2(a_base, u_base_t);
-#else
-lowp float base = u_base;
-#endif
-    #ifndef HAS_UNIFORM_u_height
-height = unpack_mix_vec2(a_height, u_height_t);
-#else
-lowp float height = u_height;
-#endif
-    #ifndef HAS_UNIFORM_u_pattern_from
-pattern_from = a_pattern_from;
-#else
-mediump vec4 pattern_from = u_pattern_from;
-#endif
-    #ifndef HAS_UNIFORM_u_pattern_to
-pattern_to = a_pattern_to;
-#else
-mediump vec4 pattern_to = u_pattern_to;
-#endif
+    #pragma mapbox: initialize lowp float base
+    #pragma mapbox: initialize lowp float height
+    #pragma mapbox: initialize mediump vec4 pattern_from
+    #pragma mapbox: initialize mediump vec4 pattern_to
 
     vec2 pattern_tl_a = pattern_from.xy;
     vec2 pattern_br_a = pattern_from.zw;
@@ -157,87 +119,3 @@ mediump vec4 pattern_to = u_pattern_to;
     v_lighting.rgb += clamp(directional * u_lightcolor, mix(vec3(0.0), vec3(0.3), 1.0 - u_lightcolor), vec3(1.0));
     v_lighting *= u_opacity;
 }
-)";
-    static constexpr const char* fragment = R"(in vec2 v_pos_a;
-in vec2 v_pos_b;
-in vec4 v_lighting;
-
-layout (std140) uniform FillExtrusionTilePropsUBO {
-    highp vec4 u_pattern_from;
-    highp vec4 u_pattern_to;
-    highp vec2 u_texsize;
-    lowp float tileprops_pad1;
-    lowp float tileprops_pad2;
-};
-
-layout (std140) uniform FillExtrusionPropsUBO {
-    highp vec4 u_color;
-    highp vec3 u_lightcolor;
-    lowp float props_pad1;
-    highp vec3 u_lightpos;
-    highp float u_base;
-    highp float u_height;
-    highp float u_lightintensity;
-    highp float u_vertical_gradient;
-    highp float u_opacity;
-    highp float u_fade;
-    highp float u_from_scale;
-    highp float u_to_scale;
-    lowp float props_pad2;
-};
-
-uniform sampler2D u_image;
-
-#ifndef HAS_UNIFORM_u_base
-in lowp float base;
-#endif
-#ifndef HAS_UNIFORM_u_height
-in lowp float height;
-#endif
-#ifndef HAS_UNIFORM_u_pattern_from
-in mediump vec4 pattern_from;
-#endif
-#ifndef HAS_UNIFORM_u_pattern_to
-in mediump vec4 pattern_to;
-#endif
-
-void main() {
-    #ifdef HAS_UNIFORM_u_base
-lowp float base = u_base;
-#endif
-    #ifdef HAS_UNIFORM_u_height
-lowp float height = u_height;
-#endif
-    #ifdef HAS_UNIFORM_u_pattern_from
-mediump vec4 pattern_from = u_pattern_from;
-#endif
-    #ifdef HAS_UNIFORM_u_pattern_to
-mediump vec4 pattern_to = u_pattern_to;
-#endif
-
-    vec2 pattern_tl_a = pattern_from.xy;
-    vec2 pattern_br_a = pattern_from.zw;
-    vec2 pattern_tl_b = pattern_to.xy;
-    vec2 pattern_br_b = pattern_to.zw;
-
-    vec2 imagecoord = mod(v_pos_a, 1.0);
-    vec2 pos = mix(pattern_tl_a / u_texsize, pattern_br_a / u_texsize, imagecoord);
-    vec4 color1 = texture(u_image, pos);
-
-    vec2 imagecoord_b = mod(v_pos_b, 1.0);
-    vec2 pos2 = mix(pattern_tl_b / u_texsize, pattern_br_b / u_texsize, imagecoord_b);
-    vec4 color2 = texture(u_image, pos2);
-
-    vec4 mixedColor = mix(color1, color2, u_fade);
-
-    fragColor = mixedColor * v_lighting;
-
-#ifdef OVERDRAW_INSPECTOR
-    fragColor = vec4(1.0);
-#endif
-}
-)";
-};
-
-} // namespace shaders
-} // namespace mbgl

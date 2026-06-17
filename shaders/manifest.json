@@ -126,8 +126,8 @@
     {
         "name": "FillExtrusionPatternInstancedShader",
         "header": "fill_extrusion_pattern_instanced",
-        "glsl_vert": "_empty.glsl",
-        "glsl_frag": "_empty.glsl",
+        "glsl_vert": "fill_extrusion_pattern_instanced.vertex.glsl",
+        "glsl_frag": "fill_extrusion_pattern_instanced.fragment.glsl",
         "uses_ubos": true
     },
     {
