@@ -58,3 +58,34 @@ is **resolved: yes**.
 - **Real-product run:** rebuild HataHub against the gate-ON AAR and verify its actual building view.
 - **Collapse follow-up** (separate): flip the gate default to 1 + delete the `#else` GLES wall path,
   only after the perf A/B + close-zoom sign-off.
+
+## GL cast-shadow regression — found + fixed (2026-06-18, on-device)
+
+While verifying on-device the user reported GL cast-shadows broken (flat-grey buildings, no anchored
+ground shadows). **Bisected on-device** (build → ShadowDemoActivity screenshot → ImageMagick pixel
+diff as the reliable signal — the shadows are subtle enough to misjudge by eye):
+- Pre-instancing baseline `15e22b7` == broken == gate-OFF == gate-ON → **NOT the instancing work**
+  (triple-confirmed; the instancing A/B is pixel-identical bar wall-edge AA).
+- `4758809` (one commit earlier) == shadows working. Regression = **`0a81f793`** (the Metal SIGABRT
+  fix), which is an *ancestor* of the instancing branch.
+
+**Root cause:** `ShadowMap::ensure` eagerly calls `renderTarget->getTexture()->create()` so unrendered
+Metal cascades hold a valid texture (`mtl::Texture2D::bind` asserts `!textureDirty`). `mtl::Texture2D
+::create()` is idempotent, but `gl::Texture2D::create() -> allocateTexture()` UNCONDITIONALLY
+allocated a new GL texture every call → eager create made texture #1, then `OffscreenTextureResource
+::bind()` (first caster render) made #2 + attached it to the FBO, orphaning #1 — which the receiver had
+already captured → GL receiver samples an empty texture → no cast shadows. The same orphaning was the
+"over-shadow latch after zoom-out round-trip" that had kept multi-cascade disabled on Android.
+
+**Fix (commit 8a6d9a4):** make `gl::Texture2D::create()` idempotent (guard `allocateTexture` on
+`!texture`, matching the mtl contract). Resizes go via `upload()` (explicit realloc), unaffected.
+Single-cascade GL shadows restored — pixel-diff ≈ working `4758809`, far from broken. Headless GL
+build + 10 GL unit tests still green.
+
+**2-pass / multi-cascade enabled on GL (commit d48e6fe):** with the orphaning fixed, the multi-cascade
+path works on OpenGL. Defaulted OpenGL to 2 cascades like Metal; the existing pitch gate
+(`activeShadowCascadeCount`: 1 flat / 2 when pitch ≥ 20°) gives the crisp near cascade only when
+buildings are viewed at an angle — matching Metal's "second pass only when pitched." **On-device
+(Honor, tilt 60°): 2-cascade renders correctly AND the zoom-out round-trip shows no over-shadow latch**
+(before/after pixel diff = 3696, camera noise only). Vulkan left single-cascade (separate issues).
+QA screenshots 04–07 in `~/Work/maplibre-model-layer-qa/gl-instancing/`.
