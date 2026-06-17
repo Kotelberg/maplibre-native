@@ -18,6 +18,9 @@
 #include <mbgl/shaders/vulkan/debug.hpp>
 #include <mbgl/shaders/vulkan/fill.hpp>
 #include <mbgl/shaders/vulkan/fill_extrusion.hpp>
+#include <mbgl/shaders/vulkan/fill_extrusion_shadow.hpp>
+#include <mbgl/shaders/vulkan/shadow_depth.hpp>
+#include <mbgl/shaders/vulkan/ground_shadow.hpp>
 #include <mbgl/shaders/vulkan/heatmap.hpp>
 #include <mbgl/shaders/vulkan/heatmap_texture.hpp>
 #include <mbgl/shaders/vulkan/hillshade.hpp>
@@ -693,6 +696,13 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
                   shaders::BuiltIn::FillExtrusionInstancedShader,
                   shaders::BuiltIn::FillExtrusionPatternShader,
                   shaders::BuiltIn::FillExtrusionPatternInstancedShader,
+                  // Cast shadows (Route A: instanced fill-extrusion). Vulkan is always instanced, so the
+                  // roof caster/receiver use FE_INSTANCING and the wall caster reconstructs walls from the
+                  // OutlineInstance SSBO — see MLN_DRAWABLE_SHADOWS in shadow_support.hpp.
+                  shaders::BuiltIn::ShadowDepthShader,
+                  shaders::BuiltIn::ShadowDepthInstancedShader,
+                  shaders::BuiltIn::FillExtrusionShadowShader,
+                  shaders::BuiltIn::GroundShadowShader,
                   shaders::BuiltIn::HeatmapShader,
                   shaders::BuiltIn::HeatmapTextureShader,
                   shaders::BuiltIn::HillshadeShader,

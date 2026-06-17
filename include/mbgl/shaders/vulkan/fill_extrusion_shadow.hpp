@@ -2,6 +2,7 @@
 
 #include <mbgl/shaders/shader_source.hpp>
 #include <mbgl/shaders/vulkan/shader_program.hpp>
+#include <mbgl/shaders/layer_ubo.hpp>
 
 namespace mbgl {
 namespace shaders {
@@ -16,7 +17,13 @@ namespace shaders {
 // data-driven color/base/height) so the FE bucket binders feed this shader. The 4 cascade maps are
 // 4 discrete samplers (Vulkan has no array-of-textures binding here) walked by a static if-chain.
 
-constexpr auto fillExtrusionShadowShaderPrelude = R"(
+constexpr auto fillExtrusionShadowShaderPrelude =
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+    "#define FE_INSTANCING 1\n"
+#else
+    "#define FE_INSTANCING 0\n"
+#endif
+    R"(
 
 #define idFillExtrusionShadowDrawableUBO    drawableUBOStartId
 #define idFillExtrusionShadowPropsUBO       drawableUBOStartId + 1
@@ -27,7 +34,11 @@ template <>
 struct ShaderSource<BuiltIn::FillExtrusionShadowShader, gfx::Backend::Type::Vulkan> {
     static constexpr const char* name = "FillExtrusionShadowShader";
 
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+    static const std::array<AttributeInfo, 4> attributes; // pos, color, base, height (roof; no normal_ed)
+#else
     static const std::array<AttributeInfo, 5> attributes;
+#endif
     static constexpr std::array<AttributeInfo, 0> instanceAttributes{};
     static const std::array<TextureInfo, 4> textures;
 
@@ -35,8 +46,22 @@ struct ShaderSource<BuiltIn::FillExtrusionShadowShader, gfx::Backend::Type::Vulk
     static constexpr auto vertex = R"(
 
 layout(location = 0) in ivec2 in_position;
+#if !FE_INSTANCING
 layout(location = 1) in ivec4 in_normal_ed;
+#endif
 
+// Instanced roof receiver: no normal_ed; color/base/height shift down one slot to 1/2/3.
+#if FE_INSTANCING
+#if !defined(HAS_UNIFORM_u_color)
+layout(location = 1) in vec4 in_color;
+#endif
+#if !defined(HAS_UNIFORM_u_base)
+layout(location = 2) in vec2 in_base;
+#endif
+#if !defined(HAS_UNIFORM_u_height)
+layout(location = 3) in vec2 in_height;
+#endif
+#else
 #if !defined(HAS_UNIFORM_u_color)
 layout(location = 2) in vec4 in_color;
 #endif
@@ -45,6 +70,7 @@ layout(location = 3) in vec2 in_base;
 #endif
 #if !defined(HAS_UNIFORM_u_height)
 layout(location = 4) in vec2 in_height;
+#endif
 #endif
 
 layout(set = DRAWABLE_UBO_SET_INDEX, binding = idFillExtrusionShadowDrawableUBO) uniform FillExtrusionShadowDrawableUBO {
@@ -88,8 +114,15 @@ void main() {
     float height = max(unpack_mix_float(in_height, drawable.height_t), 0.0);
 #endif
 
+    // Instanced path: this receiver draws the flat roof cap (always the top), so the normal is the
+    // up vector and t is 1. wallness = 1 - abs(normal.z) = 0 → roofs keep their crisp cast shadow.
+#if FE_INSTANCING
+    float t = 1.0;
+    vec3 normal = vec3(0.0, 0.0, 1.0);
+#else
     float t = float(in_normal_ed.x & 1);
     vec3 normal = vec3(in_normal_ed.xyz) / 16384.0;
+#endif
     float z = t > 0.0 ? height : base;
     vec4 worldLocal = vec4(in_position, z, 1.0);
     gl_Position = drawable.matrix * worldLocal;
