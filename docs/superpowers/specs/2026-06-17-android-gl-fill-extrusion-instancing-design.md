@@ -53,6 +53,31 @@ Vulkan is explicitly **out of scope** for this milestone (GL first).
   `src/mbgl/renderer/layers/render_fill_extrusion_layer.cpp` already implement the instanced data
   model (per-edge instance vertices + a shared static unit-quad). They are simply not compiled for GL.
 
+### CRITICAL: GLES 3.0 cannot replicate Metal's instanced data model (decided 2026-06-17)
+
+The Metal/Vulkan instanced shaders read a **raw outline buffer indexed by `instance_id` and its
+neighbors** — `outline[instanceID + vertx.pos.x].pos` for the edge's far endpoint, and
+`outline[instanceID-1 / +1 / +2]` for crease-aware smooth normals (see
+`include/mbgl/shaders/mtl/fill_extrusion.hpp` `FillExtrusionInstancedShader`). GLES 3.0 instanced
+attributes (`glVertexAttribDivisor`) expose **only the current instance's** attributes — there is no
+buffer-indexing-by-`gl_InstanceID`, no SSBO (ES 3.1), and no texture-buffer objects (ES 3.2). So the
+GL shader **cannot** "extrude walls exactly as Metal does."
+
+**Decision: Option (c) — edge-indexed instances with precomputed normals.** The GL path emits **one
+instance per footprint EDGE** (not per vertex), each instance carrying **both endpoint positions +
+the precomputed smoothed wall normal + edgeDistance/base/height/color** as plain divisor-1
+attributes. The GL vertex shader reads **only current-instance attributes** (no neighbor/buffer
+access). The smoothed normal reuses the bucket's existing `blendNormal` crease-aware logic that
+already lives in the non-instanced `#else` path — so smooth-facade parity comes from existing code,
+not a shader port.
+
+Consequence for the unification goal: GL shares the **render-layer flow and shader concepts** with
+Metal/Vulkan, but builds a **GL-specific edge-indexed instance buffer** distinct from Metal's
+vertex-indexed `sharedVertices` reuse. Unification is at the concept/flow level, not one identical
+buffer path. (Rejected alternative: Option (b), upload the outline as an integer texture and
+`texelFetch` by `gl_InstanceID` — mirrors Metal exactly but vertex texture fetch is slow on mobile
+Mali/Adreno GPUs, undermining the perf goal.)
+
 ### Instanced data model (already in the codebase, Metal/Vulkan today)
 
 - Instanced bucket layout vertex: `Vertex<attributes::pos, attributes::ed_discard>` — one *instance*
@@ -123,12 +148,17 @@ Real ports of the three shaders the manifest already enumerates for GL as placeh
 - `FillExtrusionPatternInstancedShader`
 - `ShadowDepthInstancedShader` (replaces the documented stub in `gl/shadow_depth_instanced.hpp`)
 
-They consume the static unit-quad as per-vertex geometry plus per-instance `pos`/`ed_discard`/base/
-height/color attributes (divisor 1), extruding walls in the vertex shader exactly as the Metal
-versions do. Register in `src/mbgl/gl/shader_info.cpp` + `src/mbgl/gl/renderer_backend.cpp` (today
-deliberately not registered for these).
-- **Smooth curved-facade normals** (currently only in the GLES `#else` bucket) must be re-derived in
-  the instanced wall shader from the edge direction, or buildings regress to faceted shading.
+Per the Option (c) decision above, they consume the static unit-quad as per-vertex geometry plus
+**edge-indexed** per-instance attributes (divisor 1): `pos0`, `pos1` (the edge's two endpoints),
+`normal` (precomputed smoothed wall normal), `edgeDistance`, and data-driven base/height/color. The
+GL vertex shader extrudes the wall from the unit quad reading **only the current instance** — `pos.x`
+selects `pos0`/`pos1`, `pos.y` selects base/height — with no neighbor or buffer indexing. Register in
+`src/mbgl/gl/shader_info.cpp` + `src/mbgl/gl/renderer_backend.cpp` (today deliberately not registered
+for these; note `include/mbgl/shaders/gl/fill_extrusion_instanced.hpp` already exists as an empty
+placeholder to fill in).
+- **Smooth curved-facade normals** are precomputed in the bucket via the existing `blendNormal` logic
+  (already in the `#else` path) and passed as the per-instance `normal` attribute — no in-shader
+  neighbor reads, no faceted regression.
 
 ### Layer 3 — Shared bucket / render-layer path (compile for GL)
 The existing `#if MLN_USE_FILL_EXTRUSION_INSTANCING` branches get compiled for GL, gated by Layer 4.
@@ -140,14 +170,17 @@ the GLES `#else` wall-quad path.
 
 ## Data flow (GL instanced path)
 
-1. **Tile load → bucket.** `FillExtrusionBucket::addFeature` emits the instanced layout: one
-   `{pos, ed_discard}` vertex per footprint edge (the instances) — less geometry than today's `#else`.
-2. **Frame → render layer.** Binds the shared static unit-quad (per-vertex), the bucket's edge
-   vertices + per-instance base/height/color (divisor 1), builds one instanced drawable per tile;
-   roof triangles remain a normal (non-instanced) drawable.
+1. **Tile load → bucket.** On the GL instanced path, the bucket emits an **edge-indexed instance
+   record** per footprint edge: `{pos0, pos1, normal, edgeDistance, discard}` (normal from the
+   existing `blendNormal`), plus the data-driven base/height/color instance streams. Roof triangles
+   are emitted as today.
+2. **Frame → render layer.** Binds the shared static unit-quad (per-vertex, divisor 0) and the
+   edge-instance attributes (divisor 1), builds one instanced color drawable (+ depth drawable) per
+   tile; roof triangles remain a normal (non-instanced) drawable.
 3. **Draw → GL backend.** `DrawableGL` with `instanceCount = edgeCount` → `Context::drawInstanced`
    → `glDrawElementsInstanced(GL_TRIANGLES, 6, …, instanceCount)`. The vertex shader extrudes each
-   wall from the unit quad using the instance's two endpoints + base/height.
+   wall from the unit quad using **the current instance's** `pos0`/`pos1`/normal/base/height — no
+   neighbor or buffer indexing.
 4. **Shadows** through `ShadowDepthInstancedShader`. The static/outline geometry and the per-edge
    instance positions may be shared, **but the wall caster's base/height are NOT a plain reuse of the
    visible drawable's buffer.** The current code deliberately creates separate wall-caster instance
