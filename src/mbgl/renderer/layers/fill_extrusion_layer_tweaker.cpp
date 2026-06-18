@@ -74,7 +74,15 @@ void FillExtrusionLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintP
     // from the first frame it's drawn. Only in Continuous mode — Static/Tile snapshots render a fixed
     // number of frames, so an animated height would bake in a half-grown building. The repaint window
     // that actually plays the animation is held open in RenderOrchestrator (needsRepaint).
+    // Grow-in is wired only for the NON-instanced fill-extrusion path. On the instanced path
+    // (Metal/Vulkan, or GL with MLN_GL_FE_INSTANCING) the walls are separate instance drawables that
+    // don't read the grow factor, so a rising roof + full-height walls would look broken — disable
+    // there and render full height as before.
+#if MLN_USE_FILL_EXTRUSION_INSTANCING || MLN_GL_FE_INSTANCING
+    const bool growEnabled = false;
+#else
     const bool growEnabled = buildingGrowDurationMs().count() > 0 && parameters.mapMode == MapMode::Continuous;
+#endif
     growState.beginFrame(growEnabled, parameters.timePoint);
 
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {

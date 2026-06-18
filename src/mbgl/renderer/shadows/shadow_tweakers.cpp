@@ -535,7 +535,14 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
     // Building "grow-in" reveal (shadow-receiver path): rise the visible building height over
     // buildingGrowDurationMs from each tile's first frame. The CASTER (ShadowDepthTweaker, full
     // height) is left alone, so buildings rise into their already-cast ground shadow.
+    // Grow-in is wired only for the NON-instanced fill-extrusion path (see FillExtrusionLayerTweaker):
+    // on the instanced path (Metal/Vulkan, or GL with MLN_GL_FE_INSTANCING) the walls are separate
+    // instance drawables that don't read the grow factor, so disable there and render full height.
+#if MLN_USE_FILL_EXTRUSION_INSTANCING || MLN_GL_FE_INSTANCING
+    const bool growEnabled = false;
+#else
     const bool growEnabled = buildingGrowDurationMs().count() > 0 && parameters.mapMode == MapMode::Continuous;
+#endif
     growState.beginFrame(growEnabled, parameters.timePoint);
 
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
