@@ -134,6 +134,42 @@ uint8_t cameraFocalZoom(const TransformState& state) {
     return std::min(state.getIntegerZoom(), util::DEFAULT_MAX_ZOOM);
 }
 
+// The view's required shadow footprint: the focal (look-at) center in world space + the
+// bearing-invariant far radius that covers the visible ground. Pulled out of
+// computeWorldToLightClipCascades so the sticky cache (refreshShadowFrustum) reuses the EXACT same
+// math for its containment test — these two are the single definition of "what must be covered this
+// frame", so keep them in lock-step. World units are matrixFor units (mercator px at current scale),
+// so distances scale with zoom automatically.
+void shadowViewFootprint(const TransformState& state, vec3& outCenter, double& outFarRadius) {
+    const uint8_t focalZoom = cameraFocalZoom(state);
+    outCenter = centerPixelToWorld(state, focalZoom);
+
+    const Size sz = state.getSize();
+    const double screenExtent = 0.5 * std::hypot(static_cast<double>(sz.width), static_cast<double>(sz.height));
+    // Floor: at flat pitch the visible field is ~the screen; keep at least this much coverage.
+    const double minRadius = static_cast<double>(envFloat("MLN_SHADOW_MIN_RADIUS", 1.8f)) * screenExtent;
+    // Cap: world-distance ceiling on coverage (keeps resolution sane + drops the far horizon).
+    const double maxDist = static_cast<double>(envFloat("MLN_SHADOW_MAX_DIST", 4000.0f));
+    // Corner safety: the top screen CORNERS reach farther than the top-center; pad the radius for them.
+    const double cornerFactor = static_cast<double>(envFloat("MLN_SHADOW_CORNER_FACTOR", 1.3f));
+
+    // Bearing-invariant coverage radius = the farthest the visible ground reaches FORWARD from the
+    // look-at, sampled down the screen's center column (peaks just below the horizon). It's a scalar
+    // (max distance), hence invariant to compass bearing — so the symmetric frustum stays put under
+    // rotation. Capped at maxDist so a horizon-grazing steep view can't blow the frustum up.
+    double reach = 0.0;
+    const double colX = 0.5 * sz.width + paddedCenterOffset(state).x;
+    const double fy[6] = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5};
+    for (double f : fy) {
+        const vec3 w = screenPixelToWorld(state, focalZoom, colX, f * sz.height);
+        const double d = std::hypot(w[0] - outCenter[0], w[1] - outCenter[1]);
+        if (std::isfinite(d)) {
+            reach = std::max(reach, std::min(d, maxDist));
+        }
+    }
+    outFarRadius = std::min(std::max(minRadius, reach * cornerFactor), maxDist);
+}
+
 const std::vector<mat4>& worldToLightClipForFrame(ShadowFrustumState& frustumState,
                                                   const PaintParameters& parameters,
                                                   uint32_t mapSize) {
@@ -173,7 +209,8 @@ std::vector<mat4> computeWorldToLightClipCascades(const PaintParameters& paramet
 }
 
 std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, const vec3& sunDir,
-                                                  uint32_t mapSize, uint32_t cascadeCount, float split) {
+                                                  uint32_t mapSize, uint32_t cascadeCount, float split,
+                                                  const vec3* overrideCenter, double overrideFarRadius) {
     // WORLD-ANCHORED light frustum, sized to COVER the visible ground but BEARING-INVARIANT so the
     // shadows don't move when the camera rotates (the user's core requirement).
     //
@@ -201,8 +238,6 @@ std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, c
     // World units are TransformState::matrixFor() units == mercator screen-pixels at the current
     // scale (1 world unit == 1 screen pixel at the map center), so all distances below scale with
     // zoom automatically.
-    const uint8_t focalZoom = cameraFocalZoom(state);
-    const vec3 focalCenter = centerPixelToWorld(state, focalZoom);
     // Z-range of the light frustum, in WORLD-PIXELS. MLN_SHADOW_MAX_HEIGHT is a height in METERS
     // (default 200m), so convert with the same per-zoom pixelsPerMeter the caster height uses —
     // otherwise a tall building's scaled-up caster roof would punch out of a fixed-world-px frustum
@@ -210,46 +245,14 @@ std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, c
     const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f) *
                                   pixelsPerMeter(state) * envFloat("MLN_SHADOW_ZSCALE", 1.0f);
 
-    const Size sz = state.getSize();
-    const double screenExtent = 0.5 * std::hypot(static_cast<double>(sz.width), static_cast<double>(sz.height));
-    // Floor: at flat pitch the visible field is ~the screen; keep at least this much coverage. 1.8
-    // also pushes the pitched far-cutoff out (#3). The texel-density cost of this coverage is paid by
-    // the 2048 shadow map (MLN_SHADOW_MAP_SIZE): 2*radius/mapSize = ~0.76 world-px/texel here, 2x
-    // finer than the old 1024 map — which removes the staircased edges (#17/C/A) without trading away
-    // coverage (#3/B). (A still-finer near field + wider pitched coverage at once would need cascaded
-    // shadow maps; out of scope.)
-    const double minRadius = static_cast<double>(envFloat("MLN_SHADOW_MIN_RADIUS", 1.8f)) * screenExtent;
-    // Cap: world-distance ceiling on coverage (keeps resolution sane + drops the far horizon).
-    const double maxDist = static_cast<double>(envFloat("MLN_SHADOW_MAX_DIST", 4000.0f));
-    // Corner safety: the top screen CORNERS reach a bit farther than the top-center; pad the radius
-    // so the far corners of the pitched view are still covered.
-    const double cornerFactor = static_cast<double>(envFloat("MLN_SHADOW_CORNER_FACTOR", 1.3f));
-
-    // Bearing-invariant coverage radius. The binding constraint at pitch is the FORWARD reach of the
-    // visible ground. Sample DOWN the screen's vertical center column and take the farthest ground
-    // intersection from the look-at point: rows above the horizon unproject to the near plane (a
-    // small distance — screenCoordinateToTileCoordinate returns the near point when the ray escapes
-    // the ground), while the row just below the horizon gives the true far reach, which peaks there.
-    // That maximum distance is a function of pitch / fov / zoom only — NOT of the compass direction —
-    // because rotating the camera only spins this centerline; its far-reach magnitude is unchanged.
-    // So the radius, and the whole symmetric frustum, stay invariant under rotation. Capped at
-    // maxDist so a near-horizon row can't blow the frustum up (and the far horizon is left uncovered,
-    // per the user). cornerFactor pads for the wider far CORNERS of the view.
-    double reach = 0.0;
-    {
-        // Walk down the PADDED centerline (matches the padded focalCenter) so the forward-reach
-        // distances are measured from the same look-at the frustum is centered on.
-        const double colX = 0.5 * sz.width + paddedCenterOffset(state).x;
-        const double fy[6] = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5};
-        for (double f : fy) {
-            const vec3 w = screenPixelToWorld(state, focalZoom, colX, f * sz.height);
-            const double d = std::hypot(w[0] - focalCenter[0], w[1] - focalCenter[1]);
-            if (std::isfinite(d)) {
-                reach = std::max(reach, std::min(d, maxDist));
-            }
-        }
-    }
-    const double farRadius = std::min(std::max(minRadius, reach * cornerFactor), maxDist);
+    // Footprint: the live view's required center + bearing-invariant far radius (shadowViewFootprint),
+    // UNLESS the sticky cache pins an OVERSIZED override around a fixed world center so the frustum
+    // survives panning. With no override this is byte-identical to the legacy per-frame fit.
+    vec3 viewCenter;
+    double viewFarRadius;
+    shadowViewFootprint(state, viewCenter, viewFarRadius);
+    const vec3 focalCenter = overrideCenter ? *overrideCenter : viewCenter;
+    const double farRadius = overrideCenter ? overrideFarRadius : viewFarRadius;
 
     // Footprint aligned to the SUN's GROUND axes, so that in light space it is an axis-aligned
     // square that fills the whole shadow map. A WORLD-axis square (focalCenter ± radius in world x/y)
@@ -276,12 +279,13 @@ std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, c
 #ifndef NDEBUG
     // DEV-ONLY frustum trace (compiled out of release/opt; env-gated within debug builds).
     if (std::getenv("MLN_SHADOW_DBG")) {
+        const Size sz = state.getSize();
         char buf[512];
         std::snprintf(buf, sizeof(buf),
                       "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f focalZoom=%u size=%dx%d focal=(%.1f,%.1f) "
-                      "farRadius=%.1f screenExtent=%.1f maxDist=%.0f cascades=%u",
-                      util::rad2deg(state.getPitch()), state.getZoom(), focalZoom, sz.width, sz.height,
-                      focalCenter[0], focalCenter[1], farRadius, screenExtent, maxDist, cascadeCount);
+                      "farRadius=%.1f override=%d cascades=%u",
+                      util::rad2deg(state.getPitch()), state.getZoom(), cameraFocalZoom(state), sz.width,
+                      sz.height, focalCenter[0], focalCenter[1], farRadius, overrideCenter ? 1 : 0, cascadeCount);
         Log::Warning(Event::General, buf);
     }
 #endif
@@ -330,6 +334,45 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
     // Legacy single-map entry point: one cascade at the full far radius (byte-identical to the
     // pre-cascade fit). Retained for callers/tests that want exactly one frustum.
     return computeWorldToLightClipCascades(state, sunDir, mapSize, 1u, shadowCascadeSplit()).front();
+}
+
+bool refreshShadowFrustum(ShadowFrustumState& fs, const TransformState& state, const vec3& sunDir,
+                          uint32_t mapSize, uint32_t activeCascades, float split) {
+    // Sticky cache: re-fit (→ the caller re-renders the caster pass) ONLY when the cache can't serve
+    // this frame. Buildings + light are static, so a fitted frustum stays valid for its world region
+    // across pan / rotate / pitch (all constant-scale). It becomes stale when: zoom drifts (world
+    // coords scale with zoom → the cached matrix would misalign), the cascade count or map size
+    // changes, casters changed, or the camera panned past the oversized coverage margin.
+    constexpr double kOversize = 1.5;  // cached far radius = view radius × this → ~0.5·radius of pan headroom
+    constexpr double kZoomBand = 0.08; // refit once zoom drifts this far (keeps shadows aligned)
+
+    vec3 viewCenter;
+    double viewFarRadius;
+    shadowViewFootprint(state, viewCenter, viewFarRadius);
+    const double zoom = state.getZoom();
+
+    bool refit = !fs.valid || fs.castersDirty || fs.mapSize != mapSize || fs.cascadeCount != activeCascades ||
+                 std::abs(zoom - fs.cachedZoom) > kZoomBand;
+    if (!refit) {
+        // Coverage test: the live view disk (viewCenter, viewFarRadius) must sit inside the cached
+        // disk. dist(centers) + viewRadius > cachedRadius ⇒ the camera panned past the margin.
+        const double dist = std::hypot(viewCenter[0] - fs.cachedCenter[0], viewCenter[1] - fs.cachedCenter[1]);
+        refit = (dist + viewFarRadius) > fs.cachedFarRadius;
+    }
+    if (!refit) {
+        return false; // cache hit — reuse fs.cascades and the existing shadow map texture
+    }
+
+    fs.cachedCenter = viewCenter;
+    fs.cachedFarRadius = viewFarRadius * kOversize;
+    fs.cachedZoom = zoom;
+    fs.cascades = computeWorldToLightClipCascades(state, sunDir, mapSize, activeCascades, split,
+                                                  &fs.cachedCenter, fs.cachedFarRadius);
+    fs.cascadeCount = activeCascades;
+    fs.mapSize = mapSize;
+    fs.castersDirty = false;
+    fs.valid = true;
+    return true;
 }
 
 void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParameters& parameters) {
