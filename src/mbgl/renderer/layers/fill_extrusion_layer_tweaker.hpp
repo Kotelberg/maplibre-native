@@ -22,7 +22,10 @@ namespace mbgl {
 inline std::chrono::milliseconds buildingGrowDurationMs() {
     static const std::chrono::milliseconds ms = [] {
         const char* v = std::getenv("MLN_BUILDING_GROW_MS");
-        const int n = v ? std::atoi(v) : 450;
+        // Default OFF: the load-time grow-in is cosmetic and the team chose platform consistency
+        // (both Android GL + iOS Metal show only the style's zoom-driven height ramp, no load rise).
+        // Opt in per-process with MLN_BUILDING_GROW_MS=<ms> for experiments.
+        const int n = v ? std::atoi(v) : 0;
         return std::chrono::milliseconds(n < 0 ? 0 : n);
     }();
     return ms;
