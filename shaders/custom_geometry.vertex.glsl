@@ -1,6 +1,6 @@
 layout (std140) uniform CustomGeometryDrawableUBO {
-    mat4 u_matrix;
-    vec4 u_color;
+    highp mat4 u_matrix;
+    highp vec4 u_color;
 };
 
 layout(location = 0) in vec3 a_pos;
