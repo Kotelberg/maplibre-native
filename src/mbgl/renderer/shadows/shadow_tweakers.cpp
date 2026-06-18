@@ -183,7 +183,7 @@ const std::vector<mat4>& worldToLightClipForFrame(ShadowFrustumState& frustumSta
                                              parameters.evaluatedLight.get<LightAnchor>(),
                                              static_cast<float>(parameters.state.getBearing()));
     refreshShadowFrustum(frustumState, parameters.state, sunDir, mapSize, count, shadowCascadeSplit());
-    return frustumState.cascades;
+    return frustumState.liveCascades; // rescaled to the live zoom (== cascades on a refit frame)
 }
 
 } // namespace
@@ -359,36 +359,56 @@ bool refreshShadowFrustum(ShadowFrustumState& fs,
     // across pan / rotate / pitch (all constant-scale). It becomes stale when: zoom drifts (world
     // coords scale with zoom → the cached matrix would misalign), the cascade count or map size
     // changes, casters changed, or the camera panned past the oversized coverage margin.
-    constexpr double kOversize = 1.5;  // cached far radius = view radius × this → ~0.5·radius of pan headroom
-    constexpr double kZoomBand = 0.08; // refit once zoom drifts this far (keeps shadows aligned)
+    constexpr double kOversize = 1.5;    // cached far radius = view radius × this → ~0.5·radius of pan headroom
+    constexpr double kZoomInRefit = 1.5; // re-render for SHARPNESS once the live world scale is this × the
+                                         // cached scale (~0.58 zoom levels IN); zoom-OUT is caught by coverage.
 
     vec3 viewCenter;
     double viewFarRadius;
     shadowViewFootprint(state, viewCenter, viewFarRadius);
     const double zoom = state.getZoom();
 
-    bool refit = !fs.valid || fs.castersDirty || fs.mapSize != mapSize || fs.cascadeCount != activeCascades ||
-                 std::abs(zoom - fs.cachedZoom) > kZoomBand;
+    bool refit = !fs.valid || fs.castersDirty || fs.mapSize != mapSize || fs.cascadeCount != activeCascades;
     if (!refit) {
-        // Coverage test: the live view disk (viewCenter, viewFarRadius) must sit inside the cached
-        // disk. dist(centers) + viewRadius > cachedRadius ⇒ the camera panned past the margin.
-        const double dist = std::hypot(viewCenter[0] - fs.cachedCenter[0], viewCenter[1] - fs.cachedCenter[1]);
-        refit = (dist + viewFarRadius) > fs.cachedFarRadius;
-    }
-    if (!refit) {
-        return false; // cache hit — reuse fs.cascades and the existing shadow map texture
+        // World coords scale with zoom; S = live/cached world-scale ratio. The cached depth map stays
+        // VALID at a drifted zoom — we rescale the SAMPLING matrices by 1/S below (liveCascades) rather
+        // than re-rendering, so a pinch reuses the cached map (no caster cost, no drift/flicker). Refit
+        // only when zooming IN past the cached map's resolution (kZoomInRefit), or when pan / zoom-out
+        // pushes the live view disk outside the cached oversized coverage. Compared in LIVE world-px:
+        // the cached center/radius (in cached px) scale to live px by ×S.
+        const double S = std::exp2(zoom - fs.cachedZoom);
+        if (S > kZoomInRefit) {
+            refit = true;
+        } else {
+            const double dist =
+                std::hypot(viewCenter[0] - fs.cachedCenter[0] * S, viewCenter[1] - fs.cachedCenter[1] * S);
+            refit = (dist + viewFarRadius) > fs.cachedFarRadius * S;
+        }
     }
 
-    fs.cachedCenter = viewCenter;
-    fs.cachedFarRadius = viewFarRadius * kOversize;
-    fs.cachedZoom = zoom;
-    fs.cascades = computeWorldToLightClipCascades(
-        state, sunDir, mapSize, activeCascades, split, &fs.cachedCenter, fs.cachedFarRadius);
-    fs.cascadeCount = activeCascades;
-    fs.mapSize = mapSize;
-    fs.castersDirty = false;
-    fs.valid = true;
-    return true;
+    if (refit) {
+        fs.cachedCenter = viewCenter;
+        fs.cachedFarRadius = viewFarRadius * kOversize;
+        fs.cachedZoom = zoom;
+        fs.cascades = computeWorldToLightClipCascades(
+            state, sunDir, mapSize, activeCascades, split, &fs.cachedCenter, fs.cachedFarRadius);
+        fs.cascadeCount = activeCascades;
+        fs.mapSize = mapSize;
+        fs.castersDirty = false;
+        fs.valid = true;
+    }
+
+    // Per-frame: rescale the BASE cascades to the live zoom so the cached depth map (rendered at
+    // cachedZoom) samples perfectly aligned during a pinch — NO re-render, NO drift. On a refit frame
+    // cachedZoom == zoom → ratio 1 → liveCascades == cascades. World coords scale uniformly about the
+    // mercator origin, so a uniform 1/S scale on the world→light matrix maps live-world back onto the
+    // cached projection (ortho directional light → the depth comparison is preserved).
+    const double liveS = std::exp2(zoom - fs.cachedZoom);
+    fs.liveCascades.resize(fs.cascades.size());
+    for (std::size_t c = 0; c < fs.cascades.size(); ++c) {
+        matrix::scale(fs.liveCascades[c], fs.cascades[c], 1.0 / liveS, 1.0 / liveS, 1.0 / liveS);
+    }
+    return refit;
 }
 
 void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParameters& parameters) {

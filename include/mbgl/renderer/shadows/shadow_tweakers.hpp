@@ -23,7 +23,15 @@ struct ShadowFrustumState {
     // Concentric world->light-clip cascades, ordered near→far. `cascades.back()` is the full far
     // radius (== the legacy single map). Resized to the active cascade count on refit by
     // refreshShadowFrustum; receivers read all of them, the caster picks one per pass.
+    // BASE cascades, fitted + texel-snapped at `cachedZoom` (what the caster renders the depth map with
+    // on a refit). Don't sample these directly during zoom — use `liveCascades` (rescaled to live zoom).
     std::vector<mat4> cascades;
+
+    // `cascades` rescaled to the LIVE zoom each frame (× 1/2^(zoom-cachedZoom)). World coords scale with
+    // zoom, so between refits the cached depth map (rendered at cachedZoom) only samples aligned through
+    // these rescaled matrices — that's what lets a pinch reuse the cached map with no re-render and no
+    // drift/flicker. On a refit frame liveCascades == cascades (ratio 1). Tweakers sample THIS.
+    std::vector<mat4> liveCascades;
 
     // --- Sticky cache (Tier 1): buildings + light are static, so the shadow map for a fixed world
     // region is frame-invariant. Cache the fitted frustum + the world footprint it covers and re-fit
