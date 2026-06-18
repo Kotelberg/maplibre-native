@@ -22,9 +22,16 @@ struct alignas(16) FillExtrusionShadowDrawableUBO {
     /* 324 */ float height_t;
     /* 328 */ float color_t;
     /* 332 */ std::int32_t cascade_count;
-    /* 336 */
+    // Per-tile building "grow-in" reveal factor in [0,1]: scales base+height so a freshly-loaded
+    // tile's buildings rise from the ground. 1 = full height. The shadow CASTER stays at full height
+    // (ShadowDepthDrawableUBO has no such field), so buildings rise into their ground shadow.
+    /* 336 */ float height_grow;
+    /* 340 */ float pad0;
+    /* 344 */ float pad1;
+    /* 348 */ float pad2;
+    /* 352 */
 };
-static_assert(sizeof(FillExtrusionShadowDrawableUBO) == 21 * 16);
+static_assert(sizeof(FillExtrusionShadowDrawableUBO) == 22 * 16);
 
 struct alignas(16) FillExtrusionShadowPropsUBO {
     /*  0 */ Color color;

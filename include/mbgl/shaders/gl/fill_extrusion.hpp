@@ -24,7 +24,7 @@ layout (std140) uniform FillExtrusionDrawableUBO {
     highp float u_color_t;
     highp float u_pattern_from_t;
     highp float u_pattern_to_t;
-    lowp float drawable_pad1;
+    highp float u_height_grow;
 };
 
 layout (std140) uniform FillExtrusionTilePropsUBO {
@@ -82,6 +82,11 @@ highp vec4 color = u_color;
 
     base = max(0.0, base);
     height = max(0.0, height);
+
+    // Building "grow-in" reveal: scale the whole extrusion from the ground (base+height) by the
+    // per-tile factor so freshly-loaded buildings rise up over a few hundred ms. 1.0 = full height.
+    base *= u_height_grow;
+    height *= u_height_grow;
 
     float t = mod(normal.x, 2.0);
 

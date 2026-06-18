@@ -39,7 +39,7 @@ layout (std140) uniform FillExtrusionDrawableUBO {
     highp float u_color_t;
     highp float u_pattern_from_t;
     highp float u_pattern_to_t;
-    lowp float drawable_pad1;
+    highp float u_height_grow;
 };
 
 layout (std140) uniform FillExtrusionTilePropsUBO {
@@ -123,6 +123,10 @@ mediump vec4 pattern_to = u_pattern_to;
 
     base = max(0.0, base);
     height = max(0.0, height);
+
+    // Building "grow-in" reveal (see FillExtrusionShader): scale the extrusion from the ground.
+    base *= u_height_grow;
+    height *= u_height_grow;
 
     float t = mod(normal.x, 2.0);
     float z = t > 0.0 ? height : base;

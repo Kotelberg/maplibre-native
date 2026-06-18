@@ -13,6 +13,8 @@
 #include <mbgl/renderer/shadows/shadow_sun.hpp>
 #include <mbgl/renderer/layers/render_fill_extrusion_layer.hpp>
 #endif
+// Not shadow-gated: the building grow-in reveal works with shadows off too.
+#include <mbgl/renderer/layers/fill_extrusion_layer_tweaker.hpp> // buildingGrowDurationMs()
 #include <mbgl/renderer/render_static_data.hpp>
 #include <mbgl/renderer/render_tree.hpp>
 #include <mbgl/renderer/update_parameters.hpp>
@@ -523,7 +525,20 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
         }
         renderTreeParameters->symbolFadeChange = placementController.getPlacement()->symbolFadeChange(
             updateParameters->timePoint);
-        renderTreeParameters->needsRepaint = hasTransitions(updateParameters->timePoint);
+
+        // Building "grow-in" reveal: while any tile is still rising, keep requesting frames so the
+        // animation plays even when the camera is at rest. A tile (re)load (onTileChanged) opens a
+        // window of buildingGrowDurationMs from now; overlapping loads during a zoom-in burst keep
+        // extending it, and it closes shortly after the last tile finishes rising. No churn → no
+        // window → the map goes idle as before. See FillExtrusionLayerTweaker for the per-tile factor.
+        if (buildingTilesChanged_) {
+            buildingTilesChanged_ = false;
+            if (buildingGrowDurationMs().count() > 0) {
+                buildingGrowActiveUntil_ = updateParameters->timePoint + buildingGrowDurationMs() + Milliseconds(100);
+            }
+        }
+        renderTreeParameters->needsRepaint = hasTransitions(updateParameters->timePoint) ||
+                                             updateParameters->timePoint < buildingGrowActiveUntil_;
     } else {
         MLN_TRACE_ZONE(placement);
 
@@ -1007,8 +1022,9 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
                                                      evalLight.get<style::LightAnchor>(),
                                                      static_cast<float>(state.getBearing()));
             const uint32_t activeCascades = activeShadowCascadeCount(state.getPitch());
-            const bool shadowRefit = fs && refreshShadowFrustum(*fs, state, sunDir, shadowMapSize(),
-                                                                activeCascades, shadowCascadeSplit());
+            const bool shadowRefit = fs &&
+                                     refreshShadowFrustum(
+                                         *fs, state, sunDir, shadowMapSize(), activeCascades, shadowCascadeSplit());
             // Register (→ render) the caster cascades only on a refit frame; otherwise register 0 so
             // the caster pass is skipped and the cached map is reused. On a refit frame this count MUST
             // equal the receiver's sampled cascade count (both use activeCascades). One shadow map per
@@ -1083,8 +1099,7 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
             // Ground owner = the first (lowest-index) fill-extrusion layer that actually has render
             // tiles, so a momentarily tile-less base layer doesn't drop the ground shadow while a
             // higher layer still casts (#31).
-            const bool groundOwner = (activeShadowPass != nullptr) && !shadowGroundOwnerAssigned &&
-                                     fe.hasRenderTiles();
+            const bool groundOwner = (activeShadowPass != nullptr) && !shadowGroundOwnerAssigned && fe.hasRenderTiles();
             fe.setShadowGroundOwner(groundOwner);
             if (groundOwner) {
                 shadowGroundOwnerAssigned = true;
@@ -1192,6 +1207,10 @@ void RenderOrchestrator::onTileChanged(RenderSource&, const OverscaledTileID&) {
     // the camera pans out of coverage). Broad by design (any source) — over-refitting is just a few
     // extra caster passes and stays correct; the steady state (no tile churn) still reuses the cache.
     shadowCacheTilesDirty_ = true;
+    // Open/extend the building grow-in repaint window (deadline computed in createRenderTree, which
+    // has the frame's TimePoint). onInvalidate() below schedules the first frame; needsRepaint keeps
+    // them coming until the rise completes.
+    buildingTilesChanged_ = true;
     observer->onInvalidate();
 }
 

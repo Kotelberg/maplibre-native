@@ -196,8 +196,10 @@ mat4 computeWorldToLightClip(const PaintParameters& parameters, uint32_t mapSize
     return computeWorldToLightClip(state, sunDir, mapSize);
 }
 
-std::vector<mat4> computeWorldToLightClipCascades(const PaintParameters& parameters, uint32_t mapSize,
-                                                  uint32_t cascadeCount, float split) {
+std::vector<mat4> computeWorldToLightClipCascades(const PaintParameters& parameters,
+                                                  uint32_t mapSize,
+                                                  uint32_t cascadeCount,
+                                                  float split) {
     const auto& state = parameters.state;
     const vec3 sunDir = ShadowSun::direction(parameters.evaluatedLight.get<LightPosition>(),
                                              parameters.evaluatedLight.get<LightAnchor>(),
@@ -205,9 +207,13 @@ std::vector<mat4> computeWorldToLightClipCascades(const PaintParameters& paramet
     return computeWorldToLightClipCascades(state, sunDir, mapSize, cascadeCount, split);
 }
 
-std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, const vec3& sunDir,
-                                                  uint32_t mapSize, uint32_t cascadeCount, float split,
-                                                  const vec3* overrideCenter, double overrideFarRadius) {
+std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state,
+                                                  const vec3& sunDir,
+                                                  uint32_t mapSize,
+                                                  uint32_t cascadeCount,
+                                                  float split,
+                                                  const vec3* overrideCenter,
+                                                  double overrideFarRadius) {
     // WORLD-ANCHORED light frustum, sized to COVER the visible ground but BEARING-INVARIANT so the
     // shadows don't move when the camera rotates (the user's core requirement).
     //
@@ -239,8 +245,8 @@ std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, c
     // (default 200m), so convert with the same per-zoom pixelsPerMeter the caster height uses —
     // otherwise a tall building's scaled-up caster roof would punch out of a fixed-world-px frustum
     // top at high zoom and get Z-clipped (→ short/missing shadow). Tracks zoom like the casters.
-    const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f) *
-                                  pixelsPerMeter(state) * envFloat("MLN_SHADOW_ZSCALE", 1.0f);
+    const double maxHeightWorld = envFloat("MLN_SHADOW_MAX_HEIGHT", 200.0f) * pixelsPerMeter(state) *
+                                  envFloat("MLN_SHADOW_ZSCALE", 1.0f);
 
     // Footprint: the live view's required center + bearing-invariant far radius (shadowViewFootprint),
     // UNLESS the sticky cache pins an OVERSIZED override around a fixed world center so the frustum
@@ -278,11 +284,20 @@ std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, c
     if (std::getenv("MLN_SHADOW_DBG")) {
         const Size sz = state.getSize();
         char buf[512];
-        std::snprintf(buf, sizeof(buf),
+        std::snprintf(buf,
+                      sizeof(buf),
                       "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f focalZoom=%u size=%dx%d focal=(%.1f,%.1f) "
                       "farRadius=%.1f override=%d cascades=%u",
-                      util::rad2deg(state.getPitch()), state.getZoom(), cameraFocalZoom(state), sz.width,
-                      sz.height, focalCenter[0], focalCenter[1], farRadius, overrideCenter ? 1 : 0, cascadeCount);
+                      util::rad2deg(state.getPitch()),
+                      state.getZoom(),
+                      cameraFocalZoom(state),
+                      sz.width,
+                      sz.height,
+                      focalCenter[0],
+                      focalCenter[1],
+                      farRadius,
+                      overrideCenter ? 1 : 0,
+                      cascadeCount);
         Log::Warning(Event::General, buf);
     }
 #endif
@@ -333,8 +348,12 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
     return computeWorldToLightClipCascades(state, sunDir, mapSize, 1u, shadowCascadeSplit()).front();
 }
 
-bool refreshShadowFrustum(ShadowFrustumState& fs, const TransformState& state, const vec3& sunDir,
-                          uint32_t mapSize, uint32_t activeCascades, float split) {
+bool refreshShadowFrustum(ShadowFrustumState& fs,
+                          const TransformState& state,
+                          const vec3& sunDir,
+                          uint32_t mapSize,
+                          uint32_t activeCascades,
+                          float split) {
     // Sticky cache: re-fit (→ the caller re-renders the caster pass) ONLY when the cache can't serve
     // this frame. Buildings + light are static, so a fitted frustum stays valid for its world region
     // across pan / rotate / pitch (all constant-scale). It becomes stale when: zoom drifts (world
@@ -363,8 +382,8 @@ bool refreshShadowFrustum(ShadowFrustumState& fs, const TransformState& state, c
     fs.cachedCenter = viewCenter;
     fs.cachedFarRadius = viewFarRadius * kOversize;
     fs.cachedZoom = zoom;
-    fs.cascades = computeWorldToLightClipCascades(state, sunDir, mapSize, activeCascades, split,
-                                                  &fs.cachedCenter, fs.cachedFarRadius);
+    fs.cascades = computeWorldToLightClipCascades(
+        state, sunDir, mapSize, activeCascades, split, &fs.cachedCenter, fs.cachedFarRadius);
     fs.cascadeCount = activeCascades;
     fs.mapSize = mapSize;
     fs.castersDirty = false;
@@ -441,10 +460,10 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
     // zoom where buildings are flat.
     // Clamp the style/env shadow-intensity to [0,1] (#32: author values can't over-darken or — now
     // that the debug branches are gone — reach any out-of-range path), then fade by the height ramp.
-    const float baseIntensity = std::clamp(envFloat("MLN_SHADOW_INTENSITY",
-                                                    parameters.evaluatedLight.get<LightShadowIntensity>()),
-                                           0.0f, 1.0f) *
-                                shadowHeightFade(zoom);
+    const float baseIntensity =
+        std::clamp(
+            envFloat("MLN_SHADOW_INTENSITY", parameters.evaluatedLight.get<LightShadowIntensity>()), 0.0f, 1.0f) *
+        shadowHeightFade(zoom);
     const FillExtrusionShadowPropsUBO propsUBO = {
         .color = evaluated.get<FillExtrusionColor>().constantOr(Color::black()),
         .light_color_pad = {lightColor[0], lightColor[1], lightColor[2], 0.0f},
@@ -513,6 +532,12 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
     std::vector<FillExtrusionDrawableUBO> wallDrawableUBOs;
 #endif
 
+    // Building "grow-in" reveal (shadow-receiver path): rise the visible building height over
+    // buildingGrowDurationMs from each tile's first frame. The CASTER (ShadowDepthTweaker, full
+    // height) is left alone, so buildings rise into their already-cast ground shadow.
+    const bool growEnabled = buildingGrowDurationMs().count() > 0 && parameters.mapMode == MapMode::Continuous;
+    growState.beginFrame(growEnabled, parameters.timePoint);
+
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         const auto& tileID = drawable.getTileID();
         if (!tileID || !checkTweakDrawable(drawable)) {
@@ -525,9 +550,13 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
 
         const auto& translation = evaluated.get<FillExtrusionTranslate>();
         const auto anchor = evaluated.get<FillExtrusionTranslateAnchor>();
-        const mat4 matrix = getTileMatrix(
-            tileID->toUnwrapped(), parameters, translation, anchor, /*nearClipped=*/true,
-            /*inViewportPixelUnits=*/false, drawable);
+        const mat4 matrix = getTileMatrix(tileID->toUnwrapped(),
+                                          parameters,
+                                          translation,
+                                          anchor,
+                                          /*nearClipped=*/true,
+                                          /*inViewportPixelUnits=*/false,
+                                          drawable);
 
         mat4 tileWorld;
         matrixForLightTileWorld(tileWorld, state, *tileID);
@@ -550,6 +579,7 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         const float baseT = std::get<0>(binders->get<FillExtrusionBase>()->interpolationFactor(zoom));
         const float heightT = std::get<0>(binders->get<FillExtrusionHeight>()->interpolationFactor(zoom));
         const float colorT = std::get<0>(binders->get<FillExtrusionColor>()->interpolationFactor(zoom));
+        const float heightGrow = growState.factor(*tileID);
 
 #if MLN_RENDER_BACKEND_VULKAN
         if (drawable.getInstanceAttributes()) {
@@ -569,7 +599,8 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
                 .color_t = colorT,
                 .pattern_from_t = 0,
                 .pattern_to_t = 0,
-                .pad1 = 0});
+                // Shadow casters render at full height (no grow-in). See FillExtrusionLayerTweaker.
+                .height_grow = 1.0f});
             return;
         }
 #endif
@@ -592,7 +623,9 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
                 .color_t = colorT,
                 .pattern_from_t = 0,
                 .pattern_to_t = 0,
-                .pad1 = 0};
+                // Shadow casters render at full height (no grow-in): a freshly-loaded building rises
+                // into its already-full-size ground shadow. See FillExtrusionLayerTweaker grow-in.
+                .height_grow = 1.0f};
             drawable.setUBOIndex(0);
             drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionDrawableUBO, &wallUBO, context);
             // PER-DRAWABLE props (NOT layer-level): the shadow RECEIVER roof draws before the wall and
@@ -606,19 +639,24 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         }
 #endif
 
-        const FillExtrusionShadowDrawableUBO ubo = {
-            .matrix = util::cast<float>(matrix),
-            .light_matrix = lightMatrices,
-            .base_t = baseT,
-            .height_t = heightT,
-            .color_t = colorT,
-            .cascade_count = static_cast<std::int32_t>(cascadeCount)};
+        const FillExtrusionShadowDrawableUBO ubo = {.matrix = util::cast<float>(matrix),
+                                                    .light_matrix = lightMatrices,
+                                                    .base_t = baseT,
+                                                    .height_t = heightT,
+                                                    .color_t = colorT,
+                                                    .cascade_count = static_cast<std::int32_t>(cascadeCount),
+                                                    .height_grow = heightGrow,
+                                                    .pad0 = 0.0f,
+                                                    .pad1 = 0.0f,
+                                                    .pad2 = 0.0f};
         drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionShadowDrawableUBO, &ubo, context);
 #if MLN_RENDER_BACKEND_VULKAN
         // Vulkan-only: props lives in the drawable descriptor set (see the comment above the visitor).
         drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
 #endif
     });
+
+    growState.endFrame();
 
 #if MLN_RENDER_BACKEND_VULKAN
     // Bind the consolidated wall drawable-UBO vector + the layer props so the visible instanced walls
@@ -645,10 +683,10 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
     const std::vector<mat4>& cascades = worldToLightClipForFrame(*frustumState, parameters, mapSize);
     const auto cascadeCount = static_cast<uint32_t>(cascades.size());
 
-    const float groundIntensity = std::clamp(envFloat("MLN_SHADOW_INTENSITY",
-                                                      parameters.evaluatedLight.get<LightShadowIntensity>()),
-                                             0.0f, 1.0f) *
-                                  shadowHeightFade(static_cast<float>(state.getZoom()));
+    const float groundIntensity =
+        std::clamp(
+            envFloat("MLN_SHADOW_INTENSITY", parameters.evaluatedLight.get<LightShadowIntensity>()), 0.0f, 1.0f) *
+        shadowHeightFade(static_cast<float>(state.getZoom()));
     const GroundShadowPropsUBO propsUBO = {.shadow_color = Color::black(),
                                            // World-anchored: constant strength at every pitch (see
                                            // FillExtrusionShadowTweaker), faded in with the building

@@ -36,9 +36,15 @@ struct alignas(16) FillExtrusionShadowDrawableUBO {
     /* 324 */ float height_t;
     /* 328 */ float color_t;
     /* 332 */ int cascade_count;
-    /* 336 */
+    // Per-tile building "grow-in" reveal factor [0,1]: scales base+height so a freshly-loaded tile's
+    // buildings rise from the ground. 1 = full height. Caster stays full-height (see GL twin).
+    /* 336 */ float height_grow;
+    /* 340 */ float pad0;
+    /* 344 */ float pad1;
+    /* 348 */ float pad2;
+    /* 352 */
 };
-static_assert(sizeof(FillExtrusionShadowDrawableUBO) == 21 * 16, "wrong size");
+static_assert(sizeof(FillExtrusionShadowDrawableUBO) == 22 * 16, "wrong size");
 
 struct alignas(16) FillExtrusionShadowPropsUBO {
     /*  0 */ float4 color;
@@ -122,6 +128,9 @@ struct FragmentStage {
     // across the roof→wall crease so there's no hard transition line.
     float wallness;
     int cascade_count [[flat]];
+    // Per-tile grow-in factor [0,1]; fades the received shadow in as the building rises so a still-
+    // short building isn't greyed by its own full-height caster shadow (see GL twin).
+    float height_grow;
 };
 
 struct FragmentOutput {
@@ -133,15 +142,19 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
                                 device const FillExtrusionShadowPropsUBO& props [[buffer(idFillExtrusionShadowPropsUBO)]]) {
 
 #if defined(HAS_UNIFORM_u_base)
-    const auto base   = props.light_position_base.w;
+    auto base   = props.light_position_base.w;
 #else
-    const auto base   = max(unpack_mix_float(vertx.base, drawable.base_t), 0.0);
+    auto base   = max(unpack_mix_float(vertx.base, drawable.base_t), 0.0);
 #endif
 #if defined(HAS_UNIFORM_u_height)
-    const auto height = props.height;
+    auto height = props.height;
 #else
-    const auto height = max(unpack_mix_float(vertx.height, drawable.height_t), 0.0);
+    auto height = max(unpack_mix_float(vertx.height, drawable.height_t), 0.0);
 #endif
+
+    // Building "grow-in" reveal: scale the extrusion from the ground so a freshly-loaded tile rises.
+    base   *= drawable.height_grow;
+    height *= drawable.height_grow;
 
     // Instanced path: this receiver draws the flat roof cap (always the top), so the normal is the
     // up vector and t is 1. wallness = 1 - abs(normal.z) = 0 → roofs keep their crisp cast shadow.
@@ -186,6 +199,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     out.color = half4(vcolor * props.opacity);
     out.slope = 1.0 - directionalFraction;
     out.wallness = 1.0 - abs(normal.z); // roof normal=(0,0,1)→0; wall normal=(nx,ny,0)→1
+    out.height_grow = drawable.height_grow;
     const int cc = drawable.cascade_count;
     out.cascade_count = cc;
     // Project into every cascade's light clip (near→far). Unused slots (c >= cascade_count) replicate
@@ -271,7 +285,9 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     // get their directional face-shading; only the (broken) cast-shadow term is faded out. Roofs face
     // the light head-on (no aliasing) so they keep crisp cast shadows from taller neighbours.
     lit = mix(lit, 1.0, smoothstep(0.4, 0.85, in.wallness));
-    color.rgb *= half(1.0 - (1.0 - lit) * props.shadow_intensity);
+    // Building "grow-in" reveal: fade the received shadow in with the grow factor so a still-rising
+    // building isn't greyed by its own full-height caster shadow (see GL twin).
+    color.rgb *= half(1.0 - (1.0 - lit) * props.shadow_intensity * in.height_grow);
     return { color };
 }
 )";

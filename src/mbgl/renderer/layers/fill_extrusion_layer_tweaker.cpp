@@ -70,6 +70,13 @@ void FillExtrusionLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintP
     std::vector<FillExtrusionTilePropsUBO> tilePropsUBOVector(layerGroup.getDrawableCount());
 #endif
 
+    // Building "grow-in" reveal: ramp each tile's extrusion height 0→full over buildingGrowDurationMs
+    // from the first frame it's drawn. Only in Continuous mode — Static/Tile snapshots render a fixed
+    // number of frames, so an animated height would bake in a half-grown building. The repaint window
+    // that actually plays the animation is held open in RenderOrchestrator (needsRepaint).
+    const bool growEnabled = buildingGrowDurationMs().count() > 0 && parameters.mapMode == MapMode::Continuous;
+    growState.beginFrame(growEnabled, parameters.timePoint);
+
     visitLayerGroupDrawables(layerGroup, [&](gfx::Drawable& drawable) {
         if (!drawable.getTileID() || !checkTweakDrawable(drawable)) {
             return;
@@ -83,6 +90,10 @@ void FillExtrusionLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintP
         }
 
         const UnwrappedTileID tileID = drawable.getTileID()->toUnwrapped();
+
+        // Per-tile grow-in factor: 1.0 once fully risen (and whenever the feature is disabled).
+        const float heightGrow = growState.factor(*drawable.getTileID());
+
         const auto& translation = evaluated.get<FillExtrusionTranslate>();
         const auto anchor = evaluated.get<FillExtrusionTranslateAnchor>();
         constexpr bool inViewportPixelUnits = false; // from RenderTile::translatedMatrix
@@ -128,7 +139,7 @@ void FillExtrusionLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintP
             .color_t = std::get<0>(binders->get<FillExtrusionColor>()->interpolationFactor(zoom)),
             .pattern_from_t = std::get<0>(binders->get<FillExtrusionPattern>()->interpolationFactor(zoom)),
             .pattern_to_t = std::get<0>(binders->get<FillExtrusionPattern>()->interpolationFactor(zoom)),
-            .pad1 = 0
+            .height_grow = heightGrow
         };
 
 #if MLN_UBO_CONSOLIDATION
@@ -151,6 +162,8 @@ void FillExtrusionLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintP
         drawableUniforms.createOrUpdate(idFillExtrusionTilePropsUBO, &tilePropsUBO, context);
 #endif
     });
+
+    growState.endFrame();
 
 #if MLN_UBO_CONSOLIDATION
     const size_t drawableUBOVectorSize = sizeof(FillExtrusionDrawableUBO) * drawableUBOVector.size();

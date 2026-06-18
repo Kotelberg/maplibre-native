@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mbgl/renderer/layer_tweaker.hpp>
+#include <mbgl/renderer/layers/fill_extrusion_layer_tweaker.hpp> // BuildingGrowState
 #include <mbgl/util/mat4.hpp>
 #include <mbgl/util/vectors.hpp>
 
@@ -61,14 +62,19 @@ mat4 computeWorldToLightClip(const PaintParameters&, uint32_t mapSize);
 /// When `overrideCenter` is non-null, the frustum is fitted around that world center with
 /// `overrideFarRadius` instead of the live camera's view footprint — used by the sticky cache to
 /// build an OVERSIZED, position-pinned frustum that survives panning. Default args = legacy behavior.
-std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, const vec3& sunDir,
-                                                  uint32_t mapSize, uint32_t cascadeCount, float split,
+std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state,
+                                                  const vec3& sunDir,
+                                                  uint32_t mapSize,
+                                                  uint32_t cascadeCount,
+                                                  float split,
                                                   const vec3* overrideCenter = nullptr,
                                                   double overrideFarRadius = 0.0);
 
 /// PaintParameters overload of the cascaded variant (derives state + anchor-aware sun direction).
-std::vector<mat4> computeWorldToLightClipCascades(const PaintParameters&, uint32_t mapSize,
-                                                  uint32_t cascadeCount, float split);
+std::vector<mat4> computeWorldToLightClipCascades(const PaintParameters&,
+                                                  uint32_t mapSize,
+                                                  uint32_t cascadeCount,
+                                                  float split);
 
 /// Sticky-cache entry point (Tier 1). Re-fits `fs` (and reports `true`) only when the cached frustum
 /// no longer covers the live camera's required footprint, the zoom drifts past a band, the active
@@ -76,8 +82,12 @@ std::vector<mat4> computeWorldToLightClipCascades(const PaintParameters&, uint32
 /// and returns `false` (the caller reuses the existing shadow map). The orchestrator calls this once
 /// per frame BEFORE deciding whether to render the caster pass; the tweakers call it again (a cache
 /// hit) to read `fs.cascades`. `activeCascades` is the pitch-gated count for this frame.
-bool refreshShadowFrustum(ShadowFrustumState& fs, const TransformState& state, const vec3& sunDir,
-                          uint32_t mapSize, uint32_t activeCascades, float split);
+bool refreshShadowFrustum(ShadowFrustumState& fs,
+                          const TransformState& state,
+                          const vec3& sunDir,
+                          uint32_t mapSize,
+                          uint32_t activeCascades,
+                          float split);
 
 /// Tweaker for the shadow-caster layer group: writes each caster drawable's
 /// ShadowDepthDrawableUBO.light_matrix = worldToLightClip * matrixFor(tile).
@@ -118,6 +128,9 @@ public:
 private:
     uint32_t mapSize;
     ShadowFrustumStatePtr frustumState;
+    // Per-tile grow-in bookkeeping for the shadow-receiver building path (shared logic with the
+    // shadows-off FillExtrusionLayerTweaker so both rise identically).
+    BuildingGrowState growState;
 };
 
 /// Tweaker for the z=0 ground-shadow receiver quads. Uses the same tile matrix and

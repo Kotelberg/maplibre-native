@@ -24,6 +24,10 @@ layout (std140) uniform FillExtrusionShadowDrawableUBO {
     highp float u_height_t;
     highp float u_color_t;
     highp int u_cascade_count;
+    highp float u_height_grow; // per-tile grow-in reveal factor [0,1]
+    highp float drawable_pad0;
+    highp float drawable_pad1;
+    highp float drawable_pad2;
 };
 
 layout (std140) uniform FillExtrusionShadowPropsUBO {
@@ -45,6 +49,7 @@ out highp vec4 v_shadow_pos[4];
 out highp float v_slope;
 out highp float v_wallness;
 flat out int v_cascade_count;
+out highp float v_height_grow;
 
 #ifndef HAS_UNIFORM_u_color
 layout (location = 4) in highp vec4 a_color;
@@ -67,6 +72,10 @@ void main() {
     #else
     highp float height = u_height;
     #endif
+
+    // Building "grow-in" reveal: scale the extrusion from the ground so a freshly-loaded tile rises.
+    base *= u_height_grow;
+    height *= u_height_grow;
 
     highp float t = mod(a_normal_ed.x, 2.0);
     highp vec3 normal = a_normal_ed.xyz / 16384.0;
@@ -106,6 +115,7 @@ void main() {
     // 1.0 on vertical walls (normal.z~0), 0.0 on roofs (normal.z~+-1).
     v_wallness = 1.0 - abs(normal.z);
     v_cascade_count = u_cascade_count;
+    v_height_grow = u_height_grow;
 
     // Project into every cascade's light clip (near->far). Unused slots replicate cascade 0.
     v_shadow_pos[0] = u_light_matrix[0] * worldLocal;
@@ -121,6 +131,7 @@ in highp vec4 v_shadow_pos[4];
 in highp float v_slope;
 in highp float v_wallness;
 flat in int v_cascade_count;
+in highp float v_height_grow;
 
 layout (std140) uniform FillExtrusionShadowPropsUBO {
     highp vec4 u_color;
@@ -215,7 +226,10 @@ void main() {
 
     // Suppress the (projective-aliased) cast shadow on near-vertical walls; keep it on roofs.
     lit = mix(lit, 1.0, smoothstep(0.4, 0.85, v_wallness));
-    color.rgb *= (1.0 - (1.0 - lit) * u_shadow_intensity);
+    // Building "grow-in" reveal: the caster casts at FULL height, so a still-rising building would
+    // otherwise sit inside its own full-height shadow and go grey. Fade the received shadow in with
+    // the grow factor so shadows strengthen as the building rises (full at height_grow == 1).
+    color.rgb *= (1.0 - (1.0 - lit) * u_shadow_intensity * v_height_grow);
     fragColor = color;
 
 #ifdef OVERDRAW_INSPECTOR

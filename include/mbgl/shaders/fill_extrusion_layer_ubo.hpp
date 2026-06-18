@@ -20,7 +20,10 @@ struct alignas(16) FillExtrusionDrawableUBO {
     /*  96 */ float color_t;
     /* 100 */ float pattern_from_t;
     /* 104 */ float pattern_to_t;
-    /* 108 */ float pad1;
+    // Per-tile building "grow-in" reveal factor in [0,1]: scales base+height so a freshly-loaded tile's
+    // buildings rise from the ground. 1 = full height (steady state / feature disabled). See
+    // buildingGrowDurationMs() in fill_extrusion_layer_tweaker.hpp. (Was pad1; same offset/size.)
+    /* 108 */ float height_grow;
     /* 112 */
 };
 static_assert(sizeof(FillExtrusionDrawableUBO) == 7 * 16);

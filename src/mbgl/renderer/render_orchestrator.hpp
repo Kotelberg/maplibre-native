@@ -268,6 +268,14 @@ private:
     // true so the very first shadowed frame fits. Declared unconditionally (onTileChanged is backend-
     // agnostic); inert when shadows are compiled out.
     bool shadowCacheTilesDirty_ = true;
+
+    // Building "grow-in" reveal repaint window. onTileChanged sets the flag (a tile (re)loaded, so its
+    // buildings are about to rise); createRenderTree converts it to a deadline using the frame's
+    // TimePoint and keeps needsRepaint=true until then so the height ramp animates at rest. See
+    // buildingGrowDurationMs() / FillExtrusionLayerTweaker. Backend-agnostic; inert when the reveal is
+    // disabled (MLN_BUILDING_GROW_MS=0).
+    bool buildingTilesChanged_ = true;
+    TimePoint buildingGrowActiveUntil_{};
 };
 
 } // namespace mbgl
