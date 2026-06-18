@@ -9,6 +9,8 @@
 #include <mbgl/renderer/shadows/shadow_support.hpp>
 #if MLN_DRAWABLE_SHADOWS
 #include <mbgl/renderer/shadows/shadow_pass.hpp>
+#include <mbgl/renderer/shadows/shadow_tweakers.hpp>
+#include <mbgl/renderer/shadows/shadow_sun.hpp>
 #include <mbgl/renderer/layers/render_fill_extrusion_layer.hpp>
 #endif
 #include <mbgl/renderer/render_static_data.hpp>
@@ -986,16 +988,33 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
         }
         shadowPass->ensure(context);
         if (shadowPass->ready()) {
-            // Register only the cascade RenderTargets that render THIS frame (one shadow map per
-            // cascade — Metal has no texture-array render targets in this gfx layer, so N maps are N
-            // targets). Pitch-gated: a flat view renders just cascade 0 (a single full-density frustum),
-            // a pitched view renders up to shadowPass->cascadeCount(). The far cascade's caster pass is
-            // a full re-rasterization of every building every frame, so skipping it flat is the headline
-            // per-frame GPU lever. This count MUST equal the receiver's activeShadowCascadeCount(pitch)
-            // — both read this frame's pitch — so a receiver never samples an unrendered cascade map.
-            // The maps + caster drawables persist across the gate (no rebuild churn); only registration
-            // toggles, and cascade 1's casters are already built when it re-activates on pitch-up.
-            const uint32_t wantCascades = activeShadowCascadeCount(state.getPitch());
+            // STICKY SHADOW CACHE (Tier 1). Buildings + light are static, so a fitted shadow map stays
+            // valid for its world region across pan / rotate / pitch (all constant-scale). Refresh the
+            // cached light frustum and re-render the caster pass ONLY when the cache can't serve this
+            // frame (camera panned past the oversized coverage, zoom drifted a band, cascade count or
+            // map size changed, or a tile changed → new casters). Between refits the caster pass is
+            // skipped and the previously-rendered shadow map is reused, so shadows stay visible + stable
+            // during a pan at ~zero per-frame GPU cost (no pop). The RECEIVER path stays on every frame
+            // (activeShadowPass below) and samples the cached map — that decoupling is what avoids the
+            // "stale shadows smear while panning" artifact a naive gate produced.
+            const auto& fs = shadowPass->frustumState();
+            if (fs && shadowCacheTilesDirty_) {
+                fs->castersDirty = true; // a tile (re)loaded → its casters may be new; force a refit
+            }
+            shadowCacheTilesDirty_ = false;
+            const auto& evalLight = renderLight.getEvaluated();
+            const vec3 sunDir = ShadowSun::direction(evalLight.get<style::LightPosition>(),
+                                                     evalLight.get<style::LightAnchor>(),
+                                                     static_cast<float>(state.getBearing()));
+            const uint32_t activeCascades = activeShadowCascadeCount(state.getPitch());
+            const bool shadowRefit = fs && refreshShadowFrustum(*fs, state, sunDir, shadowMapSize(),
+                                                                activeCascades, shadowCascadeSplit());
+            // Register (→ render) the caster cascades only on a refit frame; otherwise register 0 so
+            // the caster pass is skipped and the cached map is reused. On a refit frame this count MUST
+            // equal the receiver's sampled cascade count (both use activeCascades). One shadow map per
+            // cascade (Metal has no texture-array render targets in this gfx layer). The maps + caster
+            // drawables persist across the gate (no rebuild churn); only registration toggles.
+            const uint32_t wantCascades = shadowRefit ? activeCascades : 0u;
             for (uint32_t c = registeredShadowCascades; c < wantCascades; ++c) {
                 if (auto cascadeTarget = shadowPass->target(c)) {
                     changes.emplace_back(std::make_unique<AddRenderTargetRequest>(cascadeTarget));
@@ -1168,6 +1187,11 @@ void RenderOrchestrator::onTileError(RenderSource& source, const OverscaledTileI
 void RenderOrchestrator::onTileChanged(RenderSource&, const OverscaledTileID&) {
     MLN_TRACE_FUNC();
 
+    // A tile (re)loaded → its building casters may be new, so the sticky shadow cache must refit on
+    // the next frame to pick them up (otherwise a freshly-loaded building would cast no shadow until
+    // the camera pans out of coverage). Broad by design (any source) — over-refitting is just a few
+    // extra caster passes and stays correct; the steady state (no tile churn) still reuses the cache.
+    shadowCacheTilesDirty_ = true;
     observer->onInvalidate();
 }
 

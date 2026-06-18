@@ -173,19 +173,16 @@ void shadowViewFootprint(const TransformState& state, vec3& outCenter, double& o
 const std::vector<mat4>& worldToLightClipForFrame(ShadowFrustumState& frustumState,
                                                   const PaintParameters& parameters,
                                                   uint32_t mapSize) {
-    // Per-frame ACTIVE cascade count (pitch-gated): a flat view samples 1 full-density cascade, a
-    // pitched view the full allocated set. MUST match the count the orchestrator registers shadow
-    // RenderTargets for this frame (both read the same frame pitch) — otherwise the receiver could
-    // sample a cascade map that wasn't rendered. frustumState re-fits when this count changes.
+    // Sticky cache (Tier 1): the orchestrator already calls refreshShadowFrustum once per frame
+    // BEFORE the caster pass, so for the receiver/ground tweakers this is normally a cache HIT (no
+    // refit) — they just read the cached cascades. We call it again (cheap) so the matrices are also
+    // valid for any direct caller. activeShadowCascadeCount is pitch-gated; the cache refits if it
+    // changes, keeping the registered (rendered) cascade count == the sampled count.
     const uint32_t count = activeShadowCascadeCount(parameters.state.getPitch());
-    if (!frustumState.valid || frustumState.frameCount != parameters.frameCount ||
-        frustumState.mapSize != mapSize || frustumState.cascadeCount != count) {
-        frustumState.cascades = computeWorldToLightClipCascades(parameters, mapSize, count, shadowCascadeSplit());
-        frustumState.cascadeCount = count;
-        frustumState.frameCount = parameters.frameCount;
-        frustumState.mapSize = mapSize;
-        frustumState.valid = true;
-    }
+    const vec3 sunDir = ShadowSun::direction(parameters.evaluatedLight.get<LightPosition>(),
+                                             parameters.evaluatedLight.get<LightAnchor>(),
+                                             static_cast<float>(parameters.state.getBearing()));
+    refreshShadowFrustum(frustumState, parameters.state, sunDir, mapSize, count, shadowCascadeSplit());
     return frustumState.cascades;
 }
 

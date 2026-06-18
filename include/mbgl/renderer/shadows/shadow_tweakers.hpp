@@ -17,7 +17,6 @@ class TransformState;
 
 struct ShadowFrustumState {
     bool valid = false;
-    uint64_t frameCount = 0; // within-frame cache token (the 3 tweakers share one fit per frame)
     uint32_t mapSize = 0;
     uint32_t cascadeCount = 0;
     // Concentric world->light-clip cascades, ordered near→far. `cascades.back()` is the full far
