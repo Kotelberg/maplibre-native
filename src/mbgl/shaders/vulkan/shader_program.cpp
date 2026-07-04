@@ -31,10 +31,12 @@ ShaderProgram::ShaderProgram(shaders::BuiltIn shaderID,
                              const std::string_view& fragment,
                              const ProgramParameters& programParameters,
                              const mbgl::unordered_map<std::string, std::string>& additionalDefines,
+                             bool skipsClipSpaceYFlip_,
                              RendererBackend& backend_,
                              gfx::ContextObserver& observer)
     : ShaderProgramBase(),
       shaderName(name),
+      skipsClipSpaceYFlip(skipsClipSpaceYFlip_),
       backend(backend_),
       context(static_cast<Context&>(backend.getContext())) {
     pipelines = std::make_shared<std::unordered_map<std::size_t, vk::UniquePipeline>>();
@@ -148,9 +150,18 @@ const vk::UniquePipeline& ShaderProgram::getPipeline(const PipelineInfo& pipelin
                                    .setScissorCount(1)
                                    .setPScissors(&scissorRect);
 
+    // Vulkan evaluates winding in y-down framebuffer space; the fixed CullFaceWindingType ->
+    // vk::FrontFace mapping (PipelineInfo::vulkanFrontFace) assumes the vertex stage's clip-space
+    // y-flip. A program that skips the flip (raw clip space, e.g. the light-space shadow casters)
+    // has mirrored apparent winding, so flip the front face to keep gfx::CullFaceMode semantics.
+    const auto frontFace = !skipsClipSpaceYFlip
+                               ? pipelineInfo.frontFace
+                               : (pipelineInfo.frontFace == vk::FrontFace::eClockwise ? vk::FrontFace::eCounterClockwise
+                                                                                      : vk::FrontFace::eClockwise);
+
     const auto rasterState = vk::PipelineRasterizationStateCreateInfo()
                                  .setCullMode(pipelineInfo.cullMode)
-                                 .setFrontFace(pipelineInfo.frontFace)
+                                 .setFrontFace(frontFace)
                                  .setPolygonMode(pipelineInfo.polygonMode)
                                  .setLineWidth(1.0f);
 

@@ -66,8 +66,24 @@ public:
             const std::string fragmentSource = preludeSource + frag;
 
             auto& context = static_cast<Context&>(gfxContext);
-            shader = context.createProgram(
-                ShaderID, shaderName, vertexSource, fragmentSource, programParameters, additionalDefines);
+            // Almost every Vulkan vertex stage ends with a clip-space y-flip (applySurfaceTransform
+            // or an explicit `gl_Position.y *= -1.0`). Shader sources that render raw clip space
+            // (e.g. the light-space shadow casters) declare `skipsClipSpaceYFlip`; the program then
+            // flips vk::FrontFace to compensate for the mirrored apparent winding.
+            constexpr bool skipsClipSpaceYFlip = [] {
+                if constexpr (requires { ShaderSource::skipsClipSpaceYFlip; }) {
+                    return ShaderSource::skipsClipSpaceYFlip;
+                } else {
+                    return false;
+                }
+            }();
+            shader = context.createProgram(ShaderID,
+                                           shaderName,
+                                           vertexSource,
+                                           fragmentSource,
+                                           programParameters,
+                                           additionalDefines,
+                                           skipsClipSpaceYFlip);
             assert(shader);
             if (!shader || !registerShader(shader, shaderName)) {
                 assert(false);

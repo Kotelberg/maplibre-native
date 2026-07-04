@@ -91,6 +91,9 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/debug.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/fill.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/fill_extrusion.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/fill_extrusion_shadow.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/shadow_depth.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/ground_shadow.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/heatmap.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/heatmap_texture.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/hillshade.cpp

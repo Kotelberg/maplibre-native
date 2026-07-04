@@ -47,6 +47,7 @@ public:
                   const std::string_view& fragment,
                   const ProgramParameters& programParameters,
                   const mbgl::unordered_map<std::string, std::string>& additionalDefines,
+                  bool skipsClipSpaceYFlip,
                   RendererBackend& backend,
                   gfx::ContextObserver& observer);
     ~ShaderProgram() noexcept override;
@@ -68,6 +69,12 @@ public:
 
 protected:
     std::string shaderName;
+    // The vertex stage emits raw clip-space positions with no clip-space y-flip (no
+    // applySurfaceTransform / `gl_Position.y *= -1.0`), e.g. the light-space shadow casters.
+    // In Vulkan's y-down framebuffer space that mirrors the apparent triangle winding, so
+    // getPipeline() flips vk::FrontFace for this program's pipelines to keep
+    // gfx::CullFaceWindingType consistent with the y-flipped pipelines and other backends.
+    bool skipsClipSpaceYFlip = false;
     RendererBackend& backend;
     Context& context;
 
