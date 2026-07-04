@@ -31,6 +31,12 @@ public:
     void setAnchorTransition(const TransitionOptions&);
     TransitionOptions getAnchorTransition() const;
 
+    static bool getDefaultCastShadows();
+    PropertyValue<bool> getCastShadows() const;
+    void setCastShadows(PropertyValue<bool>);
+    void setCastShadowsTransition(const TransitionOptions&);
+    TransitionOptions getCastShadowsTransition() const;
+
     static Color getDefaultColor();
     PropertyValue<Color> getColor() const;
     void setColor(PropertyValue<Color>);
@@ -48,6 +54,12 @@ public:
     void setPosition(PropertyValue<Position>);
     void setPositionTransition(const TransitionOptions&);
     TransitionOptions getPositionTransition() const;
+
+    static float getDefaultShadowIntensity();
+    PropertyValue<float> getShadowIntensity() const;
+    void setShadowIntensity(PropertyValue<float>);
+    void setShadowIntensityTransition(const TransitionOptions&);
+    TransitionOptions getShadowIntensityTransition() const;
 
     class Impl;
     Immutable<Impl> impl;
