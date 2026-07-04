@@ -89,7 +89,14 @@ void Texture2D::updateTextureData(const void* data) noexcept {
 }
 
 void Texture2D::create() {
-    allocateTexture();
+    // Idempotent (matches mtl::Texture2D::create): allocate the GL texture object only if we don't
+    // already have one. allocateTexture() unconditionally makes a NEW UniqueTexture, so calling
+    // create() twice (e.g. an eager-materialize caller followed by a resource's own bind()) would
+    // orphan the first texture object underneath anything that already captured it. Resizes go
+    // through upload(), which reallocates explicitly, so guarding here does not affect them.
+    if (!texture) {
+        allocateTexture();
+    }
     if (storageDirty) {
         updateTextureData();
     }

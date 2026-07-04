@@ -439,6 +439,17 @@ std::unique_ptr<gfx::OffscreenTexture> Context::createOffscreenTexture(const Siz
     return std::make_unique<gl::OffscreenTexture>(*this, size, type);
 }
 
+std::unique_ptr<gfx::OffscreenTexture> Context::createOffscreenTexture(const Size size,
+                                                                       const gfx::TextureChannelDataType type,
+                                                                       bool depth,
+                                                                       bool /*stencil*/) {
+    MLN_TRACE_FUNC();
+
+    // A combined depth-only renderbuffer (see gl::OffscreenTexture) covers the depth request; the
+    // separate `stencil` flag has no GL offscreen consumer today, so it needs no distinct handling.
+    return std::make_unique<gl::OffscreenTexture>(*this, size, type, depth);
+}
+
 std::unique_ptr<gfx::DrawScopeResource> Context::createDrawScopeResource() {
     MLN_TRACE_FUNC();
 
@@ -607,6 +618,27 @@ Framebuffer Context::createFramebuffer(const gfx::Texture2D& color) {
                                             GL_TEXTURE_2D,
                                             static_cast<const gl::Texture2D&>(color).getTextureID(),
                                             0));
+    checkFramebuffer();
+    return {color.getSize(), std::move(fbo)};
+}
+
+Framebuffer Context::createFramebuffer(const gfx::Texture2D& color,
+                                       const gfx::Renderbuffer<gfx::RenderbufferPixelType::Depth>& depth) {
+    MLN_TRACE_FUNC();
+
+    if (color.getSize() != depth.getSize()) {
+        throw std::runtime_error("Renderbuffer size mismatch");
+    }
+    auto fbo = createFramebuffer();
+    bindFramebuffer = fbo;
+    MBGL_CHECK_ERROR(glFramebufferTexture2D(GL_FRAMEBUFFER,
+                                            GL_COLOR_ATTACHMENT0,
+                                            GL_TEXTURE_2D,
+                                            static_cast<const gl::Texture2D&>(color).getTextureID(),
+                                            0));
+    auto& depthResource = depth.getResource<gl::RenderbufferResource>();
+    MBGL_CHECK_ERROR(
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthResource.renderbuffer));
     checkFramebuffer();
     return {color.getSize(), std::move(fbo)};
 }
