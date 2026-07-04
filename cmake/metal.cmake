@@ -42,6 +42,12 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/fill_extrusion.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/heatmap.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/heatmap_texture.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/shadow_depth.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/shadow_depth_ubo.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/fill_extrusion_shadow.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/fill_extrusion_shadow_ubo.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/ground_shadow.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/ground_shadow_ubo.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/hillshade.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/hillshade_prepare.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/color_relief.hpp
@@ -85,6 +91,9 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/fill_extrusion.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/heatmap.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/heatmap_texture.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/shadow_depth.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/fill_extrusion_shadow.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/ground_shadow.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/hillshade.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/hillshade_prepare.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/color_relief.cpp
