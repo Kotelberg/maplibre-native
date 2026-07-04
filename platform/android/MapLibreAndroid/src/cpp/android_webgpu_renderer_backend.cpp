@@ -768,7 +768,7 @@ namespace gfx {
 
 template <>
 std::unique_ptr<android::AndroidRendererBackend> Backend::Create<mbgl::gfx::Backend::Type::WebGPU>(
-    ANativeWindow* window) {
+    ANativeWindow* window, [[maybe_unused]] uint32_t msaaSamples) {
     return std::make_unique<android::AndroidWebGPURendererBackend>(window);
 }
 

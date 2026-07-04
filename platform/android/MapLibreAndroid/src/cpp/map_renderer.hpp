@@ -51,7 +51,8 @@ public:
     MapRenderer(jni::JNIEnv& _env,
                 const jni::Object<MapRenderer>&,
                 jni::jfloat pixelRatio,
-                const jni::String& localIdeographFontFamily);
+                const jni::String& localIdeographFontFamily,
+                jni::jint msaaSamples);
 
     ~MapRenderer() override;
 
@@ -137,6 +138,7 @@ private:
 
     float pixelRatio;
     std::optional<std::string> localIdeographFontFamily;
+    int msaaSamples;
 
     TaggedScheduler threadPool;
     const MailboxData mailboxData;
