@@ -4,13 +4,37 @@
 #include <mbgl/renderer/buckets/fill_extrusion_bucket.hpp>
 #include <mbgl/style/layers/fill_extrusion_layer_impl.hpp>
 #include <mbgl/style/layers/fill_extrusion_layer_properties.hpp>
+#include <mbgl/renderer/shadows/shadow_support.hpp>
+
+#include <memory>
+#include <vector>
 
 namespace mbgl {
+
+class ShadowPass;
 
 class RenderFillExtrusionLayer final : public RenderLayer {
 public:
     explicit RenderFillExtrusionLayer(Immutable<style::FillExtrusionLayer::Impl>);
     ~RenderFillExtrusionLayer() override;
+
+#if MLN_DRAWABLE_SHADOWS
+    /// Hand this layer the renderer-owned shared ShadowPass before update(). The layer registers its
+    /// caster/receiver drawables into the shared pass instead of owning a per-layer ShadowMap. Set by
+    /// RenderOrchestrator when the scene light casts shadows; null otherwise (stock FE path).
+    void setShadowPass(ShadowPass* pass) { shadowPass = pass; }
+
+    /// Designate this layer as the single ground-shadow owner (ground-once). The orchestrator marks
+    /// the lowest fill-extrusion layer that has render tiles as owner; only the owner draws the z=0
+    /// ground-shadow quads, so higher layers cast into the shared map but never stack a second
+    /// darkening ground draw over the same building.
+    void setShadowGroundOwner(bool v) { shadowGroundOwner = v; }
+
+    /// Whether this layer currently has render tiles — used by the orchestrator to skip a tile-less
+    /// lowest layer when picking the ground owner (avoids a 1-frame ground-shadow dropout when the
+    /// base layer is momentarily tile-less while a higher layer casts).
+    bool hasRenderTiles() const { return renderTiles && !renderTiles->empty(); }
+#endif
 
 private:
     void transition(const TransitionParameters&) override;
@@ -40,6 +64,39 @@ private:
 
     gfx::ShaderGroupPtr fillExtrusionGroup;
     gfx::ShaderGroupPtr fillExtrusionPatternGroup;
+
+#if MLN_DRAWABLE_SHADOWS
+    // Directional-shadow path. Active only when the orchestrator hands this layer a non-null
+    // ShadowPass (scene light casts shadows); otherwise none of this is created and the stock FE
+    // path is used unchanged.
+    void markLayerRenderable(bool willRender, UniqueChangeRequestVec&) override;
+    void layerRemoved(UniqueChangeRequestVec&) override;
+    void layerIndexChanged(int32_t newLayerIndex, UniqueChangeRequestVec&) override;
+    std::size_t removeTile(RenderPass, const OverscaledTileID&) override;
+    std::size_t removeAllDrawables() override;
+    // The shared shadow map + per-frame light frustum live on the renderer-owned ShadowPass (set via
+    // setShadowPass). This layer owns only its receiver/caster tweakers + (when ground owner) its
+    // ground group. `shadowCasterGroups` caches this layer's per-cascade slots in the pass's caster
+    // registry (owned by the pass; cached so the lifecycle removeTile/removeAllDrawables can prune
+    // without a gfx::Context). `shadowGroundOwner` gates the single ground draw (set by orchestrator).
+    ShadowPass* shadowPass = nullptr;
+    std::vector<TileLayerGroup*> shadowCasterGroups;
+    bool shadowGroundOwner = false;
+    TileLayerGroupPtr groundShadowLayerGroup;
+    gfx::ShaderGroupPtr fillExtrusionShadowGroup;
+    gfx::ShaderGroupPtr groundShadowGroup;
+    gfx::ShaderGroupPtr shadowDepthGroup;
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+    // Instanced WALL caster shader. The roof-only sharedTriangles caster (shadowDepthGroup) leaves
+    // ground shadows detached from the base on the instanced path; this casts the walls so they
+    // reattach.
+    gfx::ShaderGroupPtr shadowDepthInstancedGroup;
+#endif
+    // Strong refs (one per cascade) — the caster groups store only weak_ptrs (runTweakers drops
+    // expired ones). Each tweaker is bound to its cascade index so it writes that cascade's matrix.
+    std::vector<LayerTweakerPtr> shadowCasterTweakers;
+    LayerTweakerPtr groundShadowTweaker;
+#endif
 
 #if MLN_USE_FILL_EXTRUSION_INSTANCING
     gfx::ShaderGroupPtr fillExtrusionInstancedGroup;

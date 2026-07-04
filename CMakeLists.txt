@@ -162,6 +162,7 @@ list(APPEND INCLUDE_FILES
     ${PROJECT_SOURCE_DIR}/include/mbgl/util/suppress_copies.hpp
 )
 list(APPEND SRC_FILES
+    ${PROJECT_SOURCE_DIR}/src/mbgl/gfx/context.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/gfx/drawable.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/gfx/drawable_builder.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/gfx/drawable_builder_impl.hpp
@@ -180,6 +181,11 @@ list(APPEND SRC_FILES
     ${PROJECT_SOURCE_DIR}/src/mbgl/gfx/uniform_buffer.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/gfx/vertex_attribute.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/render_target.cpp
+    ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/shadows/shadow_sun.cpp
+    ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/shadows/shadow_frustum.cpp
+    ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/shadows/shadow_map.cpp
+    ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/shadows/shadow_pass.cpp
+    ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/shadows/shadow_tweakers.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/change_request.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/layer_group.cpp
     ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/tile_layer_group.cpp

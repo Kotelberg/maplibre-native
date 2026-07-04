@@ -6,6 +6,11 @@
 #include <mbgl/renderer/renderer_observer.hpp>
 #include <mbgl/renderer/render_source.hpp>
 #include <mbgl/renderer/render_layer.hpp>
+#include <mbgl/renderer/shadows/shadow_support.hpp>
+#if MLN_DRAWABLE_SHADOWS
+#include <mbgl/renderer/shadows/shadow_pass.hpp>
+#include <mbgl/renderer/layers/render_fill_extrusion_layer.hpp>
+#endif
 #include <mbgl/renderer/render_static_data.hpp>
 #include <mbgl/renderer/render_tree.hpp>
 #include <mbgl/renderer/update_parameters.hpp>
@@ -968,6 +973,67 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
     std::vector<std::unique_ptr<ChangeRequest>> changes;
     changes.reserve(items.size() * 3);
 
+#if MLN_DRAWABLE_SHADOWS
+    // Renderer-owned directional-shadow pass: one shared shadow map + light frustum for every
+    // fill-extrusion layer (replaces per-layer ShadowMap ownership). Driven by the scene light's
+    // evaluated `cast-shadows` property (default false) — a style enables shadows declaratively.
+    // Ensure the pass + register its RenderTargets before the per-layer update() calls register
+    // caster drawables into it.
+    const bool shadowsActive = renderLight.getEvaluated().get<style::LightCastShadows>();
+    if (shadowsActive) {
+        if (!shadowPass) {
+            shadowPass = std::make_unique<ShadowPass>(shadowMapSize(), shadowCascadeCount());
+        }
+        shadowPass->ensure(context);
+        if (shadowPass->ready()) {
+            // Register only the cascade RenderTargets that render THIS frame (one shadow map per
+            // cascade — there are no texture-array render targets in this gfx layer, so N maps are N
+            // targets). Pitch-gated: a flat view renders just cascade 0 (a single full-density
+            // frustum), a pitched view renders up to shadowPass->cascadeCount(). The far cascade's
+            // caster pass is a full re-rasterization of every building every frame, so skipping it
+            // when flat is the headline per-frame GPU lever. This count MUST equal the receiver's
+            // activeShadowCascadeCount(pitch) — both read this frame's pitch — so a receiver never
+            // samples an unrendered cascade map. The maps + caster drawables persist across the gate
+            // (no rebuild churn); only registration toggles. The light frustum itself is fitted
+            // per-frame by the shadow tweakers (no cross-frame cache).
+            const uint32_t wantCascades = activeShadowCascadeCount(state.getPitch());
+            for (uint32_t c = registeredShadowCascades; c < wantCascades; ++c) {
+                if (auto cascadeTarget = shadowPass->target(c)) {
+                    changes.emplace_back(std::make_unique<AddRenderTargetRequest>(cascadeTarget));
+                }
+            }
+            for (uint32_t c = wantCascades; c < registeredShadowCascades; ++c) {
+                if (auto cascadeTarget = shadowPass->target(c)) {
+                    changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(cascadeTarget));
+                }
+            }
+            registeredShadowCascades = wantCascades;
+            shadowTargetRegistered = (wantCascades > 0);
+        }
+    } else if (shadowPass && registeredShadowCascades > 0) {
+        // Shadows went inactive at runtime (cast-shadows:false after being on): tear the pass down so
+        // its RenderTargets stop rendering stale casters into the shadow maps every frame and the
+        // orphaned caster drawables are freed. The maps + groups are retained and refill if shadows
+        // re-activate.
+        for (uint32_t c = 0; c < registeredShadowCascades; ++c) {
+            if (auto cascadeTarget = shadowPass->target(c)) {
+                changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(cascadeTarget));
+            }
+        }
+        registeredShadowCascades = 0;
+        shadowTargetRegistered = false;
+        shadowPass->clearCasters();
+    }
+    // When shadows are inactive (cast-shadows:false), hand layers a null pass so they take the stock
+    // path even if the pass object already exists from an earlier frame.
+    ShadowPass* const activeShadowPass = shadowsActive ? shadowPass.get() : nullptr;
+
+    // The first (lowest-index) fill-extrusion layer owns the single ground-shadow draw (ground-once;
+    // items iterate in layer-index order). Higher layers cast into the shared map but draw no ground,
+    // so they never stack a second darkening pass over the same building.
+    bool shadowGroundOwnerAssigned = false;
+#endif
+
     for (const auto& item : items) {
         auto& renderLayer = item.layer.get();
 #if MLN_RENDER_BACKEND_OPENGL
@@ -975,6 +1041,25 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
         // inside the GL translation layer at the cost of emulator performance.
         if (androidGoldfishMitigationEnabled) {
             renderLayer.removeAllDrawables();
+        }
+#endif
+#if MLN_DRAWABLE_SHADOWS
+        // Hand fill-extrusion layers the shared shadow pass so they register casters/receivers into
+        // it instead of owning per-layer shadow maps. Null when shadows are disabled (stock path).
+        // RTTI is off (-fno-rtti); identify the layer by its static type-info tag, like the rest of
+        // the orchestrator, then static_cast.
+        if (renderLayer.baseImpl->getTypeInfo() == style::FillExtrusionLayer::Impl::staticTypeInfo()) {
+            auto& fe = static_cast<RenderFillExtrusionLayer&>(renderLayer);
+            fe.setShadowPass(activeShadowPass);
+            // Ground owner = the first (lowest-index) fill-extrusion layer that actually has render
+            // tiles, so a momentarily tile-less base layer doesn't drop the ground shadow while a
+            // higher layer still casts.
+            const bool groundOwner = (activeShadowPass != nullptr) && !shadowGroundOwnerAssigned &&
+                                     fe.hasRenderTiles();
+            fe.setShadowGroundOwner(groundOwner);
+            if (groundOwner) {
+                shadowGroundOwnerAssigned = true;
+            }
         }
 #endif
         try {

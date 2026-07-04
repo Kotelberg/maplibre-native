@@ -23,6 +23,9 @@
 #include <mbgl/shaders/mtl/fill_extrusion.hpp>
 #include <mbgl/shaders/mtl/heatmap.hpp>
 #include <mbgl/shaders/mtl/heatmap_texture.hpp>
+#include <mbgl/shaders/mtl/shadow_depth.hpp>
+#include <mbgl/shaders/mtl/fill_extrusion_shadow.hpp>
+#include <mbgl/shaders/mtl/ground_shadow.hpp>
 #include <mbgl/shaders/mtl/hillshade.hpp>
 #include <mbgl/shaders/mtl/hillshade_prepare.hpp>
 #include <mbgl/shaders/mtl/line.hpp>
@@ -122,6 +125,12 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
                   shaders::BuiltIn::FillExtrusionPatternInstancedShader,
                   shaders::BuiltIn::HeatmapShader,
                   shaders::BuiltIn::HeatmapTextureShader,
+                  shaders::BuiltIn::ShadowDepthShader,
+#if MLN_USE_FILL_EXTRUSION_INSTANCING
+                  shaders::BuiltIn::ShadowDepthInstancedShader,
+#endif
+                  shaders::BuiltIn::FillExtrusionShadowShader,
+                  shaders::BuiltIn::GroundShadowShader,
                   shaders::BuiltIn::HillshadeShader,
                   shaders::BuiltIn::HillshadePrepareShader,
                   shaders::BuiltIn::ColorReliefShader,

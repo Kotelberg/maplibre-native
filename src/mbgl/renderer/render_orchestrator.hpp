@@ -15,6 +15,7 @@
 #include <mbgl/renderer/image_manager_observer.hpp>
 #include <mbgl/text/placement.hpp>
 #include <mbgl/renderer/render_tree.hpp>
+#include <mbgl/renderer/shadows/shadow_support.hpp>
 
 #include <map>
 #include <memory>
@@ -36,6 +37,7 @@ class LineAtlas;
 class PatternAtlas;
 class CrossTileSymbolIndex;
 class RenderTree;
+class ShadowPass;
 
 namespace gfx {
 class ShaderRegistry;
@@ -244,6 +246,22 @@ private:
 
     std::vector<RenderTargetPtr> renderTargets;
     RenderItem::DebugLayerGroupMap debugLayerGroups;
+
+#if MLN_DRAWABLE_SHADOWS
+    // Renderer-owned directional-shadow pass (light-driven). One shared shadow map + light frustum
+    // for all fill-extrusion layers, replacing per-layer ownership. Created lazily when the scene
+    // light has cast-shadows:true; its RenderTargets are registered per-frame (shadowTargetRegistered
+    // / registeredShadowCascades). Gated on MLN_DRAWABLE_SHADOWS so backends without shadow shaders
+    // don't carry the member (avoids an incomplete-type unique_ptr dtor where shadow_pass.hpp isn't
+    // included).
+    std::unique_ptr<ShadowPass> shadowPass;
+    bool shadowTargetRegistered = false;
+    // How many cascade RenderTargets are currently registered for rendering (pitch-gated). A flat
+    // frame registers 1 (the full cascade); a pitched frame registers up to shadowPass->cascadeCount().
+    // Kept in lock-step with the receiver's active sample count (activeShadowCascadeCount) so the
+    // receiver never samples a cascade map that wasn't rendered this frame.
+    uint32_t registeredShadowCascades = 0;
+#endif
 };
 
 } // namespace mbgl
