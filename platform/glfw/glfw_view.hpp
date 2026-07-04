@@ -35,7 +35,8 @@ public:
     GLFWView(bool fullscreen,
              bool benchmark,
              const mbgl::ResourceOptions &resourceOptions,
-             const mbgl::ClientOptions &clientOptions);
+             const mbgl::ClientOptions &clientOptions,
+             uint32_t msaaSamples = 1);
     ~GLFWView() override;
 
     float getPixelRatio() const;
@@ -136,6 +137,7 @@ private:
     mbgl::TimePoint freeCameraDemoStartTime;
     bool fullscreen = false;
     const bool benchmark = false;
+    const uint32_t msaaSamples = 1;
     bool tracking = false;
     bool rotating = false;
     bool pitching = false;

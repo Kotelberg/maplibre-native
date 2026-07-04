@@ -222,9 +222,11 @@ void glfwError(int error, const char *description) {
 GLFWView::GLFWView(bool fullscreen_,
                    bool benchmark_,
                    const mbgl::ResourceOptions &resourceOptions,
-                   const mbgl::ClientOptions &clientOptions)
+                   const mbgl::ClientOptions &clientOptions,
+                   uint32_t msaaSamples_)
     : fullscreen(fullscreen_),
       benchmark(benchmark_),
+      msaaSamples(msaaSamples_),
       snapshotterObserver(std::make_unique<SnapshotObserver>()),
       mapResourceOptions(resourceOptions.clone()),
       mapClientOptions(clientOptions.clone()) {
@@ -314,7 +316,7 @@ GLFWView::GLFWView(bool fullscreen_,
     glfwGetWindowSize(window, &width, &height);
 
     bool capFrameRate = !benchmark; // disable VSync in benchmark mode
-    backend = GLFWBackend::Create(window, capFrameRate);
+    backend = GLFWBackend::Create(window, capFrameRate, msaaSamples);
 
 #if defined(__APPLE__) && !defined(MLN_RENDER_BACKEND_VULKAN)
     int fbW, fbH;

@@ -109,8 +109,9 @@ bool checkAvailability(const std::vector<T>& availableValues,
 
 } // namespace
 
-RendererBackend::RendererBackend(const gfx::ContextMode contextMode_)
+RendererBackend::RendererBackend(const gfx::ContextMode contextMode_, uint32_t desiredMsaaSamples_)
     : gfx::RendererBackend(contextMode_),
+      desiredMsaaSamples(desiredMsaaSamples_),
       allocator(nullptr) {}
 
 RendererBackend::~RendererBackend() {

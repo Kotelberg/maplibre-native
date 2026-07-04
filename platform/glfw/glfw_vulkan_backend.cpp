@@ -140,8 +140,8 @@ public:
     void bind() override {}
 };
 
-GLFWVulkanBackend::GLFWVulkanBackend(GLFWwindow* window_, const bool capFrameRate)
-    : mbgl::vulkan::RendererBackend(mbgl::gfx::ContextMode::Unique),
+GLFWVulkanBackend::GLFWVulkanBackend(GLFWwindow* window_, const bool capFrameRate, uint32_t msaaSamples)
+    : mbgl::vulkan::RendererBackend(mbgl::gfx::ContextMode::Unique, msaaSamples),
       mbgl::vulkan::Renderable(
           [window_] {
               int fbWidth;
@@ -216,8 +216,10 @@ namespace mbgl {
 namespace gfx {
 
 template <>
-std::unique_ptr<GLFWBackend> Backend::Create<mbgl::gfx::Backend::Type::Vulkan>(GLFWwindow* window, bool capFrameRate) {
-    return std::make_unique<GLFWVulkanBackend>(window, capFrameRate);
+std::unique_ptr<GLFWBackend> Backend::Create<mbgl::gfx::Backend::Type::Vulkan>(GLFWwindow* window,
+                                                                               bool capFrameRate,
+                                                                               uint32_t msaaSamples) {
+    return std::make_unique<GLFWVulkanBackend>(window, capFrameRate, msaaSamples);
 }
 
 } // namespace gfx
