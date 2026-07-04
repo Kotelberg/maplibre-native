@@ -17,10 +17,9 @@ import org.maplibre.android.maps.renderer.textureview.VulkanTextureViewRenderThr
 public class MapRendererFactory {
   public static TextureViewMapRenderer newTextureViewMapRenderer(@NonNull Context context, TextureView textureView,
                                                                  String localFontFamily, boolean translucentSurface,
-                                                                 Runnable initCallback) {
-
+                                                                 int msaaSamples, Runnable initCallback) {
     TextureViewMapRenderer mapRenderer = new TextureViewMapRenderer(context, textureView,
-            localFontFamily, translucentSurface) {
+            localFontFamily, translucentSurface, msaaSamples) {
       @Override
       protected void onSurfaceCreated(Surface surface) {
         initCallback.run();
@@ -33,12 +32,12 @@ public class MapRendererFactory {
   }
 
   public static SurfaceViewMapRenderer newSurfaceViewMapRenderer(@NonNull Context context, String localFontFamily,
-                                                                 boolean renderSurfaceOnTop, Runnable initCallback) {
-
+                                                                 boolean renderSurfaceOnTop, int msaaSamples,
+                                                                 Runnable initCallback) {
     MapLibreVulkanSurfaceView surfaceView = new MapLibreVulkanSurfaceView(context);
     surfaceView.setZOrderMediaOverlay(renderSurfaceOnTop);
 
-    return new VulkanSurfaceViewMapRenderer(context, surfaceView, localFontFamily) {
+    return new VulkanSurfaceViewMapRenderer(context, surfaceView, localFontFamily, msaaSamples) {
       @Override
       public void onSurfaceCreated(Surface surface) {
         initCallback.run();

@@ -4,6 +4,7 @@
 
 ### ✨ Features and improvements
 
+- Add configurable map-surface MSAA (sample count via MapLibreMapOptions, default 1 = off; applies to the OpenGL EGL config and the Vulkan swapchain).
 - Reduce Android runtime symbol resolution ([#4356](https://github.com/maplibre/maplibre-native/pull/4356)).
 
 ### 🐞 Bug fixes

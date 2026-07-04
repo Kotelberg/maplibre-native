@@ -13,11 +13,18 @@ public class GLSurfaceViewMapRenderer extends SurfaceViewMapRenderer {
   public GLSurfaceViewMapRenderer(Context context,
                                 @NonNull MapLibreGLSurfaceView surfaceView,
                                 String localIdeographFontFamily) {
+    this(context, surfaceView, localIdeographFontFamily, EGLConfigChooser.MSAA_SAMPLES_DISABLED);
+  }
+
+  public GLSurfaceViewMapRenderer(Context context,
+                                @NonNull MapLibreGLSurfaceView surfaceView,
+                                String localIdeographFontFamily,
+                                int msaaSamples) {
     super(context, surfaceView, localIdeographFontFamily);
 
     surfaceView.setEGLContextFactory(new EGLContextFactory());
     surfaceView.setEGLWindowSurfaceFactory(new EGLWindowSurfaceFactory());
-    surfaceView.setEGLConfigChooser(new EGLConfigChooser());
+    surfaceView.setEGLConfigChooser(new EGLConfigChooser(false, msaaSamples));
     surfaceView.setRenderer(this);
     surfaceView.setRenderingRefreshMode(MapRenderer.RenderingRefreshMode.WHEN_DIRTY);
     surfaceView.setPreserveEGLContextOnPause(true);
