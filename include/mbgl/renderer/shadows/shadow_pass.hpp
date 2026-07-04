@@ -109,6 +109,13 @@ public:
     uint32_t mapSize() const { return mapSize_; }
     bool ready() const { return !shadowMaps_.empty() && shadowMaps_.front() != nullptr; }
 
+    /// Whether any caster group currently holds ≥1 caster drawable — i.e. a caster pass this frame
+    /// would render real occluder depth into the shadow map(s). The orchestrator uses this (on a refit
+    /// frame) to decide the shadow map is populated and safe for receivers to sample; an empty caster
+    /// set (e.g. mid-height-ramp with no built casters) leaves the map un-rendered, so receivers must
+    /// not apply shadows that frame (the D3 grey-roof guard).
+    bool hasCasterDrawables() const;
+
 private:
     uint32_t mapSize_;
     uint32_t cascadeCount_;

@@ -262,6 +262,12 @@ private:
     // receiver never samples a cascade map that wasn't rendered this frame.
     uint32_t registeredShadowCascades = 0;
 #endif
+
+    // Sticky shadow cache: set by onTileChanged (a tile (re)loaded → casters may be new), consumed in
+    // the shadow block to force a cache refit so freshly-loaded buildings get their shadow. Starts
+    // true so the very first shadowed frame fits. Declared unconditionally (onTileChanged is backend-
+    // agnostic); inert when shadows are compiled out.
+    bool shadowCacheTilesDirty_ = true;
 };
 
 } // namespace mbgl

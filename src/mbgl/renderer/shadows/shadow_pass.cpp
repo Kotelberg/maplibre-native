@@ -157,6 +157,17 @@ void ShadowPass::releaseCasterGroup(const std::string& layerID) {
     }
 }
 
+bool ShadowPass::hasCasterDrawables() const {
+    // casterGroups_ holds every caster group, including each cascade's reused built-in group 0 (stored
+    // on first registration), so this covers all casters that would render into the shadow maps.
+    for (const auto& entry : casterGroups_) {
+        if (entry.second && !entry.second->empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ShadowPass::clearCasters() {
     for (auto& entry : casterGroups_) {
         if (auto* group = static_cast<TileLayerGroup*>(entry.second.get())) {

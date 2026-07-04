@@ -1,8 +1,11 @@
 #include <mbgl/renderer/shadows/shadow_map.hpp>
 
 #include <mbgl/gfx/context.hpp>
+#include <mbgl/gfx/texture2d.hpp>
 #include <mbgl/renderer/render_target.hpp>
 #include <mbgl/renderer/layer_group.hpp>
+
+#include <vector>
 
 namespace mbgl {
 
@@ -42,6 +45,19 @@ void ShadowMap::ensure(gfx::Context& context, const std::string& layerID) {
     // far cascade that doesn't render on a flat view still needs a valid texture for the receiver to
     // bind up-front.
     renderTarget->getTexture()->create();
+
+    // Initialise the sampled packed-depth texture to FAR (white == packed depth 1.0) so it reads
+    // "nothing casts / everything lit" until a caster pass first renders into it. The RenderTarget
+    // clears to white on every render, so a target that renders overwrites this immediately and the
+    // result is byte-identical. But a receiver can bind + sample this texture on a frame BEFORE the
+    // caster pass has ever populated it (the caster pass is a separate RenderTarget drawn after the
+    // receivers set up their uniforms; on some backends/drivers the first caster render can lag the
+    // first receiver sample by a frame). An UNINITIALISED texture reads all-zeros == packed depth 0.0
+    // == NEAREST, so every roof fragment compares as shadowed → a uniform grey roof wash (the D3
+    // device bug). Seeding it to FAR makes that pre-render sample read lit instead of grey.
+    const auto& tex = renderTarget->getTexture();
+    const std::vector<uint8_t> farPixels(static_cast<size_t>(mapSize) * mapSize * 4u, 0xFF);
+    tex->upload(farPixels.data(), Size{mapSize, mapSize});
 }
 
 TileLayerGroup* ShadowMap::casterGroup() const {
