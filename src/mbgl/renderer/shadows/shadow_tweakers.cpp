@@ -130,23 +130,56 @@ uint8_t cameraFocalZoom(const TransformState& state) {
     return std::min(state.getIntegerZoom(), util::DEFAULT_MAX_ZOOM);
 }
 
+// The view's required shadow footprint: the focal (look-at) center in world space + the
+// bearing-invariant far radius that covers the visible ground. Pulled out of
+// computeWorldToLightClipCascades so the sticky cache (refreshShadowFrustum) reuses the EXACT same
+// math for its containment test — these two are the single definition of "what must be covered this
+// frame", so keep them in lock-step. World units are matrixFor units (mercator px at current scale),
+// so distances scale with zoom automatically.
+void shadowViewFootprint(const TransformState& state, vec3& outCenter, double& outFarRadius) {
+    const uint8_t focalZoom = cameraFocalZoom(state);
+    outCenter = centerPixelToWorld(state, focalZoom);
+
+    const Size sz = state.getSize();
+    const double screenExtent = 0.5 * std::hypot(static_cast<double>(sz.width), static_cast<double>(sz.height));
+    // Floor: at flat pitch the visible field is ~the screen; keep at least this much coverage.
+    const double minRadius = 1.8 * screenExtent;
+    // Cap: world-distance ceiling on coverage (keeps resolution sane + drops the far horizon).
+    const double maxDist = 4000.0;
+    // Corner safety: the top screen CORNERS reach farther than the top-center; pad the radius for them.
+    const double cornerFactor = 1.3;
+
+    // Bearing-invariant coverage radius = the farthest the visible ground reaches FORWARD from the
+    // look-at, sampled down the screen's center column (peaks just below the horizon). It's a scalar
+    // (max distance), hence invariant to compass bearing — so the symmetric frustum stays put under
+    // rotation. Capped at maxDist so a horizon-grazing steep view can't blow the frustum up.
+    double reach = 0.0;
+    const double colX = 0.5 * sz.width + paddedCenterOffset(state).x;
+    const double fy[6] = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5};
+    for (double f : fy) {
+        const vec3 w = screenPixelToWorld(state, focalZoom, colX, f * sz.height);
+        const double d = std::hypot(w[0] - outCenter[0], w[1] - outCenter[1]);
+        if (std::isfinite(d)) {
+            reach = std::max(reach, std::min(d, maxDist));
+        }
+    }
+    outFarRadius = std::min(std::max(minRadius, reach * cornerFactor), maxDist);
+}
+
 const std::vector<mat4>& worldToLightClipForFrame(ShadowFrustumState& frustumState,
                                                   const PaintParameters& parameters,
                                                   uint32_t mapSize) {
-    // Per-frame ACTIVE cascade count (pitch-gated): a flat view samples 1 full-density cascade, a
-    // pitched view the full allocated set. MUST match the count the orchestrator registers shadow
-    // RenderTargets for this frame (both read the same frame pitch) — otherwise the receiver could
-    // sample a cascade map that wasn't rendered. frustumState re-fits when this count changes.
+    // Sticky cache: the orchestrator already calls refreshShadowFrustum once per frame BEFORE the
+    // caster pass, so for the receiver/ground tweakers this is normally a cache HIT (no refit) — they
+    // just read the cached cascades. We call it again (cheap) so the matrices are also valid for any
+    // direct caller. activeShadowCascadeCount is pitch-gated; the cache refits if it changes, keeping
+    // the registered (rendered) cascade count == the sampled count.
     const uint32_t count = activeShadowCascadeCount(parameters.state.getPitch());
-    if (!frustumState.valid || frustumState.frameCount != parameters.frameCount ||
-        frustumState.mapSize != mapSize || frustumState.cascadeCount != count) {
-        frustumState.cascades = computeWorldToLightClipCascades(parameters, mapSize, count, shadowCascadeSplit());
-        frustumState.cascadeCount = count;
-        frustumState.frameCount = parameters.frameCount;
-        frustumState.mapSize = mapSize;
-        frustumState.valid = true;
-    }
-    return frustumState.cascades;
+    const vec3 sunDir = ShadowSun::direction(parameters.evaluatedLight.get<LightPosition>(),
+                                             parameters.evaluatedLight.get<LightAnchor>(),
+                                             static_cast<float>(parameters.state.getBearing()));
+    refreshShadowFrustum(frustumState, parameters.state, sunDir, mapSize, count, shadowCascadeSplit());
+    return frustumState.liveCascades; // rescaled to the live zoom (== cascades on a refit frame)
 }
 
 } // namespace
@@ -168,8 +201,13 @@ std::vector<mat4> computeWorldToLightClipCascades(const PaintParameters& paramet
     return computeWorldToLightClipCascades(state, sunDir, mapSize, cascadeCount, split);
 }
 
-std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, const vec3& sunDir,
-                                                  uint32_t mapSize, uint32_t cascadeCount, float split) {
+std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state,
+                                                  const vec3& sunDir,
+                                                  uint32_t mapSize,
+                                                  uint32_t cascadeCount,
+                                                  float split,
+                                                  const vec3* overrideCenter,
+                                                  double overrideFarRadius) {
     // WORLD-ANCHORED light frustum, sized to COVER the visible ground but BEARING-INVARIANT so the
     // shadows don't move when the camera rotates (the user's core requirement).
     //
@@ -197,52 +235,20 @@ std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, c
     // World units are TransformState::matrixFor() units == mercator screen-pixels at the current
     // scale (1 world unit == 1 screen pixel at the map center), so all distances below scale with
     // zoom automatically.
-    const uint8_t focalZoom = cameraFocalZoom(state);
-    const vec3 focalCenter = centerPixelToWorld(state, focalZoom);
     // Z-range of the light frustum, in WORLD-PIXELS. The 200m assumed max building height is in
     // METERS, so convert with the same per-zoom pixelsPerMeter the caster height uses — otherwise a
     // tall building's scaled-up caster roof would punch out of a fixed-world-px frustum top at high
     // zoom and get Z-clipped (→ short/missing shadow). Tracks zoom like the casters.
     const double maxHeightWorld = 200.0 * pixelsPerMeter(state);
 
-    const Size sz = state.getSize();
-    const double screenExtent = 0.5 * std::hypot(static_cast<double>(sz.width), static_cast<double>(sz.height));
-    // Floor: at flat pitch the visible field is ~the screen; keep at least this much coverage. 1.8
-    // also pushes the pitched far-cutoff out. The texel-density cost of this coverage is paid by the
-    // shadow map (shadowMapSize()): a still-finer near field + wider pitched coverage at once is what
-    // the cascaded shadow maps below provide.
-    const double minRadius = 1.8 * screenExtent;
-    // Cap: world-distance ceiling on coverage (keeps resolution sane + drops the far horizon).
-    const double maxDist = 4000.0;
-    // Corner safety: the top screen CORNERS reach a bit farther than the top-center; pad the radius
-    // so the far corners of the pitched view are still covered.
-    const double cornerFactor = 1.3;
-
-    // Bearing-invariant coverage radius. The binding constraint at pitch is the FORWARD reach of the
-    // visible ground. Sample DOWN the screen's vertical center column and take the farthest ground
-    // intersection from the look-at point: rows above the horizon unproject to the near plane (a
-    // small distance — screenCoordinateToTileCoordinate returns the near point when the ray escapes
-    // the ground), while the row just below the horizon gives the true far reach, which peaks there.
-    // That maximum distance is a function of pitch / fov / zoom only — NOT of the compass direction —
-    // because rotating the camera only spins this centerline; its far-reach magnitude is unchanged.
-    // So the radius, and the whole symmetric frustum, stay invariant under rotation. Capped at
-    // maxDist so a near-horizon row can't blow the frustum up (and the far horizon is left uncovered,
-    // per the user). cornerFactor pads for the wider far CORNERS of the view.
-    double reach = 0.0;
-    {
-        // Walk down the PADDED centerline (matches the padded focalCenter) so the forward-reach
-        // distances are measured from the same look-at the frustum is centered on.
-        const double colX = 0.5 * sz.width + paddedCenterOffset(state).x;
-        const double fy[6] = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5};
-        for (double f : fy) {
-            const vec3 w = screenPixelToWorld(state, focalZoom, colX, f * sz.height);
-            const double d = std::hypot(w[0] - focalCenter[0], w[1] - focalCenter[1]);
-            if (std::isfinite(d)) {
-                reach = std::max(reach, std::min(d, maxDist));
-            }
-        }
-    }
-    const double farRadius = std::min(std::max(minRadius, reach * cornerFactor), maxDist);
+    // Footprint: the live view's required center + bearing-invariant far radius (shadowViewFootprint),
+    // UNLESS the sticky cache pins an OVERSIZED override around a fixed world center so the frustum
+    // survives panning. With no override this is byte-identical to the legacy per-frame fit.
+    vec3 viewCenter;
+    double viewFarRadius;
+    shadowViewFootprint(state, viewCenter, viewFarRadius);
+    const vec3 focalCenter = overrideCenter ? *overrideCenter : viewCenter;
+    const double farRadius = overrideCenter ? overrideFarRadius : viewFarRadius;
 
     // Footprint aligned to the SUN's GROUND axes, so that in light space it is an axis-aligned
     // square that fills the whole shadow map. A WORLD-axis square (focalCenter ± radius in world x/y)
@@ -269,12 +275,13 @@ std::vector<mat4> computeWorldToLightClipCascades(const TransformState& state, c
 #ifndef NDEBUG
     // DEV-ONLY frustum trace (compiled out of release/opt; env-gated within debug builds).
     if (std::getenv("MLN_SHADOW_DBG")) {
+        const Size sz = state.getSize();
         char buf[512];
         std::snprintf(buf, sizeof(buf),
                       "MLN_SHADOW_DBG pitch=%.1f zoom=%.2f focalZoom=%u size=%dx%d focal=(%.1f,%.1f) "
-                      "farRadius=%.1f screenExtent=%.1f maxDist=%.0f cascades=%u",
-                      util::rad2deg(state.getPitch()), state.getZoom(), focalZoom, sz.width, sz.height,
-                      focalCenter[0], focalCenter[1], farRadius, screenExtent, maxDist, cascadeCount);
+                      "farRadius=%.1f override=%d cascades=%u",
+                      util::rad2deg(state.getPitch()), state.getZoom(), cameraFocalZoom(state), sz.width,
+                      sz.height, focalCenter[0], focalCenter[1], farRadius, overrideCenter ? 1 : 0, cascadeCount);
         Log::Warning(Event::General, buf);
     }
 #endif
@@ -323,6 +330,74 @@ mat4 computeWorldToLightClip(const TransformState& state, const vec3& sunDir, ui
     // Legacy single-map entry point: one cascade at the full far radius (byte-identical to the
     // pre-cascade fit). Retained for callers/tests that want exactly one frustum.
     return computeWorldToLightClipCascades(state, sunDir, mapSize, 1u, shadowCascadeSplit()).front();
+}
+
+bool refreshShadowFrustum(ShadowFrustumState& fs,
+                          const TransformState& state,
+                          const vec3& sunDir,
+                          uint32_t mapSize,
+                          uint32_t activeCascades,
+                          float split) {
+    // Sticky cache: re-fit (→ the caller re-renders the caster pass) ONLY when the cache can't serve
+    // this frame. Buildings + light are static, so a fitted frustum stays valid for its world region
+    // across pan / rotate / pitch (all constant-scale). It becomes stale when: zoom drifts (world
+    // coords scale with zoom → the cached matrix would misalign), the cascade count or map size
+    // changes, casters changed, or the camera panned past the oversized coverage margin.
+    constexpr double kOversize = 1.5;    // cached far radius = view radius × this → ~0.5·radius of pan headroom
+    constexpr double kZoomInRefit = 1.5; // re-render for SHARPNESS once the live world scale is this × the
+                                         // cached scale (~0.58 zoom levels IN); zoom-OUT is caught by coverage.
+
+    vec3 viewCenter;
+    double viewFarRadius;
+    shadowViewFootprint(state, viewCenter, viewFarRadius);
+    const double zoom = state.getZoom();
+
+    bool refit = !fs.valid || fs.castersDirty || fs.mapSize != mapSize || fs.cascadeCount != activeCascades;
+    if (!refit) {
+        // World coords scale with zoom; S = live/cached world-scale ratio. The cached depth map stays
+        // VALID at a drifted zoom — we rescale the SAMPLING matrices by 1/S below (liveCascades) rather
+        // than re-rendering, so a pinch reuses the cached map (no caster cost, no drift/flicker). Refit
+        // only when zooming IN past the cached map's resolution (kZoomInRefit), or when pan / zoom-out
+        // pushes the live view disk outside the cached oversized coverage. Compared in LIVE world-px:
+        // the cached center/radius (in cached px) scale to live px by ×S.
+        const double S = std::exp2(zoom - fs.cachedZoom);
+        if (S > kZoomInRefit) {
+            refit = true;
+        } else {
+            const double dist =
+                std::hypot(viewCenter[0] - fs.cachedCenter[0] * S, viewCenter[1] - fs.cachedCenter[1] * S);
+            refit = (dist + viewFarRadius) > fs.cachedFarRadius * S;
+        }
+    }
+
+    if (refit) {
+        fs.cachedCenter = viewCenter;
+        fs.cachedFarRadius = viewFarRadius * kOversize;
+        fs.cachedZoom = zoom;
+        fs.cascades = computeWorldToLightClipCascades(
+            state, sunDir, mapSize, activeCascades, split, &fs.cachedCenter, fs.cachedFarRadius);
+        fs.cascadeCount = activeCascades;
+        fs.mapSize = mapSize;
+        fs.castersDirty = false;
+        fs.valid = true;
+    }
+
+    // Per-frame: rescale the BASE cascades to the live zoom so the cached depth map (rendered at
+    // cachedZoom) samples perfectly aligned during a pinch — NO re-render, NO drift. On a refit frame
+    // cachedZoom == zoom → ratio 1 → liveCascades == cascades. World coords scale uniformly about the
+    // mercator origin, so a uniform 1/S scale on the world→light matrix maps live-world back onto the
+    // cached projection (ortho directional light → the depth comparison is preserved).
+    // Guard the rescale against the sentinel cachedZoom (-1.0, never fitted): a refit always runs
+    // above when the cache is invalid, so cachedZoom is normally a real zoom here — but if a caller
+    // ever reaches this with an un-fitted cache, exp2(zoom - (-1)) is a garbage ~5-orders-of-magnitude
+    // scale that collapses the sampling matrices into a degenerate projection. Treat an un-fitted cache
+    // as ratio 1 (identity rescale) rather than propagating the sentinel into the light matrices.
+    const double liveS = (fs.valid && fs.cachedZoom >= 0.0) ? std::exp2(zoom - fs.cachedZoom) : 1.0;
+    fs.liveCascades.resize(fs.cascades.size());
+    for (std::size_t c = 0; c < fs.cascades.size(); ++c) {
+        matrix::scale(fs.liveCascades[c], fs.cascades[c], 1.0 / liveS, 1.0 / liveS, 1.0 / liveS);
+    }
+    return refit;
 }
 
 void ShadowDepthTweaker::execute(LayerGroupBase& layerGroup, const PaintParameters& parameters) {
@@ -395,10 +470,16 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
     // at low zoom where buildings are flat).
     // MLN_SHADOW_INTENSITY (debug override): if set, replaces the style value for the headless
     // metric harness; unset → the evaluated `shadow-intensity` (default 0.32).
+    // Skip shadows entirely on a frame where the shadow map is not yet usable (the frustum cache was
+    // in its sentinel/invalid state at frame start, so the caster pass has not rendered the map): the
+    // receiver runs before the caster pass, so it would otherwise sample an un-rendered map that reads
+    // all-nearest and wash every roof grey. shadowMapUsable is snapshotted by the orchestrator; it is
+    // true for every settled frame, so this only zeroes the transient first/invalid frames.
+    const float shadowActive = frustumState->shadowMapUsable ? 1.0f : 0.0f;
     const float baseIntensity = std::clamp(envFloat("MLN_SHADOW_INTENSITY",
                                                     parameters.evaluatedLight.get<LightShadowIntensity>()),
                                            0.0f, 1.0f) *
-                                shadowHeightFade(zoom);
+                                shadowHeightFade(zoom) * shadowActive;
     const FillExtrusionShadowPropsUBO propsUBO = {
         .color = evaluated.get<FillExtrusionColor>().constantOr(Color::black()),
         .light_color_pad = {lightColor[0], lightColor[1], lightColor[2], 0.0f},
@@ -608,10 +689,14 @@ void GroundShadowTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
 
     // Same darkness source as the building receiver: style `shadow-intensity` (MLN_SHADOW_INTENSITY
     // debug override, default = evaluated 0.32), clamped and faded in by the building-height ramp.
+    // Same grey-roof guard as the building receiver: until the frustum cache is valid (the caster pass
+    // has rendered the map) the map is not usable, so gate the ground shadow off for those transient
+    // frames (ShadowFrustumState::shadowMapUsable).
+    const float shadowActive = frustumState->shadowMapUsable ? 1.0f : 0.0f;
     const float groundIntensity = std::clamp(envFloat("MLN_SHADOW_INTENSITY",
                                                       parameters.evaluatedLight.get<LightShadowIntensity>()),
                                              0.0f, 1.0f) *
-                                  shadowHeightFade(static_cast<float>(state.getZoom()));
+                                  shadowHeightFade(static_cast<float>(state.getZoom())) * shadowActive;
     const GroundShadowPropsUBO propsUBO = {.shadow_color = Color::black(),
                                            // World-anchored: constant strength at every pitch (see
                                            // FillExtrusionShadowTweaker), faded in with the building
