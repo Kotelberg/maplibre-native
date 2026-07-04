@@ -35,6 +35,34 @@ TEST(OffscreenTexture, EmptyRed) {
     test::checkImage("test/fixtures/offscreen_texture/empty-red", image, 0, 0);
 }
 
+// Regression test for the gl::Texture2D::create() idempotency fix: calling create() a second time
+// on an already-allocated texture must NOT allocate a new GL texture object underneath anything
+// that already captured the first one (that was the GL shadow blackout / multi-cascade latch root
+// cause — an eager-materialize caller followed by a resource's own bind() each called create()).
+TEST(OffscreenTexture, Texture2DCreateIdempotent) {
+    if (gfx::Backend::GetType() != gfx::Backend::Type::OpenGL) {
+        return;
+    }
+
+    gl::HeadlessBackend backend({512, 256});
+    gfx::BackendScope scope{backend};
+    auto& context = static_cast<gl::Context&>(backend.getContext());
+
+    auto texture = context.createTexture2D();
+    auto& glTexture = static_cast<gl::Texture2D&>(*texture);
+    glTexture.setSize({64, 64});
+    glTexture.setFormat(gfx::TexturePixelType::RGBA, gfx::TextureChannelDataType::UnsignedByte);
+
+    glTexture.create();
+    const auto firstId = glTexture.getTextureID();
+    EXPECT_NE(firstId, 0u);
+
+    // Second create() call: must be a no-op (same GL texture object), not a silent reallocation.
+    glTexture.create();
+    const auto secondId = glTexture.getTextureID();
+    EXPECT_EQ(firstId, secondId);
+}
+
 struct Shader {
     Shader(const GLchar* vertex, const GLchar* fragment) {
         program = MBGL_CHECK_ERROR(glCreateProgram());
