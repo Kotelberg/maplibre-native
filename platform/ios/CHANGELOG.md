@@ -5,6 +5,7 @@ MapLibre welcomes participation and contributions from everyone. Please read [`M
 ## 6.27.0
 
 - Implement ambient cache for PMTiles sources ([#4290](https://github.com/maplibre/maplibre-native/pull/4290)).
+- Add configurable map-surface MSAA (sample count via MLNRendererConfiguration, default 1 = off).
 
 ## 6.26.1
 
