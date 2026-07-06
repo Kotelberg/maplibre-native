@@ -165,6 +165,8 @@ add_library(maplibre SHARED
             ${PROJECT_SOURCE_DIR}/style/layers/layer_manager.hpp
             ${PROJECT_SOURCE_DIR}/style/layers/line_layer.cpp
             ${PROJECT_SOURCE_DIR}/style/layers/line_layer.hpp
+            ${PROJECT_SOURCE_DIR}/style/layers/model_layer.cpp
+            ${PROJECT_SOURCE_DIR}/style/layers/model_layer.hpp
             ${PROJECT_SOURCE_DIR}/style/layers/raster_layer.cpp
             ${PROJECT_SOURCE_DIR}/style/layers/raster_layer.hpp
             ${PROJECT_SOURCE_DIR}/style/layers/symbol_layer.cpp
