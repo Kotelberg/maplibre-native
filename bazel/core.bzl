@@ -1007,6 +1007,7 @@ MLN_DRAWABLES_HEADERS = [
     "include/mbgl/gfx/uniform_buffer.hpp",
     "include/mbgl/gfx/vertex_attribute.hpp",
     "include/mbgl/gfx/texture2d.hpp",
+    "include/mbgl/renderer/building_extrusion_zoom_ramp.hpp",
     "include/mbgl/renderer/change_request.hpp",
     "include/mbgl/renderer/layer_group.hpp",
     "include/mbgl/renderer/layer_tweaker.hpp",
