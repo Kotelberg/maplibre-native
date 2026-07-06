@@ -45,6 +45,14 @@ public:
     jni::Local<jni::Object<TransitionOptions>> get<%- camelize(property.name) %>Transition(jni::JNIEnv&);
 <% } -%>
 <% } -%>
+<% if (type === 'model') { -%>
+
+    // Model asset registry (runtime SDK API; not part of the style spec). A
+    // flat, alternating [id0, path0, id1, path1, ...] array mirrors the darwin
+    // NSDictionary binding without requiring a JNI Map marshaller.
+    jni::Local<jni::Array<jni::String>> getModelAssets(jni::JNIEnv&);
+    void setModelAssets(jni::JNIEnv&, const jni::Array<jni::String>&, const jni::Array<jni::String>&);
+<% } -%>
 
 }; // class <%- camelize(type) %>Layer
 

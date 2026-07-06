@@ -7,6 +7,10 @@
 #include "<%- type.replace('-', '_') %>_layer.hpp"
 
 #include <string>
+<% if (type === 'model') { -%>
+#include <map>
+#include <utility>
+<% } -%>
 
 #include "../conversion/property_value.hpp"
 #include "../conversion/transition_options.hpp"
@@ -104,6 +108,44 @@ namespace android {
 
 <% } -%>
 <% } -%>
+<% if (type === 'model') { -%>
+
+    // Model asset registry (runtime SDK API; not part of the style spec). Maps
+    // a `model-id` value to a local glTF/GLB file path; mirrors Style::addImage
+    // (the host registers assets at runtime, the style references them only by
+    // id). Marshalled as a flat, alternating [id0, path0, id1, path1, ...]
+    // array to avoid a JNI Map wrapper.
+    jni::Local<jni::Array<jni::String>> ModelLayer::getModelAssets(jni::JNIEnv& env) {
+        auto layer = layerPtr.get();
+        if (!layer) {
+            return jni::Array<jni::String>::New(env, 0);
+        }
+        const auto& assets = toModelLayer(*layer).getModelAssets();
+        auto result = jni::Array<jni::String>::New(env, assets.size() * 2);
+        std::size_t i = 0;
+        for (const auto& entry : assets) {
+            result.Set(env, i++, jni::Make<jni::String>(env, entry.first));
+            result.Set(env, i++, jni::Make<jni::String>(env, entry.second));
+        }
+        return result;
+    }
+
+    void ModelLayer::setModelAssets(jni::JNIEnv& env,
+                                    const jni::Array<jni::String>& ids,
+                                    const jni::Array<jni::String>& paths) {
+        auto layer = layerPtr.get();
+        if (!layer) {
+            return;
+        }
+        std::map<std::string, std::string> assets;
+        const std::size_t count = std::min(ids.Length(env), paths.Length(env));
+        for (std::size_t i = 0; i < count; ++i) {
+            assets.emplace(jni::Make<std::string>(env, ids.Get(env, i)),
+                           jni::Make<std::string>(env, paths.Get(env, i)));
+        }
+        toModelLayer(*layer).setModelAssets(std::move(assets));
+    }
+<% } -%>
 
     // <%- camelize(type) %>JavaLayerPeerFactory
 
@@ -149,7 +191,10 @@ namespace android {
             METHOD(&<%- camelize(type) %>Layer::get<%- camelize(properties[i].name) %>Transition, "nativeGet<%- camelize(properties[i].name) %>Transition"),
             METHOD(&<%- camelize(type) %>Layer::set<%- camelize(properties[i].name) %>Transition, "nativeSet<%- camelize(properties[i].name) %>Transition"),
 <% } -%>
-            METHOD(&<%- camelize(type) %>Layer::get<%- camelize(properties[i].name) %>, "nativeGet<%- camelize(properties[i].name) %>")<% if(i != (properties.length -1)) {-%>,<% } -%><% } -%>);
+            METHOD(&<%- camelize(type) %>Layer::get<%- camelize(properties[i].name) %>, "nativeGet<%- camelize(properties[i].name) %>")<% if(i != (properties.length -1) || type === 'model') {-%>,<% } -%><% } -%>
+<% if (type === 'model') { -%>
+            METHOD(&ModelLayer::getModelAssets, "nativeGetModelAssets"),
+            METHOD(&ModelLayer::setModelAssets, "nativeSetModelAssets")<% } -%>);
     }
 
 } // namespace android

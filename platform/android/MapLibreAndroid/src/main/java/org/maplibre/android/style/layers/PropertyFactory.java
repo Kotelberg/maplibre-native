@@ -1720,6 +1720,86 @@ The unit is in density-independent pixels only for SDF sprites that were created
   }
 
   /**
+   * Experimental. The opacity at which the model will be drawn.
+   *
+   * @param value a Float value
+   * @return property wrapper around Float
+   */
+  public static PropertyValue<Float> modelOpacity(Float value) {
+    return new PaintPropertyValue<>("model-opacity", value);
+  }
+
+  /**
+   * Experimental. The opacity at which the model will be drawn.
+   *
+   * @param expression an expression statement
+   * @return property wrapper around an expression statement
+   */
+  public static PropertyValue<Expression> modelOpacity(Expression expression) {
+    return new PaintPropertyValue<>("model-opacity", expression);
+  }
+
+  /**
+   * Experimental. Height of the model in meters. The model's authored bounds are uniformly scaled so it stands this many meters tall.
+   *
+   * @param value a Float value
+   * @return property wrapper around Float
+   */
+  public static PropertyValue<Float> modelScale(Float value) {
+    return new PaintPropertyValue<>("model-scale", value);
+  }
+
+  /**
+   * Experimental. Height of the model in meters. The model's authored bounds are uniformly scaled so it stands this many meters tall.
+   *
+   * @param expression an expression statement
+   * @return property wrapper around an expression statement
+   */
+  public static PropertyValue<Expression> modelScale(Expression expression) {
+    return new PaintPropertyValue<>("model-scale", expression);
+  }
+
+  /**
+   * Experimental. Rotation of the model about the vertical axis (yaw), in degrees, measured clockwise.
+   *
+   * @param value a Float value
+   * @return property wrapper around Float
+   */
+  public static PropertyValue<Float> modelRotation(Float value) {
+    return new PaintPropertyValue<>("model-rotation", value);
+  }
+
+  /**
+   * Experimental. Rotation of the model about the vertical axis (yaw), in degrees, measured clockwise.
+   *
+   * @param expression an expression statement
+   * @return property wrapper around an expression statement
+   */
+  public static PropertyValue<Expression> modelRotation(Expression expression) {
+    return new PaintPropertyValue<>("model-rotation", expression);
+  }
+
+  /**
+   * Experimental. Horizontal (x/y) scale multiplier applied on top of {@link PropertyFactory#modelScale}, independent of the model's height. Values above 1 widen the footprint; values below 1 narrow it.
+   *
+   * @param value a Float value
+   * @return property wrapper around Float
+   */
+  public static PropertyValue<Float> modelFootprint(Float value) {
+    return new PaintPropertyValue<>("model-footprint", value);
+  }
+
+  /**
+   * Experimental. Horizontal (x/y) scale multiplier applied on top of {@link PropertyFactory#modelScale}, independent of the model's height. Values above 1 widen the footprint; values below 1 narrow it.
+   *
+   * @param expression an expression statement
+   * @return property wrapper around an expression statement
+   */
+  public static PropertyValue<Expression> modelFootprint(Expression expression) {
+    return new PaintPropertyValue<>("model-footprint", expression);
+  }
+
+  /**
    * Sorts features in ascending order based on this value. Features with a higher sort key will appear above features with a lower sort key.
    *
    * @param value a Float value
@@ -2765,6 +2845,26 @@ The unit is in density-independent pixels only for SDF sprites that were created
    */
   public static PropertyValue<Expression> circleSortKey(Expression value) {
     return new LayoutPropertyValue<>("circle-sort-key", value);
+  }
+
+  /**
+   * Experimental. Identifier of the model to place at each feature, resolved against the host-supplied model asset registry (the SDK `model-assets` API). Supports data-driven expressions, so a single layer can place a different model per feature.
+   *
+   * @param value a String value
+   * @return property wrapper around String
+   */
+  public static PropertyValue<String> modelId(String value) {
+    return new LayoutPropertyValue<>("model-id", value);
+  }
+
+  /**
+   * Experimental. Identifier of the model to place at each feature, resolved against the host-supplied model asset registry (the SDK `model-assets` API). Supports data-driven expressions, so a single layer can place a different model per feature.
+   *
+   * @param value a String value
+   * @return property wrapper around String
+   */
+  public static PropertyValue<Expression> modelId(Expression value) {
+    return new LayoutPropertyValue<>("model-id", value);
   }
 
 }
