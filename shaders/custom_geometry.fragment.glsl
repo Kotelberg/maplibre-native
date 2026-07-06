@@ -1,6 +1,8 @@
+precision highp float;
+
 layout (std140) uniform CustomGeometryDrawableUBO {
-    mat4 u_matrix;
-    vec4 u_color;
+    highp mat4 u_matrix;
+    highp vec4 u_color;
 };
 
 in vec2 frag_uv;
