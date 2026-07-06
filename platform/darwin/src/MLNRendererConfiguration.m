@@ -8,6 +8,7 @@
 
 static NSString * const MLNCollisionBehaviorPre4_0Key = @"MLNCollisionBehaviorPre4_0";
 static NSString * const MLNIdeographicFontFamilyNameKey = @"MLNIdeographicFontFamilyName";
+static NSString * const MLNRendererSampleCountKey = @"MLNRendererSampleCount";
 
 @implementation MLNRendererConfiguration
 
@@ -61,6 +62,29 @@ static NSString * const MLNIdeographicFontFamilyNameKey = @"MLNIdeographicFontFa
         return [infoDictionaryObject boolValue];
     }
     return NO;
+}
+
+- (NSUInteger)sampleCount {
+    id infoDictionaryObject = [NSBundle.mainBundle objectForInfoDictionaryKey:MLNRendererSampleCountKey];
+    return [self sampleCountWithInfoDictionaryObject:infoDictionaryObject];
+}
+
+- (NSUInteger)sampleCountWithInfoDictionaryObject:(nullable id)infoDictionaryObject {
+    // Supported MSAA sample counts, highest first, so we can round an arbitrary
+    // requested value down to the nearest one we support (minimum 1, which disables MSAA).
+    static const NSUInteger supportedSampleCounts[] = {8, 4, 2, 1};
+
+    if (![infoDictionaryObject isKindOfClass:[NSNumber class]]) {
+        return 1;
+    }
+
+    NSInteger requestedSampleCount = [infoDictionaryObject integerValue];
+    for (NSUInteger i = 0; i < sizeof(supportedSampleCounts) / sizeof(supportedSampleCounts[0]); i++) {
+        if (requestedSampleCount >= (NSInteger)supportedSampleCounts[i]) {
+            return supportedSampleCounts[i];
+        }
+    }
+    return 1;
 }
 
 @end

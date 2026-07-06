@@ -15,7 +15,7 @@ class GLFWVulkanBackend final : public GLFWBackend,
                                 public mbgl::vulkan::RendererBackend,
                                 public mbgl::vulkan::Renderable {
 public:
-    GLFWVulkanBackend(GLFWwindow*, bool capFrameRate);
+    GLFWVulkanBackend(GLFWwindow*, bool capFrameRate, uint32_t msaaSamples = 1);
     ~GLFWVulkanBackend() override;
 
     GLFWwindow* getWindow() { return window; }

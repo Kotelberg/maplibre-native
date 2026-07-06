@@ -5,6 +5,7 @@
 ### ✨ Features and improvements
 
 - Add `fill-extrusion-edge-radius` layout property — bucket-time rounding of extruded footprint corners with smooth facade normals (default 0 = off).
+- Add configurable map-surface MSAA (sample count via MapLibreMapOptions, default 1 = off; applies to the OpenGL EGL config and the Vulkan swapchain).
 - Reduce Android runtime symbol resolution ([#4356](https://github.com/maplibre/maplibre-native/pull/4356)).
 
 ### 🐞 Bug fixes

@@ -123,6 +123,7 @@
         <attr name="maplibre_renderTextureMode" format="boolean"/>
         <attr name="maplibre_renderTextureTranslucentSurface" format="boolean"/>
         <attr name="maplibre_foregroundLoadColor" format="color"/>
+        <attr name="maplibre_msaaSamples" format="integer"/>
 
         <attr name="maplibre_enableTilePrefetch" format="boolean"/>
         <attr name="maplibre_prefetchZoomDelta" format="integer"/>

@@ -32,7 +32,24 @@ public class TextureViewMapRenderer extends MapRenderer {
                                 @NonNull TextureView textureView,
                                 String localIdeographFontFamily,
                                 boolean translucentSurface) {
-    super(context, localIdeographFontFamily);
+    this(context, textureView, localIdeographFontFamily, translucentSurface, 1);
+  }
+
+  /**
+   * Create a {@link MapRenderer} for the given {@link TextureView}
+   *
+   * @param context                  the current Context
+   * @param textureView              the TextureView
+   * @param localIdeographFontFamily the local font family
+   * @param translucentSurface       the translucency flag
+   * @param msaaSamples              the MSAA sample count for the map surface (1 = disabled)
+   */
+  public TextureViewMapRenderer(@NonNull Context context,
+                                @NonNull TextureView textureView,
+                                String localIdeographFontFamily,
+                                boolean translucentSurface,
+                                int msaaSamples) {
+    super(context, localIdeographFontFamily, msaaSamples);
     this.textureView = textureView;
     this.translucentSurface = translucentSurface;
 

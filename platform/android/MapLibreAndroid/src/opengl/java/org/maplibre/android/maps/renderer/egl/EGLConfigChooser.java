@@ -50,15 +50,39 @@ public class EGLConfigChooser implements GLSurfaceView.EGLConfigChooser {
   @SuppressWarnings("JavadocReference")
   private static final int EGL_OPENGL_ES3_BIT = 0x0040;
 
-  private boolean translucentSurface;
+  /**
+   * Sample count meaning "no multisampling" — the legacy, pre-MSAA behavior. This is the value
+   * used by the default constructor and the single-{@code boolean} constructor, so callers that
+   * don't opt into MSAA keep the original (samples == 0) config-selection behavior unchanged.
+   */
+  public static final int MSAA_SAMPLES_DISABLED = 1;
+
+  private final boolean translucentSurface;
+  private final int desiredSamples;
 
   public EGLConfigChooser() {
     this(false);
   }
 
   public EGLConfigChooser(boolean translucentSurface) {
+    this(translucentSurface, MSAA_SAMPLES_DISABLED);
+  }
+
+  /**
+   * @param translucentSurface whether the window surface needs an alpha channel.
+   * @param desiredSamples     preferred MSAA sample count for the on-screen framebuffer. 3D
+   *                           fill-extrusion (building) edges are hard polygon edges with no
+   *                           shader-side antialiasing — unlike SDF lines/fills — so without MSAA
+   *                           they can alias ("pixelated edges"). When {@code desiredSamples > 1},
+   *                           the chooser prefers an MSAA config near this count (clamped to a sane
+   *                           mobile range of 2..8 samples) and falls back to a non-MSAA config when
+   *                           the driver offers none. Values {@code <= 1} disable MSAA and restore
+   *                           the legacy (samples == 0) selection behavior exactly.
+   */
+  public EGLConfigChooser(boolean translucentSurface, int desiredSamples) {
     super();
     this.translucentSurface = translucentSurface;
+    this.desiredSamples = desiredSamples;
   }
 
   @Override
@@ -137,22 +161,44 @@ public class EGLConfigChooser implements GLSurfaceView.EGLConfigChooser {
       private final BufferFormat bufferFormat;
       private final DepthStencilFormat depthStencilFormat;
       private final boolean isCaveat;
+      private final int samples;
       private final int index;
       private final EGLConfig config;
 
       public Config(BufferFormat bufferFormat, DepthStencilFormat depthStencilFormat,
-                    boolean isCaveat, int index, EGLConfig config) {
+                    boolean isCaveat, int samples, int index, EGLConfig config) {
         this.bufferFormat = bufferFormat;
         this.depthStencilFormat = depthStencilFormat;
         this.isCaveat = isCaveat;
+        this.samples = samples;
         this.index = index;
         this.config = config;
       }
 
+      // Lower is better. Prefer the requested MSAA sample count, then the closest other MSAA
+      // count, and a non-MSAA (samples <= 1) config only as a last resort — so an anti-aliased
+      // framebuffer wins whenever MSAA was requested and the driver offers one. When MSAA wasn't
+      // requested (desiredSamples <= 1), every candidate reaching this point already has
+      // samples == 0 (see the noMsaa/wantMsaa filter below), so this rank ties for all of them and
+      // has no effect on ordering — preserving the legacy comparator behavior exactly.
+      private int msaaRank() {
+        if (samples <= 1) {
+          return Integer.MAX_VALUE;
+        }
+        if (samples == desiredSamples) {
+          return 0;
+        }
+        return 1 + Math.abs(samples - desiredSamples);
+      }
 
       @Override
       public int compareTo(@NonNull Config other) {
-        int i = compare(bufferFormat.value, other.bufferFormat.value);
+        int i = compare(msaaRank(), other.msaaRank());
+        if (i != 0) {
+          return i;
+        }
+
+        i = compare(bufferFormat.value, other.bufferFormat.value);
         if (i != 0) {
           return i;
         }
@@ -200,8 +246,14 @@ public class EGLConfigChooser implements GLSurfaceView.EGLConfigChooser {
 
       boolean configOk = (depth == 24) || (depth == 16);
       configOk &= stencil == 8;
-      configOk &= sampleBuffers == 0;
-      configOk &= samples == 0;
+      // Accept a non-MSAA config (the legacy requirement, byte-identical when desiredSamples <= 1)
+      // OR — only when MSAA was explicitly requested — an MSAA config in a sane mobile range
+      // (2..8 samples; avoids e.g. a driver's 16x config, far too expensive on a tiled mobile GPU).
+      // The comparator (msaaRank) then prefers MSAA over non-MSAA and the requested sample count
+      // over the rest, with non-MSAA kept only as a fallback.
+      boolean noMsaa = (sampleBuffers == 0) && (samples == 0);
+      boolean wantMsaa = (desiredSamples > 1) && (sampleBuffers >= 1) && (samples >= 2) && (samples <= 8);
+      configOk &= (noMsaa || wantMsaa);
 
       // Filter our configs first for depth, stencil and anti-aliasing
       if (configOk) {
@@ -231,7 +283,7 @@ public class EGLConfigChooser implements GLSurfaceView.EGLConfigChooser {
 
         // Ignore formats we don't recognise
         if (bufferFormat != BufferFormat.Unknown) {
-          matches.add(new Config(bufferFormat, depthStencilFormat, isCaveat, i, config));
+          matches.add(new Config(bufferFormat, depthStencilFormat, isCaveat, samples, i, config));
         }
       }
 
@@ -246,6 +298,12 @@ public class EGLConfigChooser implements GLSurfaceView.EGLConfigChooser {
     }
 
     Config bestMatch = matches.get(0);
+
+    if (desiredSamples > 1) {
+      Logger.i(TAG, String.format(MapLibreConstants.MAPLIBRE_LOCALE,
+        "Chosen EGL config: bufferFormat=%s depthStencil=%s samples=%d (MSAA requested=%d)",
+        bestMatch.bufferFormat, bestMatch.depthStencilFormat, bestMatch.samples, desiredSamples));
+    }
 
     if (bestMatch.isCaveat) {
       Logger.w(TAG, "Chosen config has a caveat.");

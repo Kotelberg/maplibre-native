@@ -4,6 +4,8 @@ MapLibre welcomes participation and contributions from everyone. Please read [`C
 
 ## 0.19.1 - September 06, 2021
 
+- Add configurable map-surface MSAA (sample count via MLNRendererConfiguration, default 1 = off).
+
 ### Bug Fixes
 
 * Invalid tile url template for MapLibre style [#107](https://github.com/maplibre/maplibre-native/pull/107)

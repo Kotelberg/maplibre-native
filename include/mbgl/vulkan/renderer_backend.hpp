@@ -38,7 +38,10 @@ using ObjectDestroy = vk::detail::ObjectDestroy<OwnerType, DispatchLoaderDynamic
 
 class RendererBackend : public gfx::RendererBackend {
 public:
-    RendererBackend(gfx::ContextMode);
+    /// @param desiredMsaaSamples requested MSAA sample count for the map surface (1 = disabled, the default). Values
+    /// greater than 1 are clamped by device support at swapchain setup. Only the on-screen (swapchain) surface is
+    /// multisampled; headless/offscreen render targets always stay single-sampled.
+    RendererBackend(gfx::ContextMode, uint32_t desiredMsaaSamples = 1);
     ~RendererBackend() override;
 
     /// One-time shader initialization
@@ -58,6 +61,9 @@ public:
     const vk::PhysicalDeviceFeatures& getDeviceFeatures() const { return physicalDeviceFeatures; }
     int32_t getGraphicsQueueIndex() const { return graphicsQueueIndex; }
     int32_t getPresentQueueIndex() const { return presentQueueIndex; }
+
+    /// Requested MSAA sample count for the map surface (1 = disabled). Clamped by device support at swapchain setup.
+    uint32_t getDesiredMsaaSamples() const { return desiredMsaaSamples; }
 
     template <typename T>
         requires vk::isVulkanHandleType<T>::value
@@ -122,6 +128,10 @@ protected:
 
     vk::UniqueCommandPool commandPool;
     uint32_t maxFrames = 1;
+
+    // Requested MSAA sample count for the map surface (1 = disabled). Set at construction, honored during swapchain
+    // setup where it is clamped by device limits.
+    uint32_t desiredMsaaSamples = 1;
 
     VmaAllocator allocator;
 

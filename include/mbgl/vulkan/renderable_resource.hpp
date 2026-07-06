@@ -26,11 +26,15 @@ public:
     virtual const vk::UniqueFramebuffer& getFramebuffer() const = 0;
     virtual float getRotation() const { return 0.0f; }
 
+    // Sample count of this renderable's render pass. e1 unless the surface opted into MSAA.
+    vk::SampleCountFlagBits getSampleCount() const { return sampleCount; }
+
 protected:
     RendererBackend& backend;
 
     vk::Extent2D extent;
     vk::UniqueRenderPass renderPass;
+    vk::SampleCountFlagBits sampleCount{vk::SampleCountFlagBits::e1};
 };
 
 class SurfaceRenderableResource : public RenderableResource {
@@ -44,9 +48,14 @@ protected:
     void initSwapchain(uint32_t w, uint32_t h);
 
     void initDepthStencil();
+    void initMultisampledColor();
     void initRenderPass();
     void setColorFormat(vk::Format format);
     void setDepthFormat(vk::Format format);
+
+    // Effective sample count for the surface, clamped by device limits. Returns e1 for headless (no surface) or when
+    // MSAA was not requested.
+    vk::SampleCountFlagBits chooseSampleCount() const;
 
     void copySurfaceToReadTexture();
     void swap() override;
@@ -104,8 +113,13 @@ protected:
     UniqueImageAllocation depthAllocation;
     vk::Format depthFormat{vk::Format::eUndefined};
 
+    // Transient multisampled color image, allocated only when sampleCount > e1. The swapchain image is the resolve
+    // target for this image.
+    UniqueImageAllocation msaaColorAllocation;
+
     int32_t surfaceTransformPollingInterval{-1};
     bool surfaceRead{false};
+    bool sampleCountLogged{false};
     std::unique_ptr<Texture2D> readTexture{nullptr};
 };
 
