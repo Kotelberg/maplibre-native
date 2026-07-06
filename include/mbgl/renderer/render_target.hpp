@@ -28,7 +28,10 @@ using LayerGroupBasePtr = std::shared_ptr<LayerGroupBase>;
 /// Render target class
 class RenderTarget {
 public:
-    RenderTarget(gfx::Context& context, const Size size, const gfx::TextureChannelDataType type);
+    RenderTarget(gfx::Context& context,
+                 const Size size,
+                 const gfx::TextureChannelDataType type,
+                 bool withDepth = false);
     ~RenderTarget();
 
     /// Get the render target texture
@@ -80,6 +83,7 @@ public:
 
 protected:
     gfx::Context& context;
+    bool withDepth = false;
     std::unique_ptr<gfx::OffscreenTexture> offscreenTexture;
     using LayerGroupMap = std::map<int32_t, LayerGroupBasePtr>;
     LayerGroupMap layerGroupsByLayerIndex;

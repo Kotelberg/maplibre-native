@@ -124,3 +124,68 @@ TEST(StyleConversion, Light) {
         ASSERT_EQ("value must be a valid enumeration value", error.message);
     }
 }
+
+TEST(StyleConversion, LightShadowProperties) {
+    Error error;
+    auto parseLight = [&](const std::string& src) { return convertJSON<Light>(src, error); };
+
+    // Defaults: shadows off by default, "subtle" 0.32 intensity.
+    ASSERT_EQ(Light::getDefaultCastShadows(), false);
+    ASSERT_EQ(Light::getDefaultShadowIntensity(), 0.32f);
+
+    // Absent in the style → undefined (the renderer falls back to the defaults above).
+    {
+        auto light = parseLight("{}");
+        ASSERT_TRUE((bool)light);
+        ASSERT_TRUE(light->getCastShadows().isUndefined());
+        ASSERT_TRUE(light->getShadowIntensity().isUndefined());
+    }
+
+    // Parsed from style JSON.
+    {
+        auto light = parseLight(R"({"cast-shadows":true,"shadow-intensity":0.6})");
+        ASSERT_TRUE((bool)light);
+
+        ASSERT_FALSE(light->getCastShadows().isUndefined());
+        ASSERT_TRUE(light->getCastShadows().isConstant());
+        ASSERT_EQ(light->getCastShadows().asConstant(), true);
+
+        ASSERT_FALSE(light->getShadowIntensity().isUndefined());
+        ASSERT_TRUE(light->getShadowIntensity().isConstant());
+        ASSERT_EQ(light->getShadowIntensity().asConstant(), 0.6f);
+    }
+
+    // Dynamic setProperty API (no error; value round-trips through the getter).
+    {
+        auto light = parseLight("{}");
+        ASSERT_TRUE((bool)light);
+
+        const mbgl::JSValue castValue(true);
+        ASSERT_FALSE((bool)light->setProperty("cast-shadows", &castValue));
+        ASSERT_EQ(light->getCastShadows().asConstant(), true);
+
+        const mbgl::JSValue intensityValue(0.25);
+        ASSERT_FALSE((bool)light->setProperty("shadow-intensity", &intensityValue));
+        ASSERT_EQ(light->getShadowIntensity().asConstant(), 0.25f);
+    }
+
+    // Type validation.
+    {
+        auto light = parseLight(R"({"cast-shadows":"yes"})");
+        ASSERT_FALSE((bool)light);
+        ASSERT_EQ("value must be a boolean", error.message);
+    }
+
+    // Transitions parsed from style JSON.
+    {
+        auto light = parseLight(
+            R"({"cast-shadows-transition":{"duration":300},"shadow-intensity-transition":{"duration":400}})");
+        ASSERT_TRUE((bool)light);
+
+        ASSERT_EQ(light->getCastShadowsTransition().duration, mbgl::Duration(mbgl::Milliseconds(300)));
+        ASSERT_FALSE((bool)light->getCastShadowsTransition().delay);
+
+        ASSERT_EQ(light->getShadowIntensityTransition().duration, mbgl::Duration(mbgl::Milliseconds(400)));
+        ASSERT_FALSE((bool)light->getShadowIntensityTransition().delay);
+    }
+}

@@ -6,6 +6,13 @@
 #include <mbgl/renderer/renderer_observer.hpp>
 #include <mbgl/renderer/render_source.hpp>
 #include <mbgl/renderer/render_layer.hpp>
+#include <mbgl/renderer/shadows/shadow_support.hpp>
+#if MLN_DRAWABLE_SHADOWS
+#include <mbgl/renderer/shadows/shadow_pass.hpp>
+#include <mbgl/renderer/shadows/shadow_tweakers.hpp>
+#include <mbgl/renderer/shadows/shadow_sun.hpp>
+#include <mbgl/renderer/layers/render_fill_extrusion_layer.hpp>
+#endif
 #include <mbgl/renderer/render_static_data.hpp>
 #include <mbgl/renderer/render_tree.hpp>
 #include <mbgl/renderer/update_parameters.hpp>
@@ -968,6 +975,90 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
     std::vector<std::unique_ptr<ChangeRequest>> changes;
     changes.reserve(items.size() * 3);
 
+#if MLN_DRAWABLE_SHADOWS
+    // Renderer-owned directional-shadow pass: one shared shadow map + light frustum for every
+    // fill-extrusion layer (replaces per-layer ShadowMap ownership). Driven by the scene light's
+    // evaluated `cast-shadows` property (default false) — a style enables shadows declaratively.
+    // Ensure the pass + register its RenderTargets before the per-layer update() calls register
+    // caster drawables into it.
+    const bool shadowsActive = renderLight.getEvaluated().get<style::LightCastShadows>();
+    // Did the shadow frustum re-fit this frame (→ the caster targets are registered and will render
+    // the map this frame)? Hoisted so the post-layer-update caster-population check (which decides
+    // whether the receiver may sample the map — the D3 grey-roof guard) can see it. Set below.
+    bool shadowRefitThisFrame = false;
+    if (shadowsActive) {
+        if (!shadowPass) {
+            shadowPass = std::make_unique<ShadowPass>(shadowMapSize(), shadowCascadeCount());
+        }
+        shadowPass->ensure(context);
+        if (shadowPass->ready()) {
+            // STICKY SHADOW CACHE. Buildings + light are static, so a fitted shadow map stays valid
+            // for its world region across pan / rotate / pitch (all constant-scale). Refresh the
+            // cached light frustum and re-render the caster pass ONLY when the cache can't serve this
+            // frame (camera panned past the oversized coverage, zoom drifted past the refit policy,
+            // cascade count or map size changed, or a tile changed → new casters). Between refits the
+            // caster pass is skipped and the previously-rendered shadow map is reused, so shadows stay
+            // visible + stable during a pan at ~zero per-frame GPU cost (no pop). The RECEIVER path
+            // stays on every frame (activeShadowPass below) and samples the cached map — that
+            // decoupling is what avoids the "stale shadows smear while panning" artifact a naive gate
+            // produced.
+            const auto& fs = shadowPass->frustumState();
+            if (fs && shadowCacheTilesDirty_) {
+                fs->castersDirty = true; // a tile (re)loaded → its casters may be new; force a refit
+            }
+            shadowCacheTilesDirty_ = false;
+            const auto& evalLight = renderLight.getEvaluated();
+            const vec3 sunDir = ShadowSun::direction(evalLight.get<style::LightPosition>(),
+                                                     evalLight.get<style::LightAnchor>(),
+                                                     static_cast<float>(state.getBearing()));
+            const uint32_t activeCascades = activeShadowCascadeCount(state.getPitch());
+            const bool shadowRefit = fs && refreshShadowFrustum(*fs, state, sunDir, shadowMapSize(),
+                                                                activeCascades, shadowCascadeSplit());
+            shadowRefitThisFrame = shadowRefit;
+            // Register (→ render) the caster cascades only on a refit frame; otherwise register 0 so
+            // the caster pass is skipped and the cached map is reused. On a refit frame this count MUST
+            // equal the receiver's sampled cascade count (both use activeCascades). One shadow map per
+            // cascade (there are no texture-array render targets in this gfx layer, so N maps are N
+            // targets). The maps + caster drawables persist across the gate (no rebuild churn); only
+            // registration toggles.
+            const uint32_t wantCascades = shadowRefit ? activeCascades : 0u;
+            for (uint32_t c = registeredShadowCascades; c < wantCascades; ++c) {
+                if (auto cascadeTarget = shadowPass->target(c)) {
+                    changes.emplace_back(std::make_unique<AddRenderTargetRequest>(cascadeTarget));
+                }
+            }
+            for (uint32_t c = wantCascades; c < registeredShadowCascades; ++c) {
+                if (auto cascadeTarget = shadowPass->target(c)) {
+                    changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(cascadeTarget));
+                }
+            }
+            registeredShadowCascades = wantCascades;
+            shadowTargetRegistered = (wantCascades > 0);
+        }
+    } else if (shadowPass && registeredShadowCascades > 0) {
+        // Shadows went inactive at runtime (cast-shadows:false after being on): tear the pass down so
+        // its RenderTargets stop rendering stale casters into the shadow maps every frame and the
+        // orphaned caster drawables are freed. The maps + groups are retained and refill if shadows
+        // re-activate.
+        for (uint32_t c = 0; c < registeredShadowCascades; ++c) {
+            if (auto cascadeTarget = shadowPass->target(c)) {
+                changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(cascadeTarget));
+            }
+        }
+        registeredShadowCascades = 0;
+        shadowTargetRegistered = false;
+        shadowPass->clearCasters();
+    }
+    // When shadows are inactive (cast-shadows:false), hand layers a null pass so they take the stock
+    // path even if the pass object already exists from an earlier frame.
+    ShadowPass* const activeShadowPass = shadowsActive ? shadowPass.get() : nullptr;
+
+    // The first (lowest-index) fill-extrusion layer owns the single ground-shadow draw (ground-once;
+    // items iterate in layer-index order). Higher layers cast into the shared map but draw no ground,
+    // so they never stack a second darkening pass over the same building.
+    bool shadowGroundOwnerAssigned = false;
+#endif
+
     for (const auto& item : items) {
         auto& renderLayer = item.layer.get();
 #if MLN_RENDER_BACKEND_OPENGL
@@ -977,12 +1068,51 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
             renderLayer.removeAllDrawables();
         }
 #endif
+#if MLN_DRAWABLE_SHADOWS
+        // Hand fill-extrusion layers the shared shadow pass so they register casters/receivers into
+        // it instead of owning per-layer shadow maps. Null when shadows are disabled (stock path).
+        // RTTI is off (-fno-rtti); identify the layer by its static type-info tag, like the rest of
+        // the orchestrator, then static_cast.
+        if (renderLayer.baseImpl->getTypeInfo() == style::FillExtrusionLayer::Impl::staticTypeInfo()) {
+            auto& fe = static_cast<RenderFillExtrusionLayer&>(renderLayer);
+            fe.setShadowPass(activeShadowPass);
+            // Ground owner = the first (lowest-index) fill-extrusion layer that actually has render
+            // tiles, so a momentarily tile-less base layer doesn't drop the ground shadow while a
+            // higher layer still casts.
+            const bool groundOwner = (activeShadowPass != nullptr) && !shadowGroundOwnerAssigned &&
+                                     fe.hasRenderTiles();
+            fe.setShadowGroundOwner(groundOwner);
+            if (groundOwner) {
+                shadowGroundOwnerAssigned = true;
+            }
+        }
+#endif
         try {
             renderLayer.update(shaders, context, state, updateParameters, renderTree, changes);
         } catch (...) {
             observer->onRenderError(std::current_exception());
         }
     }
+
+#if MLN_DRAWABLE_SHADOWS
+    // Grey-roof guard (D3). The receiver + ground shadow tweakers run (in the upload pass) BEFORE the
+    // caster pass renders the shadow map, so they cannot observe this frame's caster result directly —
+    // they gate on ShadowFrustumState::shadowMapUsable, which we latch here, now that the per-layer
+    // update() calls above have (re)built this frame's caster drawables. The map holds valid occluder
+    // depth to sample once a refit frame's caster groups are non-empty: that refit registers the caster
+    // targets, which render (clearing to far, then drawing casters) before receivers sample on the GPU.
+    // Until that first populated refit, the shadow map's eagerly-created texture is un-rendered and
+    // reads all-nearest — sampling it would read every roof as shadowed and wash it uniform grey — so
+    // shadowMapUsable stays false and the tweakers keep the roofs lit. It only ever latches true (the
+    // map persists across cache-hit frames), so once shadows are established every settled frame is
+    // byte-identical to the pre-guard path (the tweakers multiply intensity by exactly 1).
+    if (shadowsActive && shadowPass) {
+        if (const auto& fs = shadowPass->frustumState(); fs && !fs->shadowMapUsable) {
+            fs->shadowMapUsable = shadowRefitThisFrame && shadowPass->hasCasterDrawables();
+        }
+    }
+#endif
+
     addChanges(changes);
 }
 
@@ -1057,6 +1187,11 @@ void RenderOrchestrator::onTileError(RenderSource& source, const OverscaledTileI
 void RenderOrchestrator::onTileChanged(RenderSource&, const OverscaledTileID&) {
     MLN_TRACE_FUNC();
 
+    // A tile (re)loaded → its building casters may be new, so the sticky shadow cache must refit on
+    // the next frame to pick them up (otherwise a freshly-loaded building would cast no shadow until
+    // the camera pans out of coverage). Broad by design (any source) — over-refitting is just a few
+    // extra caster passes and stays correct; the steady state (no tile churn) still reuses the cache.
+    shadowCacheTilesDirty_ = true;
     observer->onInvalidate();
 }
 

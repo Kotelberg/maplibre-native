@@ -83,6 +83,15 @@ public:
 
     virtual std::unique_ptr<OffscreenTexture> createOffscreenTexture(Size, TextureChannelDataType) = 0;
 
+    /// Depth/stencil-capable offscreen target. Backends that support a depth attachment (Metal,
+    /// OpenGL here; Vulkan lands in a follow-up) override this; the default falls back to a
+    /// color-only target so a backend without depth support still compiles and behaves as before.
+    /// If a caller requests `depth == true` and reaches this base default anyway (a backend that
+    /// forgot its own override), it logs a warning — silently downgrading a depth request to a
+    /// color-only target would otherwise fail confusingly deep inside the render pass that expected
+    /// a depth attachment.
+    virtual std::unique_ptr<OffscreenTexture> createOffscreenTexture(Size, TextureChannelDataType, bool depth, bool stencil);
+
     template <RenderbufferPixelType pixelType>
     Renderbuffer<pixelType> createRenderbuffer(const Size size) {
         return {size, createRenderbufferResource(pixelType, size)};

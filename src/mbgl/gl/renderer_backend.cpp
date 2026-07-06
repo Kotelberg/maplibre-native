@@ -10,6 +10,12 @@
 #include <mbgl/shaders/gl/shader_group_gl.hpp>
 #include <mbgl/shaders/gl/legacy/programs.hpp>
 
+// Directional-shadow shaders (fork). Included directly here (like the Metal backend does for its
+// shadow shaders) rather than via the generated shader_manifest.hpp.
+#include <mbgl/shaders/gl/shadow_depth.hpp>
+#include <mbgl/shaders/gl/fill_extrusion_shadow.hpp>
+#include <mbgl/shaders/gl/ground_shadow.hpp>
+
 #include <cassert>
 
 namespace mbgl {
@@ -133,6 +139,9 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
                   shaders::BuiltIn::FillOutlineTriangulatedShader,
                   shaders::BuiltIn::FillExtrusionShader,
                   shaders::BuiltIn::FillExtrusionPatternShader,
+                  shaders::BuiltIn::ShadowDepthShader,
+                  shaders::BuiltIn::FillExtrusionShadowShader,
+                  shaders::BuiltIn::GroundShadowShader,
                   shaders::BuiltIn::HeatmapShader,
                   shaders::BuiltIn::HeatmapTextureShader,
                   shaders::BuiltIn::HillshadePrepareShader,

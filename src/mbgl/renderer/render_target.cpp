@@ -7,12 +7,20 @@
 #include <mbgl/renderer/layer_tweaker.hpp>
 #include <mbgl/renderer/paint_parameters.hpp>
 #include <mbgl/renderer/render_tree.hpp>
+#include <mbgl/util/image.hpp>
+
+#include <cstdlib>
+#include <fstream>
 
 namespace mbgl {
 
-RenderTarget::RenderTarget(gfx::Context& context_, const Size size, const gfx::TextureChannelDataType type)
-    : context(context_) {
-    offscreenTexture = context.createOffscreenTexture(size, type);
+RenderTarget::RenderTarget(gfx::Context& context_,
+                           const Size size,
+                           const gfx::TextureChannelDataType type,
+                           bool withDepth_)
+    : context(context_),
+      withDepth(withDepth_) {
+    offscreenTexture = context.createOffscreenTexture(size, type, withDepth_, /*stencil=*/false);
 }
 
 RenderTarget::~RenderTarget() {}
@@ -65,11 +73,14 @@ void RenderTarget::upload(gfx::UploadPass& uploadPass) {
 }
 
 void RenderTarget::render(RenderOrchestrator& orchestrator, const RenderTree& renderTree, PaintParameters& parameters) {
-    parameters.renderPass = parameters.encoder->createRenderPass("render target",
-                                                                 {.renderable = *offscreenTexture,
-                                                                  .clearColor = Color{0.0f, 0.0f, 0.0f, 1.0f},
-                                                                  .clearDepth = {},
-                                                                  .clearStencil = {}});
+    parameters.renderPass = parameters.encoder->createRenderPass(
+        "render target",
+        {.renderable = *offscreenTexture,
+         // Depth-capable targets (shadow maps) clear color to white == packed-far depth
+         // and clear depth to 1.0 so the nearest caster wins; color-only targets keep black.
+         .clearColor = withDepth ? Color{1.0f, 1.0f, 1.0f, 1.0f} : Color{0.0f, 0.0f, 0.0f, 1.0f},
+         .clearDepth = withDepth ? std::optional<float>(1.0f) : std::optional<float>{},
+         .clearStencil = {}});
 
     const gfx::ScissorRect prevScissorRect = parameters.scissorRect;
     const auto& size = getTexture()->getSize();
@@ -110,6 +121,34 @@ void RenderTarget::render(RenderOrchestrator& orchestrator, const RenderTree& re
     parameters.encoder->present(*offscreenTexture);
 
     parameters.scissorRect = prevScissorRect;
+
+#ifndef NDEBUG
+    // MLN_SHADOW_DUMP (debug-only diagnostic; compiled out of release/opt builds, env-gated within
+    // debug builds so no effect on the byte-identical off path): dump a depth-capable render target's
+    // RGBA8 (packed-depth) texture to a PNG so caster-depth coverage is observable in headless
+    // mbgl-render. Fires only when MLN_SHADOW_DUMP names a file prefix AND this target owns a depth
+    // attachment (the shadow map). Effect: writes <prefix>_<n>.png per frame; default off.
+    if (withDepth) {
+        if (const char* prefix = std::getenv("MLN_SHADOW_DUMP")) {
+            static int dumpCounter = 0;
+            const PremultipliedImage img = offscreenTexture->readStillImage();
+            // Quick coverage probe: count non-(255,255,255) pixels (cleared white == far == no caster).
+            size_t covered = 0;
+            const size_t npx = static_cast<size_t>(img.size.width) * img.size.height;
+            for (size_t i = 0; i < npx; ++i) {
+                const uint8_t* p = img.data.get() + i * 4;
+                if (!(p[0] == 255 && p[1] == 255 && p[2] == 255)) ++covered;
+            }
+            const std::string png = encodePNG(img);
+            const std::string path = std::string(prefix) + "_" + std::to_string(dumpCounter) + ".png";
+            std::ofstream out(path, std::ios::binary);
+            out.write(png.data(), static_cast<std::streamsize>(png.size()));
+            fprintf(stderr, "MLN_SHADOW_DUMP frame=%d coverage=%.2f%% -> %s\n",
+                    dumpCounter, 100.0 * static_cast<double>(covered) / static_cast<double>(npx), path.c_str());
+            ++dumpCounter;
+        }
+    }
+#endif
 }
 
 } // namespace mbgl
