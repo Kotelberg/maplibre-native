@@ -252,6 +252,7 @@ list(APPEND INCLUDE_FILES
     ${PROJECT_SOURCE_DIR}/include/mbgl/layermanager/fill_layer_factory.hpp
     ${PROJECT_SOURCE_DIR}/include/mbgl/layermanager/heatmap_layer_factory.hpp
     ${PROJECT_SOURCE_DIR}/include/mbgl/layermanager/hillshade_layer_factory.hpp
+    ${PROJECT_SOURCE_DIR}/include/mbgl/layermanager/model_layer_factory.hpp
     ${PROJECT_SOURCE_DIR}/include/mbgl/layermanager/color_relief_layer_factory.hpp
     ${PROJECT_SOURCE_DIR}/include/mbgl/layermanager/layer_factory.hpp
     ${PROJECT_SOURCE_DIR}/include/mbgl/layermanager/layer_manager.hpp
@@ -366,6 +367,7 @@ list(APPEND INCLUDE_FILES
     ${PROJECT_SOURCE_DIR}/include/mbgl/style/layers/fill_layer.hpp
     ${PROJECT_SOURCE_DIR}/include/mbgl/style/layers/heatmap_layer.hpp
     ${PROJECT_SOURCE_DIR}/include/mbgl/style/layers/hillshade_layer.hpp
+    ${PROJECT_SOURCE_DIR}/include/mbgl/style/layers/model_layer.hpp
     ${PROJECT_SOURCE_DIR}/include/mbgl/style/layers/color_relief_layer.hpp
     ${PROJECT_SOURCE_DIR}/include/mbgl/style/layers/line_layer.hpp
     ${PROJECT_SOURCE_DIR}/include/mbgl/style/layers/location_indicator_layer.hpp
@@ -1013,10 +1015,18 @@ list(APPEND
 
 list(APPEND
     SRC_FILES
+        ${PROJECT_SOURCE_DIR}/src/mbgl/layermanager/model_layer_factory.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/layers/render_model_layer.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/layers/render_model_layer.hpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/glb_mesh_loader.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/glb_mesh_loader.hpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/placeholder_mesh.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/placeholder_mesh.hpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/model_layer.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/model_layer_impl.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/model_layer_impl.hpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/model_layer_properties.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/model_layer_properties.hpp
 )
 
 # Harfbuzz text shaping

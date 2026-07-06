@@ -14,6 +14,7 @@
 #include <mbgl/layermanager/symbol_layer_factory.hpp>
 #include <mbgl/util/logging.hpp>
 #include <mbgl/layermanager/custom_drawable_layer_factory.hpp>
+#include <mbgl/layermanager/model_layer_factory.hpp>
 
 #include <map>
 #include <memory>
@@ -89,6 +90,9 @@ LayerManagerDefault::LayerManagerDefault() {
 #endif
 #if !defined(MLN_LAYER_CUSTOM_DRAWABLE_DISABLE_ALL)
     addLayerType(std::make_unique<CustomDrawableLayerFactory>());
+#endif
+#if !defined(MLN_LAYER_MODEL_DISABLE_ALL)
+    addLayerType(std::make_unique<ModelLayerFactory>());
 #endif
 }
 

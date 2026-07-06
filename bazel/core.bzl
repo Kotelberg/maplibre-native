@@ -26,6 +26,7 @@ MLN_PUBLIC_GENERATED_STYLE_HEADERS = [
     "include/mbgl/style/layers/color_relief_layer.hpp",
     "include/mbgl/style/layers/background_layer.hpp",
     "include/mbgl/style/layers/location_indicator_layer.hpp",
+    "include/mbgl/style/layers/model_layer.hpp",
     "include/mbgl/style/light.hpp",
 ]
 
@@ -38,6 +39,7 @@ MLN_PRIVATE_GENERATED_STYLE_HEADERS = [
     "src/mbgl/style/layers/fill_extrusion_layer_properties.hpp",
     "src/mbgl/style/layers/raster_layer_properties.hpp",
     "src/mbgl/style/layers/hillshade_layer_properties.hpp",
+    "src/mbgl/style/layers/model_layer_properties.hpp",
     "src/mbgl/style/layers/color_relief_layer_properties.hpp",
     "src/mbgl/style/layers/background_layer_properties.hpp",
     "src/mbgl/style/layers/location_indicator_layer_properties.hpp",
@@ -66,6 +68,8 @@ MLN_GENERATED_STYLE_SOURCE = [
     "src/mbgl/style/layers/background_layer.cpp",
     "src/mbgl/style/layers/location_indicator_layer_properties.cpp",
     "src/mbgl/style/layers/location_indicator_layer.cpp",
+    "src/mbgl/style/layers/model_layer_properties.cpp",
+    "src/mbgl/style/layers/model_layer.cpp",
     "src/mbgl/style/light.cpp",
 ]
 
@@ -667,6 +671,7 @@ MLN_CORE_HEADERS = [
     "include/mbgl/layermanager/heatmap_layer_factory.hpp",
     "include/mbgl/layermanager/hillshade_layer_factory.hpp",
     "include/mbgl/layermanager/color_relief_layer_factory.hpp",
+    "include/mbgl/layermanager/model_layer_factory.hpp",
     "include/mbgl/layermanager/layer_factory.hpp",
     "include/mbgl/layermanager/layer_manager.hpp",
     "include/mbgl/layermanager/line_layer_factory.hpp",
@@ -981,6 +986,11 @@ MLN_DRAWABLES_SOURCE = [
     "src/mbgl/renderer/model/cgltf.h",
     "src/mbgl/renderer/model/placeholder_mesh.cpp",
     "src/mbgl/renderer/model/placeholder_mesh.hpp",
+    "src/mbgl/layermanager/model_layer_factory.cpp",
+    "src/mbgl/renderer/layers/render_model_layer.cpp",
+    "src/mbgl/renderer/layers/render_model_layer.hpp",
+    "src/mbgl/style/layers/model_layer_impl.cpp",
+    "src/mbgl/style/layers/model_layer_impl.hpp",
 ]
 
 MLN_DRAWABLES_HEADERS = [

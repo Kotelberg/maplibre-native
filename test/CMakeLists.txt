@@ -50,6 +50,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/style/conversion/geojson_options.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/layer.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/light.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/style/conversion/model_layer.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/padding.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/property_value.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/source_options.test.cpp
