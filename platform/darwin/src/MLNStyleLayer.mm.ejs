@@ -18,6 +18,12 @@
 
 #include <mbgl/style/layers/<%- type.replace('-', '_') %>_layer.hpp>
 #include <mbgl/style/transition_options.hpp>
+<% if (type === 'model') { -%>
+
+#include <map>
+#include <string>
+#include <utility>
+<% } -%>
 
 <% if (enumProperties) { -%>
 
@@ -234,6 +240,31 @@ namespace mbgl {
 }
 <% } -%>
 <% } -%>
+<% } -%>
+<% if (type === 'model') { -%>
+
+// MARK: - Managing a Model's Assets
+
+- (void)setModelAssets:(NSDictionary<NSString *, NSString *> *)modelAssets {
+    MLNAssertStyleLayerIsValid();
+    MLNLogDebug(@"Setting modelAssets: %@", modelAssets);
+
+    std::map<std::string, std::string> assets;
+    for (NSString *assetID in modelAssets) {
+        assets.emplace(assetID.UTF8String, modelAssets[assetID].UTF8String);
+    }
+    self.rawLayer->setModelAssets(std::move(assets));
+}
+
+- (NSDictionary<NSString *, NSString *> *)modelAssets {
+    MLNAssertStyleLayerIsValid();
+
+    NSMutableDictionary<NSString *, NSString *> *assets = [NSMutableDictionary dictionary];
+    for (const auto &entry : self.rawLayer->getModelAssets()) {
+        assets[@(entry.first.c_str())] = @(entry.second.c_str());
+    }
+    return assets;
+}
 <% } -%>
 
 @end

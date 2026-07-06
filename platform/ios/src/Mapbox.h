@@ -42,6 +42,7 @@ FOUNDATION_EXPORT MLN_EXPORT const unsigned char MapboxVersionString[];
 #import "MLNMapView+IBAdditions.h"
 #import "MLNMapView.h"
 #import "MLNMapViewDelegate.h"
+#import "MLNModelStyleLayer.h"
 #import "MLNMultiPoint.h"
 #import "MLNNetworkConfiguration.h"
 #import "MLNOfflinePack.h"
