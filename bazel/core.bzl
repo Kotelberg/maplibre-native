@@ -976,6 +976,11 @@ MLN_DRAWABLES_SOURCE = [
     "src/mbgl/style/layers/custom_drawable_layer_impl.hpp",
     "src/mbgl/renderer/layers/render_custom_drawable_layer.cpp",
     "src/mbgl/renderer/layers/render_custom_drawable_layer.hpp",
+    "src/mbgl/renderer/model/glb_mesh_loader.cpp",
+    "src/mbgl/renderer/model/glb_mesh_loader.hpp",
+    "src/mbgl/renderer/model/cgltf.h",
+    "src/mbgl/renderer/model/placeholder_mesh.cpp",
+    "src/mbgl/renderer/model/placeholder_mesh.hpp",
 ]
 
 MLN_DRAWABLES_HEADERS = [

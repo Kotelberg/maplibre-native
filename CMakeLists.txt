@@ -1011,6 +1011,14 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/src/mbgl/style/layers/custom_drawable_layer.cpp
 )
 
+list(APPEND
+    SRC_FILES
+        ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/glb_mesh_loader.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/glb_mesh_loader.hpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/placeholder_mesh.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/renderer/model/placeholder_mesh.hpp
+)
+
 # Harfbuzz text shaping
 set(SHAPE_TARGETS, "")
 list(APPEND
