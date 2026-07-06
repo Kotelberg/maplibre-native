@@ -852,6 +852,17 @@
               "ios": "2.0.0"
             }
           }
+        },
+        "model": {
+          "doc": "Experimental. Places a 3D glTF/GLB model at each Point of a GeoJSON source. The model drawn for a feature is selected by the `model-id` property and resolved through a host-supplied runtime asset registry (the SDK `model-assets` API); the style itself references models only by id. Rendered with the map's built-in custom-drawable pipeline, so no additional shaders are required.",
+          "experimental": true,
+          "sdk-support": {
+            "basic functionality": {
+              "js": "",
+              "android": "",
+              "ios": ""
+            }
+          }
         }
       },
       "doc": "Rendering type of this layer.",
@@ -907,7 +918,8 @@
     "layout_raster",
     "layout_hillshade",
     "layout_color-relief",
-    "layout_background"
+    "layout_background",
+    "layout_model"
   ],
   "layout_background": {
     "visibility": {
@@ -5721,7 +5733,8 @@
     "paint_raster",
     "paint_hillshade",
     "paint_color-relief",
-    "paint_background"
+    "paint_background",
+    "paint_model"
   ],
   "paint_fill": {
     "fill-antialias": {
@@ -7858,6 +7871,167 @@
         ]
       },
       "property-type": "data-constant"
+    }
+  },
+  "layout_model": {
+    "visibility": {
+      "type": "enum",
+      "values": {
+        "visible": {
+          "doc": "The layer is shown."
+        },
+        "none": {
+          "doc": "The layer is not shown."
+        }
+      },
+      "default": "visible",
+      "doc": "Whether this layer is displayed.",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "",
+          "android": "",
+          "ios": ""
+        }
+      },
+      "property-type": "constant"
+    },
+    "model-id": {
+      "type": "string",
+      "doc": "Experimental. Identifier of the model to place at each feature, resolved against the host-supplied model asset registry (the SDK `model-assets` API). Supports data-driven expressions, so a single layer can place a different model per feature.",
+      "experimental": true,
+      "sdk-support": {
+        "basic functionality": {
+          "js": "",
+          "android": "",
+          "ios": ""
+        },
+        "data-driven styling": {
+          "js": "",
+          "android": "",
+          "ios": ""
+        }
+      },
+      "expression": {
+        "interpolated": false,
+        "parameters": [
+          "zoom",
+          "feature"
+        ]
+      },
+      "property-type": "data-driven"
+    }
+  },
+  "paint_model": {
+    "model-opacity": {
+      "type": "number",
+      "doc": "Experimental. The opacity at which the model will be drawn.",
+      "default": 1,
+      "minimum": 0,
+      "maximum": 1,
+      "experimental": true,
+      "transition": true,
+      "sdk-support": {
+        "basic functionality": {
+          "js": "",
+          "android": "",
+          "ios": ""
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "property-type": "data-constant"
+    },
+    "model-scale": {
+      "type": "number",
+      "doc": "Experimental. Height of the model in meters. The model's authored bounds are uniformly scaled so it stands this many meters tall.",
+      "default": 20,
+      "minimum": 0,
+      "units": "meters",
+      "experimental": true,
+      "transition": true,
+      "sdk-support": {
+        "basic functionality": {
+          "js": "",
+          "android": "",
+          "ios": ""
+        },
+        "data-driven styling": {
+          "js": "",
+          "android": "",
+          "ios": ""
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom",
+          "feature",
+          "feature-state"
+        ]
+      },
+      "property-type": "data-driven"
+    },
+    "model-rotation": {
+      "type": "number",
+      "doc": "Experimental. Rotation of the model about the vertical axis (yaw), in degrees, measured clockwise.",
+      "default": 0,
+      "units": "degrees",
+      "experimental": true,
+      "transition": true,
+      "sdk-support": {
+        "basic functionality": {
+          "js": "",
+          "android": "",
+          "ios": ""
+        },
+        "data-driven styling": {
+          "js": "",
+          "android": "",
+          "ios": ""
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom",
+          "feature",
+          "feature-state"
+        ]
+      },
+      "property-type": "data-driven"
+    },
+    "model-footprint": {
+      "type": "number",
+      "doc": "Experimental. Horizontal (x/y) scale multiplier applied on top of `model-scale`, independent of the model's height. Values above 1 widen the footprint; values below 1 narrow it.",
+      "default": 1,
+      "minimum": 0,
+      "experimental": true,
+      "transition": true,
+      "sdk-support": {
+        "basic functionality": {
+          "js": "",
+          "android": "",
+          "ios": ""
+        },
+        "data-driven styling": {
+          "js": "",
+          "android": "",
+          "ios": ""
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom",
+          "feature",
+          "feature-state"
+        ]
+      },
+      "property-type": "data-driven"
     }
   },
   "transition": {

@@ -15,6 +15,7 @@
 #include "heatmap_layer.hpp"
 #include "hillshade_layer.hpp"
 #include "line_layer.hpp"
+#include "model_layer.hpp"
 #include "raster_layer.hpp"
 #include "symbol_layer.hpp"
 #include "fill_extrusion_layer.hpp"
@@ -82,6 +83,10 @@ LayerManagerAndroid::LayerManagerAndroid() {
 #endif
 #if !defined(MBGL_LAYER_LOCATION_INDICATOR_DISABLE_ALL)
     addLayerType(std::make_unique<LocationIndicatorJavaLayerPeerFactory>());
+#endif
+
+#if !defined(MLN_LAYER_MODEL_DISABLE_ALL)
+    addLayerType(std::make_unique<ModelJavaLayerPeerFactory>());
 #endif
 }
 

@@ -155,7 +155,12 @@ function attributeUniformType(property, type) {
       'line-pattern': ['pattern_to', 'pattern_from'],
       'line-floor-width': ['floorwidth'],
       'fill-pattern': ['pattern_to', 'pattern_from'],
-      'fill-extrusion-pattern': ['pattern_to', 'pattern_from']
+      'fill-extrusion-pattern': ['pattern_to', 'pattern_from'],
+      // Experimental model layer: keep the model_ prefix so the generated
+      // attribute/uniform names don't collide with generic scale/rotation names.
+      'model-scale': ['model_scale'],
+      'model-rotation': ['model_rotation'],
+      'model-footprint': ['model_footprint']
     }
     /** @type {string[]} **/
     const names = attributeNameExceptions[property.name] ||
