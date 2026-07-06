@@ -7,8 +7,14 @@
 #include <mbgl/gfx/headless_frontend.hpp>
 #include <mbgl/style/style.hpp>
 
+#include <mbgl/style/conversion/geojson.hpp>
+#include <mbgl/style/expression/dsl.hpp>
+#include <mbgl/style/layers/model_layer.hpp>
+#include <mbgl/style/sources/geojson_source.hpp>
+
 #include <args.hxx>
 
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <fstream>
@@ -26,6 +32,11 @@ int main(int argc, char* argv[]) {
         argumentParser, "file", "Directory to which asset:// URLs will resolve", {'a', "assets"});
 
     args::Flag debugFlag(argumentParser, "debug", "Debug mode", {"debug"});
+    args::Flag modelLayerFlag(
+        argumentParser,
+        "model-layer",
+        "Add a demo `type: \"model\"` layer with 3 synthesized GeoJSON points around the camera center",
+        {"model-layer"});
 
     args::ValueFlag<double> pixelRatioValue(argumentParser, "number", "Image scale factor", {'r', "ratio"});
 
@@ -104,10 +115,22 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Only used by --model-layer, to add the demo source/layer once the
+    // style has finished loading (adding a source/layer before loadURL
+    // completes would be clobbered by the style's own load).
+    class RenderObserver : public MapObserver {
+    public:
+        std::function<void()> styleLoaded;
+        void onDidFinishLoadingStyle() final {
+            if (styleLoaded) styleLoaded();
+        }
+    };
+    RenderObserver observer;
+
     HeadlessFrontend frontend({width, height}, static_cast<float>(pixelRatio));
     Map map(
         frontend,
-        MapObserver::nullObserver(),
+        observer,
         MapOptions().withMapMode(mapMode).withSize(frontend.getSize()).withPixelRatio(static_cast<float>(pixelRatio)),
         ResourceOptions()
             .withCachePath(cache_file)
@@ -117,6 +140,72 @@ int main(int argc, char* argv[]) {
 
     if (style.find("://") == std::string::npos) {
         style = std::string("file://") + style;
+    }
+
+    if (modelLayerFlag) {
+        observer.styleLoaded = [&map, lat, lon] {
+            if (map.getStyle().getLayer("model-layer-demo")) {
+                return;
+            }
+
+            // MLN_MODEL_GEOJSON overrides the synthesized demo points with a
+            // GeoJSON file (e.g. single-building placements).
+            std::string overrideGeojson;
+            if (const char* gj = getenv("MLN_MODEL_GEOJSON")) {
+                std::ifstream in(gj);
+                overrideGeojson.assign(std::istreambuf_iterator<char>(in), {});
+            }
+
+            char geojson[1024];
+            std::snprintf(geojson,
+                          sizeof(geojson),
+                          R"({"type":"FeatureCollection","features":[
+{"type":"Feature","properties":{"bearing":0,"size":15},"geometry":{"type":"Point","coordinates":[%.6f,%.6f]}},
+{"type":"Feature","properties":{"bearing":45,"size":30},"geometry":{"type":"Point","coordinates":[%.6f,%.6f]}},
+{"type":"Feature","properties":{"bearing":120,"size":50},"geometry":{"type":"Point","coordinates":[%.6f,%.6f]}}]})",
+                          lon - 0.0010,
+                          lat + 0.0004,
+                          lon,
+                          lat - 0.0006,
+                          lon + 0.0012,
+                          lat + 0.0008);
+
+            style::conversion::Error geojsonError;
+            auto converted = style::conversion::parseGeoJSON(
+                overrideGeojson.empty() ? std::string(geojson) : overrideGeojson, geojsonError);
+            if (!converted) {
+                std::cerr << "model-layer geojson error: " << geojsonError.message << std::endl;
+                return;
+            }
+
+            auto source = std::make_unique<style::GeoJSONSource>("model-layer-demo-points");
+            source->setGeoJSON(*converted);
+            map.getStyle().addSource(std::move(source));
+
+            namespace dsl = style::expression::dsl;
+            auto layer = std::make_unique<style::ModelLayer>("model-layer-demo", "model-layer-demo-points");
+            layer->setModelRotation(style::PropertyExpression<float>(dsl::number(dsl::get("bearing"))));
+            layer->setModelScale(style::PropertyExpression<float>(dsl::number(dsl::get("size"))));
+            // model-footprint: x/y scale independent of height (data-driven).
+            // The demo GeoJSON features below don't set a "footprint"
+            // property, so this resolves through evaluateFor's missing-
+            // property default (1.0) -- matching the fork's harness, which
+            // wires the property data-driven even though its own demo
+            // features leave it unset.
+            layer->setModelFootprint(style::PropertyExpression<float>(dsl::number(dsl::get("footprint"))));
+            layer->setModelOpacity(0.9f);
+            // Models only appear at the layer's 3D viewing zooms, matching
+            // the harness's default camera.
+            layer->setMinZoom(15.0f);
+            // MLN_MODEL_GLB registers a local GLB as asset id "demo" and
+            // selects it; features resolve to the real glTF mesh instead of
+            // the placeholder cube.
+            if (const char* glb = getenv("MLN_MODEL_GLB")) {
+                layer->setModelAssets({{"demo", glb}});
+                layer->setModelId(std::string("demo"));
+            }
+            map.getStyle().addLayer(std::move(layer));
+        };
     }
 
     map.getStyle().loadURL(style);
