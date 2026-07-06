@@ -61,3 +61,6 @@ out.png
 **/target/
 **/*.rs.bk
 **/*.profraw
+
+# Local integration artifact staging (iOS xcframework for HataHub SPM local consumption)
+dist-spm/
