@@ -19,6 +19,8 @@
 #endif
 
 #include <cmath>
+#include <memory>
+#include <mutex>
 
 namespace mbgl {
 namespace style {
@@ -26,12 +28,29 @@ namespace style {
 class GeoJSONVTData final : public GeoJSONData {
     void getTile(const CanonicalTileID& id, const std::function<void(TileFeatures)>& fn, bool runSynchronously) final {
         assert(fn);
+        // mapbox::geojsonvt::GeoJSONVT::getTile() is NOT const — it lazily splits and memoises tiles into
+        // an internal unordered_map, so two concurrent calls race that cache. The async path below hops
+        // every call onto the single sequenced worker, which is why `impl` was documented "Accessed on
+        // worker thread". The synchronous path runs on the CALLER's thread; a layer whose update() walks
+        // placement synchronously (e.g. one driven by a per-frame render-thread callback) can invoke it on
+        // the RENDER thread, concurrently with the worker still loading/tearing down this source's own
+        // GeoJSONTiles — corrupting the geojson-vt cache and crashing later in vt_feature teardown
+        // (SIGSEGV: render-thread and worker-thread tile-vector teardown both faulted releasing a
+        // shared_count inside the same GeoJSONVTData). Serialize ALL impl access (sync + async) on a
+        // shared mutex so the synchronous reader can never overlap the worker. The mutex is held by
+        // shared_ptr so the async task, which may outlive `this`, keeps it alive.
         if (runSynchronously) {
-            fn(this->impl->getTile(id.z, id.x, id.y).features);
+            TileFeatures features;
+            {
+                std::lock_guard<std::mutex> lock(*implMutex);
+                features = this->impl->getTile(id.z, id.x, id.y).features;
+            }
+            fn(std::move(features));
         } else {
             sequencedScheduler->scheduleAndReplyValue(
                 util::SimpleIdentity::Empty,
-                [id, geoJSONVT_impl = this->impl]() -> TileFeatures {
+                [id, geoJSONVT_impl = this->impl, mutex = this->implMutex]() -> TileFeatures {
+                    std::lock_guard<std::mutex> lock(*mutex);
                     return geoJSONVT_impl->getTile(id.z, id.x, id.y).features;
                 },
                 fn);
@@ -53,8 +72,11 @@ class GeoJSONVTData final : public GeoJSONData {
         assert(sequencedScheduler);
     }
 
-    std::shared_ptr<mapbox::geojsonvt::GeoJSONVT> impl; // Accessed on worker thread.
+    std::shared_ptr<mapbox::geojsonvt::GeoJSONVT> impl; // Mutated on every getTile(); guarded by implMutex.
     std::shared_ptr<Scheduler> sequencedScheduler;
+    // Serializes impl->getTile() across the sequenced worker and any synchronous caller (the model
+    // layer's render-thread placement walk). shared_ptr because the async task may outlive `this`.
+    std::shared_ptr<std::mutex> implMutex = std::make_shared<std::mutex>();
 };
 
 class SuperclusterData final : public GeoJSONData {

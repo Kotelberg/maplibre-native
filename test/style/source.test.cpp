@@ -46,8 +46,13 @@
 #include <mbgl/text/glyph_manager.hpp>
 #include <mbgl/gfx/dynamic_texture_atlas.hpp>
 
+#include <mbgl/tile/tile_id.hpp>
+
+#include <atomic>
 #include <cstdint>
 #include <optional>
+#include <thread>
+#include <vector>
 #include <gmock/gmock.h>
 
 using namespace mbgl;
@@ -1011,6 +1016,49 @@ TEST(Source, GeoJSONSourceTilesAfterDataReset) {
     static_cast<RenderSource&>(renderSource)
         .update(source.baseImpl, layers, true, true, test.tileParameters(MapMode::Static));
     EXPECT_TRUE(renderSource.isLoaded()); // Tiles are reset in static mode.
+}
+
+// Regression for a native SIGSEGV seen under synchronous placement streaming. A layer that reads its
+// placement features by calling GeoJSONData::getTile with runSynchronously=true on the render thread,
+// while the source's own sequenced worker is still touching the same geojson-vt tile index, races
+// mapbox::geojsonvt::GeoJSONVT::getTile(), which mutates an internal tile cache and is NOT thread-safe —
+// the two overlapping callers corrupted the cache and later crashed tearing down the vt_feature vectors.
+// getTile() now serializes ALL geojson-vt access on a shared mutex. Hammer getTile() from many threads at
+// once (every call generates/reads tiles in the shared index): without the guard this races the internal
+// unordered_map (TSan-visible / crashes); with it every callback fires and the run completes cleanly.
+TEST(Source, GeoJSONDataConcurrentGetTile) {
+    auto geoJSONData = GeoJSONData::create(
+        mapbox::geojson::parse(
+            R"({"type":"FeatureCollection","features":[
+                {"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[0.0,0.0]}},
+                {"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[10.0,10.0]}},
+                {"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[-40.0,25.0]}},
+                {"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[120.0,-30.0]}}]})"),
+        Scheduler::GetSequenced());
+
+    constexpr int kThreads = 8;
+    constexpr int kPerThread = 64;
+    std::atomic<int> completed{0};
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t] {
+            for (int i = 0; i < kPerThread; ++i) {
+                const auto z = static_cast<uint8_t>((t + i) % 4);
+                const uint32_t span = 1u << z;
+                const uint32_t x = static_cast<uint32_t>(i) % span;
+                const uint32_t y = static_cast<uint32_t>(t) % span;
+                geoJSONData->getTile(
+                    CanonicalTileID(z, x, y),
+                    [&](GeoJSONData::TileFeatures) { completed.fetch_add(1, std::memory_order_relaxed); },
+                    /*runSynchronously=*/true);
+            }
+        });
+    }
+    for (auto& th : threads) {
+        th.join();
+    }
+    EXPECT_EQ(completed.load(), kThreads * kPerThread);
 }
 
 TEST(Source, SetMaxParentOverscaleFactor) {
