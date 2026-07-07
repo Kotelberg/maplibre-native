@@ -3,6 +3,8 @@
 #include <mbgl/util/logging.hpp>
 #include <mbgl/util/constants.hpp>
 
+#include <algorithm>
+
 namespace mbgl {
 namespace vulkan {
 
@@ -26,6 +28,7 @@ SurfaceRenderableResource::~SurfaceRenderableResource() {
     surface.reset();
 
     depthAllocation.reset();
+    msaaColorAllocation.reset();
     colorAllocations.clear();
 
     readTexture.reset();
@@ -218,7 +221,7 @@ void SurfaceRenderableResource::initDepthStencil() {
                                      .setExtent({extent.width, extent.height, 1})
                                      .setMipLevels(1)
                                      .setArrayLayers(1)
-                                     .setSamples(vk::SampleCountFlagBits::e1)
+                                     .setSamples(sampleCount)
                                      .setTiling(vk::ImageTiling::eOptimal)
                                      .setUsage(imageUsage)
                                      .setSharingMode(vk::SharingMode::eExclusive)
@@ -256,6 +259,100 @@ void SurfaceRenderableResource::initDepthStencil() {
     backend.setDebugName(depthAllocation->imageView.get(), "SwapchainDepthImageView");
 }
 
+vk::SampleCountFlagBits SurfaceRenderableResource::chooseSampleCount() const {
+    // Clamp the desired count to a sane mobile range before picking the highest supported value,
+    // matching the other backends: GL's EGLConfigChooser only considers 2..8-sample configs, and
+    // Metal's MLNRendererConfiguration snaps an arbitrary request down to the nearest of {8,4,2,1}.
+    // Without this clamp Vulkan alone would honor e.g. a driver-supported 16x/32x/64x request,
+    // diverging from the cross-backend contract MapLibreMapOptions.msaaSamples documents.
+    constexpr uint32_t kMaxMsaaSamples = 8;
+    const uint32_t desired = std::min(backend.getDesiredMsaaSamples(), kMaxMsaaSamples);
+
+    // MSAA only applies to the on-screen swapchain surface. Headless/offscreen targets stay single-sampled.
+    if (!surface || desired <= 1) {
+        return vk::SampleCountFlagBits::e1;
+    }
+
+    // Only counts supported for color, depth, AND stencil framebuffer attachments are usable — the depth/stencil
+    // attachment here is combined, so both limits must be intersected (not just the depth one).
+    const auto& limits = backend.getDeviceProperties().limits;
+    const vk::SampleCountFlags supported = limits.framebufferColorSampleCounts &
+                                            limits.framebufferDepthSampleCounts &
+                                            limits.framebufferStencilSampleCounts;
+
+    // Pick the highest supported count that does not exceed the requested value. The flag-bit values equal the sample
+    // counts (e4 == 4, etc.), so the comparison is a direct integer compare.
+    constexpr std::array<vk::SampleCountFlagBits, 6> candidates = {
+        vk::SampleCountFlagBits::e64,
+        vk::SampleCountFlagBits::e32,
+        vk::SampleCountFlagBits::e16,
+        vk::SampleCountFlagBits::e8,
+        vk::SampleCountFlagBits::e4,
+        vk::SampleCountFlagBits::e2,
+    };
+
+    for (const auto bits : candidates) {
+        if (static_cast<uint32_t>(bits) <= desired && (supported & bits)) {
+            return bits;
+        }
+    }
+
+    return vk::SampleCountFlagBits::e1;
+}
+
+void SurfaceRenderableResource::initMultisampledColor() {
+    const auto& device = backend.getDevice();
+    const auto& dispatcher = backend.getDispatcher();
+
+    // Transient: the multisampled color is resolved into the swapchain image within the render pass and never stored.
+    const auto imageUsage = vk::ImageUsageFlags() | vk::ImageUsageFlagBits::eColorAttachment |
+                            vk::ImageUsageFlagBits::eTransientAttachment;
+
+    const auto imageCreateInfo = vk::ImageCreateInfo()
+                                     .setImageType(vk::ImageType::e2D)
+                                     .setFormat(colorFormat)
+                                     .setExtent({extent.width, extent.height, 1})
+                                     .setMipLevels(1)
+                                     .setArrayLayers(1)
+                                     .setSamples(sampleCount)
+                                     .setTiling(vk::ImageTiling::eOptimal)
+                                     .setUsage(imageUsage)
+                                     .setSharingMode(vk::SharingMode::eExclusive)
+                                     .setInitialLayout(vk::ImageLayout::eUndefined);
+
+    // Prefer lazily-allocated memory (no physical backing on tile-based GPUs); fall back to device-local otherwise.
+    VmaAllocationCreateInfo allocCreateInfo = {};
+    allocCreateInfo.usage = VMA_MEMORY_USAGE_GPU_LAZILY_ALLOCATED;
+    allocCreateInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+
+    uint32_t lazyMemoryIndex = 0;
+    uint32_t memoryTypeBits = std::numeric_limits<uint32_t>::max();
+    if (vmaFindMemoryTypeIndex(backend.getAllocator(), memoryTypeBits, &allocCreateInfo, &lazyMemoryIndex) !=
+        VK_SUCCESS) {
+        allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        allocCreateInfo.flags = 0;
+    }
+
+    msaaColorAllocation = std::make_unique<ImageAllocation>(backend.getAllocator());
+    if (!msaaColorAllocation->create(allocCreateInfo, imageCreateInfo)) {
+        mbgl::Log::Error(mbgl::Event::Render, "Vulkan multisampled color texture allocation failed");
+        return;
+    }
+
+    const auto imageViewCreateInfo =
+        vk::ImageViewCreateInfo()
+            .setImage(msaaColorAllocation->image)
+            .setViewType(vk::ImageViewType::e2D)
+            .setFormat(colorFormat)
+            .setComponents(vk::ComponentMapping()) // defaults to vk::ComponentSwizzle::eIdentity
+            .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+
+    msaaColorAllocation->imageView = device->createImageViewUnique(imageViewCreateInfo, nullptr, dispatcher);
+
+    backend.setDebugName(msaaColorAllocation->image, "SwapchainMsaaColorImage");
+    backend.setDebugName(msaaColorAllocation->imageView.get(), "SwapchainMsaaColorImageView");
+}
+
 void SurfaceRenderableResource::initRenderPass() {
     // The current render pass should be invalidated if:
     // - color/depth format changes (use setColorFormat/setDepthFormat)
@@ -270,36 +367,8 @@ void SurfaceRenderableResource::initRenderPass() {
     const auto& dispatcher = backend.getDispatcher();
     const auto colorLayout = surface ? vk::ImageLayout::ePresentSrcKHR : vk::ImageLayout::eTransferSrcOptimal;
 
-    const std::array<vk::AttachmentDescription, 2> attachments = {
-        vk::AttachmentDescription()
-            .setFormat(colorFormat)
-            .setSamples(vk::SampleCountFlagBits::e1)
-            .setLoadOp(vk::AttachmentLoadOp::eClear)
-            .setStoreOp(vk::AttachmentStoreOp::eStore)
-            .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
-            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eUndefined)
-            .setFinalLayout(colorLayout),
-
-        vk::AttachmentDescription()
-            .setFormat(depthFormat)
-            .setSamples(vk::SampleCountFlagBits::e1)
-            .setLoadOp(vk::AttachmentLoadOp::eClear)
-            .setStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setStencilLoadOp(vk::AttachmentLoadOp::eClear)
-            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eUndefined)
-            .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)};
-
-    const vk::AttachmentReference colorAttachmentRef(0, vk::ImageLayout::eColorAttachmentOptimal);
-    const vk::AttachmentReference depthAttachmentRef(1, vk::ImageLayout::eDepthStencilAttachmentOptimal);
-
-    const auto subpass = vk::SubpassDescription()
-                             .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
-                             .setColorAttachmentCount(1)
-                             .setColorAttachments(colorAttachmentRef)
-                             .setPDepthStencilAttachment(&depthAttachmentRef);
-
+    // Layout-transition/synchronization dependencies are identical for both the single- and multi-sampled render
+    // passes (the resolve write happens at the color-attachment-output stage covered by the color dependency).
     const std::array<vk::SubpassDependency, 2> dependencies = {
         vk::SubpassDependency()
             .setSrcSubpass(VK_SUBPASS_EXTERNAL)
@@ -321,6 +390,89 @@ void SurfaceRenderableResource::initRenderPass() {
             .setDstAccessMask(vk::AccessFlagBits::eDepthStencilAttachmentWrite)
             .setDependencyFlags(vk::DependencyFlagBits::eByRegion),
     };
+
+    if (sampleCount == vk::SampleCountFlagBits::e1) {
+        // Stock single-sample render pass: color (index 0) + depth/stencil (index 1), no resolve.
+        const std::array<vk::AttachmentDescription, 2> attachments = {
+            vk::AttachmentDescription()
+                .setFormat(colorFormat)
+                .setSamples(vk::SampleCountFlagBits::e1)
+                .setLoadOp(vk::AttachmentLoadOp::eClear)
+                .setStoreOp(vk::AttachmentStoreOp::eStore)
+                .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+                .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+                .setInitialLayout(vk::ImageLayout::eUndefined)
+                .setFinalLayout(colorLayout),
+
+            vk::AttachmentDescription()
+                .setFormat(depthFormat)
+                .setSamples(vk::SampleCountFlagBits::e1)
+                .setLoadOp(vk::AttachmentLoadOp::eClear)
+                .setStoreOp(vk::AttachmentStoreOp::eDontCare)
+                .setStencilLoadOp(vk::AttachmentLoadOp::eClear)
+                .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+                .setInitialLayout(vk::ImageLayout::eUndefined)
+                .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)};
+
+        const vk::AttachmentReference colorAttachmentRef(0, vk::ImageLayout::eColorAttachmentOptimal);
+        const vk::AttachmentReference depthAttachmentRef(1, vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
+        const auto subpass = vk::SubpassDescription()
+                                 .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
+                                 .setColorAttachmentCount(1)
+                                 .setColorAttachments(colorAttachmentRef)
+                                 .setPDepthStencilAttachment(&depthAttachmentRef);
+
+        const auto renderPassCreateInfo =
+            vk::RenderPassCreateInfo().setAttachments(attachments).setSubpasses(subpass).setDependencies(dependencies);
+
+        renderPass = device->createRenderPassUnique(renderPassCreateInfo, nullptr, dispatcher);
+        return;
+    }
+
+    // Multisampled render pass: multisampled color (index 0, transient) + multisampled depth/stencil (index 1),
+    // resolving into the single-sample swapchain image (index 2).
+    const std::array<vk::AttachmentDescription, 3> attachments = {
+        vk::AttachmentDescription()
+            .setFormat(colorFormat)
+            .setSamples(sampleCount)
+            .setLoadOp(vk::AttachmentLoadOp::eClear)
+            .setStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal),
+
+        vk::AttachmentDescription()
+            .setFormat(depthFormat)
+            .setSamples(sampleCount)
+            .setLoadOp(vk::AttachmentLoadOp::eClear)
+            .setStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setStencilLoadOp(vk::AttachmentLoadOp::eClear)
+            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal),
+
+        vk::AttachmentDescription()
+            .setFormat(colorFormat)
+            .setSamples(vk::SampleCountFlagBits::e1)
+            .setLoadOp(vk::AttachmentLoadOp::eDontCare)
+            .setStoreOp(vk::AttachmentStoreOp::eStore)
+            .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setFinalLayout(colorLayout)};
+
+    const vk::AttachmentReference colorAttachmentRef(0, vk::ImageLayout::eColorAttachmentOptimal);
+    const vk::AttachmentReference depthAttachmentRef(1, vk::ImageLayout::eDepthStencilAttachmentOptimal);
+    const vk::AttachmentReference resolveAttachmentRef(2, vk::ImageLayout::eColorAttachmentOptimal);
+
+    const auto subpass = vk::SubpassDescription()
+                             .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
+                             .setColorAttachmentCount(1)
+                             .setColorAttachments(colorAttachmentRef)
+                             .setPResolveAttachments(&resolveAttachmentRef)
+                             .setPDepthStencilAttachment(&depthAttachmentRef);
 
     const auto renderPassCreateInfo =
         vk::RenderPassCreateInfo().setAttachments(attachments).setSubpasses(subpass).setDependencies(dependencies);
@@ -410,6 +562,24 @@ float SurfaceRenderableResource::getRotation() const {
 }
 
 void SurfaceRenderableResource::init(uint32_t w, uint32_t h) {
+    // Resolve the effective (device-clamped) sample count before allocating attachments. e1 for headless.
+    sampleCount = chooseSampleCount();
+
+    if (surface && !sampleCountLogged) {
+        sampleCountLogged = true;
+        const uint32_t desired = backend.getDesiredMsaaSamples();
+        const uint32_t effective = static_cast<uint32_t>(sampleCount);
+        if (desired > 1) {
+            if (effective >= desired) {
+                mbgl::Log::Info(mbgl::Event::Render, "MSAA enabled: " + std::to_string(effective) + "x");
+            } else {
+                mbgl::Log::Warning(mbgl::Event::Render,
+                                   "MSAA " + std::to_string(desired) + "x not supported, using " +
+                                       std::to_string(effective) + "x");
+            }
+        }
+    }
+
     if (surface) {
         initSwapchain(w, h);
     } else {
@@ -440,6 +610,12 @@ void SurfaceRenderableResource::init(uint32_t w, uint32_t h) {
     // depth resources
     initDepthStencil();
 
+    // transient multisampled color (resolved into the swapchain image); only when MSAA is active
+    const bool multisampled = sampleCount != vk::SampleCountFlagBits::e1;
+    if (multisampled) {
+        initMultisampledColor();
+    }
+
     // create render pass
     initRenderPass();
 
@@ -448,16 +624,24 @@ void SurfaceRenderableResource::init(uint32_t w, uint32_t h) {
 
     auto framebufferCreateInfo = vk::FramebufferCreateInfo()
                                      .setRenderPass(renderPass.get())
-                                     .setAttachmentCount(2)
                                      .setWidth(extent.width)
                                      .setHeight(extent.height)
                                      .setLayers(1);
 
     for (const auto& imageView : swapchainImageViews) {
-        const std::array<vk::ImageView, 2> imageViews = {imageView.get(), depthAllocation->imageView.get()};
+        if (multisampled) {
+            // Attachment order must match the render pass: msaa color (0), depth (1), resolve/swapchain (2).
+            const std::array<vk::ImageView, 3> imageViews = {
+                msaaColorAllocation->imageView.get(), depthAllocation->imageView.get(), imageView.get()};
 
-        framebufferCreateInfo.setAttachments(imageViews);
-        swapchainFramebuffers.push_back(device->createFramebufferUnique(framebufferCreateInfo, nullptr, dispatcher));
+            framebufferCreateInfo.setAttachments(imageViews);
+            swapchainFramebuffers.push_back(device->createFramebufferUnique(framebufferCreateInfo, nullptr, dispatcher));
+        } else {
+            const std::array<vk::ImageView, 2> imageViews = {imageView.get(), depthAllocation->imageView.get()};
+
+            framebufferCreateInfo.setAttachments(imageViews);
+            swapchainFramebuffers.push_back(device->createFramebufferUnique(framebufferCreateInfo, nullptr, dispatcher));
+        }
     }
 }
 

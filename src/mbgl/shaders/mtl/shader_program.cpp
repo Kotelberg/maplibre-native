@@ -8,6 +8,7 @@
 #include <mbgl/mtl/vertex_attribute.hpp>
 #include <mbgl/shaders/program_parameters.hpp>
 #include <mbgl/shaders/shader_manifest.hpp>
+#include <mbgl/util/hash.hpp>
 #include <mbgl/util/logging.hpp>
 
 #include <Metal/MTLLibrary.hpp>
@@ -84,12 +85,6 @@ MTLRenderPipelineStatePtr ShaderProgram::getRenderPipelineState(const gfx::Rende
                                                                 const MTLVertexDescriptorPtr& vertexDescriptor,
                                                                 const gfx::ColorMode& colorMode,
                                                                 const std::optional<std::size_t> reuseHash) const {
-    if (reuseHash.has_value()) {
-        // we'd like to reuse a previous value
-        if (auto it = renderPipelineStateCache.find(reuseHash.value()); it != renderPipelineStateCache.end())
-            return it->second;
-    }
-
     auto pool = NS::TransferPtr(NS::AutoreleasePool::alloc()->init());
 
     const auto& renderableResource = renderable.getResource<RenderableResource>();
@@ -97,10 +92,15 @@ MTLRenderPipelineStatePtr ShaderProgram::getRenderPipelineState(const gfx::Rende
     auto colorFormat = MTL::PixelFormat::PixelFormatBGRA8Unorm;
     std::optional<MTL::PixelFormat> depthFormat = std::nullopt;
     std::optional<MTL::PixelFormat> stencilFormat = std::nullopt;
+    // The surface MTKView may be multisampled (MSAA) while offscreen targets
+    // stay single-sampled; pipelines must match their target's sample count,
+    // so it participates in the cache key as well.
+    NS::UInteger sampleCount = 1;
     if (const auto& rpd = renderableResource.getRenderPassDescriptor()) {
         if (auto* colorTarget = rpd->colorAttachments()->object(0)) {
             if (auto* tex = colorTarget->texture()) {
                 colorFormat = tex->pixelFormat();
+                sampleCount = tex->sampleCount();
             }
         }
         if (auto* depthTarget = rpd->depthAttachment()) {
@@ -113,6 +113,15 @@ MTLRenderPipelineStatePtr ShaderProgram::getRenderPipelineState(const gfx::Rende
                 stencilFormat = tex->pixelFormat();
             }
         }
+    }
+
+    const std::optional<std::size_t> effectiveHash =
+        reuseHash.has_value() ? std::optional<std::size_t>(mbgl::util::hash(reuseHash.value(), sampleCount))
+                              : std::nullopt;
+    if (effectiveHash.has_value()) {
+        // we'd like to reuse a previous value
+        if (auto it = renderPipelineStateCache.find(effectiveHash.value()); it != renderPipelineStateCache.end())
+            return it->second;
     }
 
     auto desc = NS::TransferPtr(MTL::RenderPipelineDescriptor::alloc()->init());
@@ -160,6 +169,8 @@ MTLRenderPipelineStatePtr ShaderProgram::getRenderPipelineState(const gfx::Rende
         desc->setStencilAttachmentPixelFormat(*stencilFormat);
     }
 
+    desc->setRasterSampleCount(sampleCount);
+
     NS::Error* error = nullptr;
     const auto& device = backend.getDevice();
     auto rps = NS::TransferPtr(device->newRenderPipelineState(desc.get(), &error));
@@ -171,9 +182,9 @@ MTLRenderPipelineStatePtr ShaderProgram::getRenderPipelineState(const gfx::Rende
         assert(false);
     }
 
-    if (reuseHash.has_value()) {
+    if (effectiveHash.has_value()) {
         // store the value for future reuse
-        renderPipelineStateCache[reuseHash.value()] = rps;
+        renderPipelineStateCache[effectiveHash.value()] = rps;
     }
 
     return rps;

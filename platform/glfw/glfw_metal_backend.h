@@ -27,7 +27,8 @@ namespace gfx {
 
 template <>
 std::unique_ptr<GLFWBackend> Backend::Create<mbgl::gfx::Backend::Type::Metal>(GLFWwindow *window,
-                                                                              bool capFrameRate) {
+                                                                              bool capFrameRate,
+                                                                              [[maybe_unused]] uint32_t msaaSamples) {
   return std::make_unique<GLFWMetalBackend>(window, capFrameRate);
 }
 

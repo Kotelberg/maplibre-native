@@ -22,7 +22,14 @@ public class SurfaceViewMapRenderer extends MapRenderer {
   public SurfaceViewMapRenderer(Context context,
                                 MapLibreSurfaceView surfaceView,
                                 String localIdeographFontFamily) {
-    super(context, localIdeographFontFamily);
+    this(context, surfaceView, localIdeographFontFamily, 1);
+  }
+
+  public SurfaceViewMapRenderer(Context context,
+                                MapLibreSurfaceView surfaceView,
+                                String localIdeographFontFamily,
+                                int msaaSamples) {
+    super(context, localIdeographFontFamily, msaaSamples);
     this.surfaceView = surfaceView;
 
     surfaceView.setDetachedListener(new MapLibreSurfaceView.OnSurfaceViewDetachedListener() {

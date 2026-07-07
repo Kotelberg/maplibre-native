@@ -7,6 +7,7 @@ MapLibre welcomes participation and contributions from everyone. Please read [`M
 - Add `fill-extrusion-edge-radius` layout property — bucket-time rounding of extruded footprint corners with smooth facade normals (default 0 = off).
 - Implement ambient cache for PMTiles sources ([#4290](https://github.com/maplibre/maplibre-native/pull/4290)).
 - Fix missing depth/stencil render-group state for 3D drawables in layer groups without stencil tiles (previously: Metal rendered without depth, OpenGL discarded all fragments).
+- Add configurable map-surface MSAA (sample count via MLNRendererConfiguration, default 1 = off).
 
 ## 6.26.1
 

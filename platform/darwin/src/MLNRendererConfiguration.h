@@ -52,6 +52,23 @@ MLN_EXPORT
 
 - (BOOL)perSourceCollisionsWithInfoDictionaryObject:(nullable id)infoDictionaryObject;
 
+/**
+ The number of samples used for multisample anti-aliasing (MSAA) of the map surface, on
+ platforms that render with Metal.
+
+ Set `MLNRendererSampleCount` in your containing application's Info.plist to an integer
+ sample count. Supported values are `1`, `2`, `4`, and `8`; any other value is rounded down
+ to the nearest supported value, with a minimum of `1`. The default is `1`, which disables
+ MSAA and matches the historical, single-sampled rendering path.
+
+ Higher sample counts smooth jagged edges on thin extrusion silhouettes and 3D models at the
+ cost of additional GPU memory and rendering time. The value is further reduced to the
+ highest sample count the current `MTLDevice` actually supports.
+ */
+@property (nonatomic, readonly) NSUInteger sampleCount;
+
+- (NSUInteger)sampleCountWithInfoDictionaryObject:(nullable id)infoDictionaryObject;
+
 @end
 
 NS_ASSUME_NONNULL_END

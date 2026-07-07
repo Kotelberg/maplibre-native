@@ -154,8 +154,9 @@ const vk::UniquePipeline& ShaderProgram::getPipeline(const PipelineInfo& pipelin
                                  .setPolygonMode(pipelineInfo.polygonMode)
                                  .setLineWidth(1.0f);
 
+    // Must match the target render pass's sample count (e1 for offscreen; the surface's MSAA count when enabled).
     const auto multisampleState = vk::PipelineMultisampleStateCreateInfo().setRasterizationSamples(
-        vk::SampleCountFlagBits::e1);
+        pipelineInfo.rasterizationSamples);
 
     const auto stencilState = vk::StencilOpState()
                                   .setCompareOp(pipelineInfo.stencilFunction)

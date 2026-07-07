@@ -219,7 +219,9 @@ private:
 
 namespace gfx {
 template <>
-std::unique_ptr<GLFWBackend> Backend::Create<mbgl::gfx::Backend::Type::WebGPU>(GLFWwindow* window, bool capFrameRate) {
+std::unique_ptr<GLFWBackend> Backend::Create<mbgl::gfx::Backend::Type::WebGPU>(GLFWwindow* window,
+                                                                               bool capFrameRate,
+                                                                               [[maybe_unused]] uint32_t msaaSamples) {
     return std::make_unique<GLFWWebGPUBackend>(window, capFrameRate);
 }
 } // namespace gfx

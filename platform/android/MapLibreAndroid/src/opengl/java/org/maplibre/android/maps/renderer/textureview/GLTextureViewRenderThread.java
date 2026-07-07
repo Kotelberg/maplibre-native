@@ -39,8 +39,21 @@ public class GLTextureViewRenderThread extends TextureViewRenderThread {
    */
   @UiThread
   public GLTextureViewRenderThread(@NonNull TextureView textureView, @NonNull TextureViewMapRenderer mapRenderer) {
+    this(textureView, mapRenderer, EGLConfigChooser.MSAA_SAMPLES_DISABLED);
+  }
+
+  /**
+   * Create a render thread for the given TextureView / Maprenderer combination.
+   *
+   * @param textureView the TextureView
+   * @param mapRenderer the MapRenderer
+   * @param msaaSamples preferred MSAA sample count for the EGL surface; {@code <= 1} disables MSAA
+   */
+  @UiThread
+  public GLTextureViewRenderThread(@NonNull TextureView textureView, @NonNull TextureViewMapRenderer mapRenderer,
+                                   int msaaSamples) {
     super(textureView, mapRenderer);
-    this.eglHolder = new EGLHolder(new WeakReference<>(textureView), mapRenderer.isTranslucentSurface());
+    this.eglHolder = new EGLHolder(new WeakReference<>(textureView), mapRenderer.isTranslucentSurface(), msaaSamples);
   }
 
   // Thread implementation
@@ -213,6 +226,7 @@ public class GLTextureViewRenderThread extends TextureViewRenderThread {
     private static final int EGL_CONTEXT_CLIENT_VERSION = 0x3098;
     private final WeakReference<TextureView> textureViewWeakRef;
     private boolean translucentSurface;
+    private int msaaSamples;
 
     private EGL10 egl;
     @Nullable
@@ -221,9 +235,10 @@ public class GLTextureViewRenderThread extends TextureViewRenderThread {
     private EGLContext eglContext = EGL10.EGL_NO_CONTEXT;
     private EGLSurface eglSurface = EGL10.EGL_NO_SURFACE;
 
-    EGLHolder(WeakReference<TextureView> textureViewWeakRef, boolean translucentSurface) {
+    EGLHolder(WeakReference<TextureView> textureViewWeakRef, boolean translucentSurface, int msaaSamples) {
       this.textureViewWeakRef = textureViewWeakRef;
       this.translucentSurface = translucentSurface;
+      this.msaaSamples = msaaSamples;
     }
 
     void prepare() {
@@ -248,7 +263,7 @@ public class GLTextureViewRenderThread extends TextureViewRenderThread {
         eglConfig = null;
         eglContext = EGL10.EGL_NO_CONTEXT;
       } else if (eglContext == EGL10.EGL_NO_CONTEXT) {
-        eglConfig = new EGLConfigChooser(translucentSurface).chooseConfig(egl, eglDisplay);
+        eglConfig = new EGLConfigChooser(translucentSurface, msaaSamples).chooseConfig(egl, eglDisplay);
         int[] attrib_list = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL10.EGL_NONE};
         eglContext = egl.eglCreateContext(eglDisplay, eglConfig, EGL10.EGL_NO_CONTEXT, attrib_list);
       }

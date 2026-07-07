@@ -62,6 +62,8 @@ int main(int argc, char* argv[]) {
     args::ValueFlag<double> pitchValue(argumentParser, "degrees", "Pitch", {'p', "pitch"});
     args::ValueFlag<double> rollValue(argumentParser, "degrees", "Roll", {'r', "roll"});
     args::ValueFlag<double> maxPitchValue(argumentParser, "degrees", "Max Pitch", {'P', "maxPitch"});
+    args::ValueFlag<uint32_t> samplesValue(
+        argumentParser, "count", "MSAA sample count for the map surface (1 = off; Vulkan/Metal only)", {"samples"});
 
     try {
         argumentParser.ParseCLI(argc, argv);
@@ -93,6 +95,7 @@ int main(int argc, char* argv[]) {
 
     const bool fullscreen = fullscreenFlag ? args::get(fullscreenFlag) : false;
     const bool benchmark = benchmarkFlag ? args::get(benchmarkFlag) : false;
+    const uint32_t msaaSamples = samplesValue ? args::get(samplesValue) : 1;
     std::string style = styleValue ? args::get(styleValue) : "";
     const std::string cacheDB = cacheDBValue ? args::get(cacheDBValue) : "/tmp/mbgl-cache.db";
 
@@ -121,7 +124,7 @@ int main(int argc, char* argv[]) {
     mbgl::ClientOptions clientOptions;
     auto orderedStyles = mapTilerConfiguration.defaultStyles();
 
-    GLFWView backend(fullscreen, benchmark, resourceOptions, clientOptions);
+    GLFWView backend(fullscreen, benchmark, resourceOptions, clientOptions, msaaSamples);
     view = &backend;
 
     std::shared_ptr<mbgl::FileSource> onlineFileSource = mbgl::FileSourceManager::get()->getFileSource(

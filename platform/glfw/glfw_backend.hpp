@@ -18,8 +18,8 @@ public:
     GLFWBackend& operator=(const GLFWBackend&) = delete;
     virtual ~GLFWBackend() = default;
 
-    static std::unique_ptr<GLFWBackend> Create(GLFWwindow* window, bool capFrameRate) {
-        return mbgl::gfx::Backend::Create<GLFWBackend, GLFWwindow*, bool>(window, capFrameRate);
+    static std::unique_ptr<GLFWBackend> Create(GLFWwindow* window, bool capFrameRate, uint32_t msaaSamples = 1) {
+        return mbgl::gfx::Backend::Create<GLFWBackend, GLFWwindow*, bool, uint32_t>(window, capFrameRate, msaaSamples);
     }
 
     virtual mbgl::gfx::RendererBackend& getRendererBackend() = 0;

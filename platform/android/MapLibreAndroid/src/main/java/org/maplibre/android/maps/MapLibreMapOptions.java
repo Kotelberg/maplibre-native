@@ -90,6 +90,8 @@ public class MapLibreMapOptions implements Parcelable {
   @ColorInt
   private int foregroundLoadColor;
 
+  private int msaaSamples = 1;
+
   private float pixelRatio;
 
   private boolean crossSourceCollisions = true;
@@ -158,6 +160,7 @@ public class MapLibreMapOptions implements Parcelable {
     localIdeographFontFamilies = in.createStringArray();
     pixelRatio = in.readFloat();
     foregroundLoadColor = in.readInt();
+    msaaSamples = in.readInt();
     crossSourceCollisions = in.readByte() != 0;
 
     actionJournalEnabled = in.readByte() != 0;
@@ -319,6 +322,9 @@ public class MapLibreMapOptions implements Parcelable {
         typedArray.getFloat(R.styleable.maplibre_MapView_maplibre_pixelRatio, 0));
       maplibreMapOptions.foregroundLoadColor(
         typedArray.getInt(R.styleable.maplibre_MapView_maplibre_foregroundLoadColor, LIGHT_GRAY)
+      );
+      maplibreMapOptions.msaaSamples(
+        typedArray.getInt(R.styleable.maplibre_MapView_maplibre_msaaSamples, 1)
       );
       maplibreMapOptions.crossSourceCollisions(
         typedArray.getBoolean(R.styleable.maplibre_MapView_maplibre_cross_source_collisions, true)
@@ -713,6 +719,29 @@ public class MapLibreMapOptions implements Parcelable {
   @NonNull
   public MapLibreMapOptions foregroundLoadColor(@ColorInt int loadColor) {
     this.foregroundLoadColor = loadColor;
+    return this;
+  }
+
+  /**
+   * Set the preferred MSAA (multisample antialiasing) sample count for the map's on-screen
+   * framebuffer. Antialiases hard polygon edges — such as 3D fill-extrusion (building) edges,
+   * which have no shader-side antialiasing unlike SDF lines/fills — at the cost of additional
+   * GPU memory and fill-rate.
+   * <p>
+   * Applies to the OpenGL EGL surface config and the Vulkan swapchain. A value of {@code 1}
+   * (the default) disables MSAA and keeps the legacy, non-multisampled framebuffer. When greater
+   * than {@code 1}, both backends restrict themselves to a sane mobile range of 2..8 samples, but
+   * they do so differently: OpenGL only considers EGL configs already within that range and picks
+   * the closest to the request, falling back to a non-MSAA config if the driver offers none inside
+   * it; Vulkan clamps the request itself down to 8 before picking the highest sample count the
+   * device supports at or below that clamped value.
+   *
+   * @param samples the preferred MSAA sample count; {@code <= 1} disables MSAA
+   * @return This
+   */
+  @NonNull
+  public MapLibreMapOptions msaaSamples(@IntRange(from = 1) int samples) {
+    this.msaaSamples = samples;
     return this;
   }
 
@@ -1292,6 +1321,16 @@ public class MapLibreMapOptions implements Parcelable {
   }
 
   /**
+   * Returns the preferred MSAA sample count for the map's on-screen framebuffer.
+   *
+   * @return the preferred MSAA sample count; {@code <= 1} means MSAA is disabled
+   */
+  @IntRange(from = 1)
+  public int getMsaaSamples() {
+    return msaaSamples;
+  }
+
+  /**
    * Returns the font-family for locally overriding generation of glyphs in the
    * &#x27;CJK Unified Ideographs&#x27; and &#x27;Hangul Syllables&#x27; ranges.
    * Default font for local ideograph font family is {@link MapLibreConstants#DEFAULT_FONT}.
@@ -1382,6 +1421,7 @@ public class MapLibreMapOptions implements Parcelable {
     dest.writeStringArray(localIdeographFontFamilies);
     dest.writeFloat(pixelRatio);
     dest.writeInt(foregroundLoadColor);
+    dest.writeInt(msaaSamples);
     dest.writeByte((byte) (crossSourceCollisions ? 1 : 0));
 
     dest.writeByte((byte) (actionJournalEnabled ? 1 : 0));
@@ -1507,6 +1547,10 @@ public class MapLibreMapOptions implements Parcelable {
       return false;
     }
 
+    if (msaaSamples != options.msaaSamples) {
+      return false;
+    }
+
     if (crossSourceCollisions != options.crossSourceCollisions) {
       return false;
     }
@@ -1581,6 +1625,7 @@ public class MapLibreMapOptions implements Parcelable {
     result = 31 * result + (localIdeographFontFamily != null ? localIdeographFontFamily.hashCode() : 0);
     result = 31 * result + Arrays.hashCode(localIdeographFontFamilies);
     result = 31 * result + (int) pixelRatio;
+    result = 31 * result + msaaSamples;
     result = 31 * result + (crossSourceCollisions ? 1 : 0);
     result = 31 * result + (actionJournalEnabled ? 1 : 0);
     result = 31 * result + (actionJournalPath != null ? actionJournalPath.hashCode() : 0);

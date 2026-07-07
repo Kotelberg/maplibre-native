@@ -17,7 +17,7 @@ import org.maplibre.android.maps.renderer.textureview.TextureViewMapRenderer;
 public class MapRendererFactory {
   public static TextureViewMapRenderer newTextureViewMapRenderer(@NonNull Context context, TextureView textureView,
                                                                  String localFontFamily, boolean translucentSurface,
-                                                                 Runnable initCallback) {
+                                                                 int msaaSamples, Runnable initCallback) {
 
     TextureViewMapRenderer mapRenderer = new TextureViewMapRenderer(context, textureView,
             localFontFamily, translucentSurface) {
@@ -28,17 +28,18 @@ public class MapRendererFactory {
       }
     };
 
-    mapRenderer.setRenderThread(new GLTextureViewRenderThread(textureView, mapRenderer));
+    mapRenderer.setRenderThread(new GLTextureViewRenderThread(textureView, mapRenderer, msaaSamples));
     return mapRenderer;
   }
 
   public static SurfaceViewMapRenderer newSurfaceViewMapRenderer(@NonNull Context context, String localFontFamily,
-                                                                 boolean renderSurfaceOnTop, Runnable initCallback) {
+                                                                 boolean renderSurfaceOnTop, int msaaSamples,
+                                                                 Runnable initCallback) {
 
     MapLibreGLSurfaceView surfaceView = new MapLibreGLSurfaceView(context);
     surfaceView.setZOrderMediaOverlay(renderSurfaceOnTop);
 
-    return new GLSurfaceViewMapRenderer(context, surfaceView, localFontFamily) {
+    return new GLSurfaceViewMapRenderer(context, surfaceView, localFontFamily, msaaSamples) {
       @Override
       public void onSurfaceCreated(Surface surface) {
         initCallback.run();

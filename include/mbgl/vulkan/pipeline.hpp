@@ -44,6 +44,10 @@ public:
 
     // external values (used in hash)
     vk::RenderPass renderPass{};
+    // Rasterization sample count of the target render pass; must match the render pass's attachment sample count.
+    // Derived from the renderable in setRenderable(). Included in the hash for explicitness even though it is uniquely
+    // determined by renderPass identity (each render pass has a single sample count).
+    vk::SampleCountFlagBits rasterizationSamples = vk::SampleCountFlagBits::e1;
     vk::Extent2D viewExtent{};
     vk::Rect2D scissorRect{};
 

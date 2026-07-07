@@ -76,7 +76,8 @@ namespace mbgl {
 namespace gfx {
 
 template <>
-std::unique_ptr<android::AndroidRendererBackend> Backend::Create<mbgl::gfx::Backend::Type::OpenGL>(ANativeWindow*) {
+std::unique_ptr<android::AndroidRendererBackend> Backend::Create<mbgl::gfx::Backend::Type::OpenGL>(
+    ANativeWindow*, [[maybe_unused]] uint32_t msaaSamples) {
     return std::make_unique<android::AndroidGLRendererBackend>();
 }
 

@@ -56,26 +56,32 @@ public abstract class MapRenderer implements MapRendererScheduler {
 
     MapRenderer renderer = null;
     String localFontFamily = options.getLocalIdeographFontFamily();
+    int msaaSamples = options.getMsaaSamples();
 
     if (options.getTextureMode()) {
       TextureView textureView = new TextureView(context);
       boolean translucentSurface = options.getTranslucentTextureSurface();
       renderer = MapRendererFactory.newTextureViewMapRenderer(context, textureView, localFontFamily,
-              translucentSurface, initCallback);
+              translucentSurface, msaaSamples, initCallback);
     } else {
       boolean renderSurfaceOnTop = options.getRenderSurfaceOnTop();
       renderer = MapRendererFactory.newSurfaceViewMapRenderer(context, localFontFamily,
-              renderSurfaceOnTop, initCallback);
+              renderSurfaceOnTop, msaaSamples, initCallback);
     }
 
     return renderer;
   }
 
   public MapRenderer(@NonNull Context context, String localIdeographFontFamily) {
+    // Default: MSAA disabled (sample count 1).
+    this(context, localIdeographFontFamily, 1);
+  }
+
+  public MapRenderer(@NonNull Context context, String localIdeographFontFamily, int msaaSamples) {
     float pixelRatio = context.getResources().getDisplayMetrics().density;
 
     // Initialize native peer
-    nativeInitialize(this, pixelRatio, localIdeographFontFamily);
+    nativeInitialize(this, pixelRatio, localIdeographFontFamily, msaaSamples);
   }
 
   public abstract View getView();
@@ -164,7 +170,8 @@ public abstract class MapRenderer implements MapRendererScheduler {
 
   private native void nativeInitialize(MapRenderer self,
                                        float pixelRatio,
-                                       String localIdeographFontFamily);
+                                       String localIdeographFontFamily,
+                                       int msaaSamples);
 
   @CallSuper
   @Override

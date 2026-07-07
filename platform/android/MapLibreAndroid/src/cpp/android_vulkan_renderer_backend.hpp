@@ -12,7 +12,7 @@ class AndroidVulkanRendererBackend : public AndroidRendererBackend,
                                      public vulkan::RendererBackend,
                                      public vulkan::Renderable {
 public:
-    AndroidVulkanRendererBackend(ANativeWindow*);
+    AndroidVulkanRendererBackend(ANativeWindow*, uint32_t msaaSamples = 1);
     ~AndroidVulkanRendererBackend() override;
 
     ANativeWindow* getWindow() { return window; }
