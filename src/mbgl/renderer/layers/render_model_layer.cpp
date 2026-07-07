@@ -102,6 +102,43 @@ constexpr float kBloomPulsePeriod = 4.0f;     // seconds (slow)
 constexpr float kBloomRadiusTexels = 7.0f;    // blur radius (in mask texels)
 constexpr float kBloomColor[3] = {0.992f, 0.725f, 0.071f}; // #FDB912
 
+#if MLN_RENDER_BACKEND_VULKAN
+// ── Vulkan ground-halo tuning ───────────────────────────────────────
+// On the HONOR's Mali/Vulkan driver the screen-space bloom composite (a flat NDC
+// quad through the custom-drawable shaders) rasterizes ZERO fragments, while
+// world-space projected geometry through the same shaders renders fine — proven
+// exhaustively in docs/… vulkan-bloom-fix-report.md. So the Vulkan path renders
+// the selection glow as a ground-projected world-space disc at the model anchor
+// (radius ∝ footprint, same #FDB912 + 4 s breathing), which provably rasterizes.
+constexpr float kGroundHaloRadiusFactor = 2.4f; // halo half-extent = model footprint size × this
+constexpr float kGroundHaloLiftMeters = 0.05f;  // lift off the ground plane to dodge z-fighting
+
+// Premultiplied gold radial glow, feathered to 0 at the rim. Baked at full
+// intensity; the per-frame tweaker scales all four (premultiplied) channels by
+// the breathing pulse. The selected building occludes the disc centre (depth
+// test), so the visible result reads as a halo pooling around the footprint.
+std::shared_ptr<PremultipliedImage> makeGroundHaloImage() {
+    constexpr uint32_t kSize = 128;
+    auto image = std::make_shared<PremultipliedImage>(Size{kSize, kSize});
+    std::memset(image->data.get(), 0, image->bytes());
+    for (uint32_t y = 0; y < kSize; ++y) {
+        for (uint32_t x = 0; x < kSize; ++x) {
+            const double dx = (static_cast<double>(x) + 0.5) / kSize * 2.0 - 1.0;
+            const double dy = (static_cast<double>(y) + 0.5) / kSize * 2.0 - 1.0;
+            const double r = std::sqrt(dx * dx + dy * dy);
+            const double falloff = std::clamp(1.0 - r, 0.0, 1.0);
+            const double a = std::pow(falloff, 1.6) * 0.85; // peak alpha
+            auto* px = &image->data[(y * kSize + x) * 4];
+            px[0] = static_cast<uint8_t>(std::lround(kBloomColor[0] * a * 255.0));
+            px[1] = static_cast<uint8_t>(std::lround(kBloomColor[1] * a * 255.0));
+            px[2] = static_cast<uint8_t>(std::lround(kBloomColor[2] * a * 255.0));
+            px[3] = static_cast<uint8_t>(std::lround(a * 255.0));
+        }
+    }
+    return image;
+}
+#endif // MLN_RENDER_BACKEND_VULKAN
+
 struct BloomQuadVertex {
     std::array<float, 2> pos;
 };
@@ -257,6 +294,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     std::vector<PlacedFeature> features;
     std::unordered_set<std::uint64_t> seenAnchors;
     std::uint64_t placementKey = 0;
+    std::uint64_t selectionKey = 0;
     for (const auto& coverTile : cover) {
         const auto& canonical = coverTile.canonical;
         GeoJSONData::TileFeatures tileFeatures;
@@ -281,6 +319,22 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                 continue;
             }
             placementKey ^= anchorKey * 0x9E3779B97F4A7C15ull;
+            // Fold selection state into the rebuild signature. A static tap that
+            // only flips a feature's `selected` property leaves the anchor set
+            // and feature count unchanged, so without this term `changed` stays
+            // false and the bloom never (re)builds at rest — it only refreshed
+            // when camera-fly placement churn happened to retrigger a rebuild
+            // (see vulkan-bloom-fix-report.md, "Secondary bug found"). Evaluated
+            // before the feature is moved below.
+            {
+                const GeoJSONTileFeature tf(feature);
+                if (const auto sel = tf.getValue("selected")) {
+                    if ((sel->is<bool>() && sel->get<bool>()) ||
+                        (sel->is<double>() && sel->get<double>() != 0.0)) {
+                        selectionKey ^= anchorKey * 0xD1B54A32D192ED03ull;
+                    }
+                }
+            }
             features.push_back(PlacedFeature{std::move(feature), fx, fy});
         }
     }
@@ -291,7 +345,8 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     // changed (baked meshes are camera-independent; the tweaker matrix tracks
     // the camera per frame).
     const bool changed = lastImpl != baseImpl.get() || lastData != data.get() ||
-                         lastFeatureCount != features.size() || lastPlacementKey != placementKey;
+                         lastFeatureCount != features.size() || lastPlacementKey != placementKey ||
+                         lastSelectionKey != selectionKey;
     if (!changed) {
         return;
     }
@@ -299,6 +354,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     lastData = data.get();
     lastFeatureCount = features.size();
     lastPlacementKey = placementKey;
+    lastSelectionKey = selectionKey;
 
     CustomDrawableLayerHost::Interface interface(
         *this, layerGroup, shaders, context, state, updateParameters, renderTree, changes);
@@ -593,8 +649,80 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         drawableIds.push_back(interface.addGeometry(sharedVertices, sharedIndices, /*is3D=*/true));
     }
 
+#if MLN_RENDER_BACKEND_VULKAN
+    // ── Vulkan model-selection halo (ground-projected) ──────────────
+    // The screen-space silhouette composite (below, GL/Metal) draws ZERO
+    // fragments on this Mali/Vulkan driver — a flat NDC quad through the
+    // custom-drawable shaders never rasterizes, while world-space projected
+    // geometry through the SAME shaders does (exhaustively root-caused in
+    // vulkan-bloom-fix-report.md). So on Vulkan the glow is a ground-projected
+    // gold disc at the selected model's anchor, added through the exact
+    // interface.addGeometry(is3D) path the models + contact shadows use (which
+    // provably rasterize here). It is tracked in drawableIds, so the next
+    // rebuild (e.g. deselection — the selection gate fix above guarantees one)
+    // tears it down with the rest of the drawables; no render target, no
+    // composite, no explicit teardown. Different look from the GL/Metal
+    // screen-space halo — Sergey judges the divergence.
+    if (selected) {
+        const Instance& sel = selected->second;
+        if (!bloomGroundTexture) {
+            auto tex = context.createTexture2D();
+            tex->setSamplerConfiguration({.filter = gfx::TextureFilterType::Linear,
+                                          .wrapU = gfx::TextureWrapType::Clamp,
+                                          .wrapV = gfx::TextureWrapType::Clamp});
+            tex->setImage(makeGroundHaloImage());
+            bloomGroundTexture = std::move(tex);
+        }
+
+        const float halfExtent = sel.size * sel.footprint * kGroundHaloRadiusFactor;
+        auto haloVertices = std::make_shared<gfx::VertexVector<Vertex>>();
+        auto haloIndices = std::make_shared<gfx::IndexVector<gfx::Triangles>>();
+        haloVertices->emplace_back(Vertex{{-halfExtent, -halfExtent, kGroundHaloLiftMeters}, {0.f, 0.f}});
+        haloVertices->emplace_back(Vertex{{halfExtent, -halfExtent, kGroundHaloLiftMeters}, {1.f, 0.f}});
+        haloVertices->emplace_back(Vertex{{halfExtent, halfExtent, kGroundHaloLiftMeters}, {1.f, 1.f}});
+        haloVertices->emplace_back(Vertex{{-halfExtent, halfExtent, kGroundHaloLiftMeters}, {0.f, 1.f}});
+        // Double-sided: the world's south-positive y flips winding.
+        haloIndices->emplace_back(0, 1, 2);
+        haloIndices->emplace_back(0, 2, 3);
+        haloIndices->emplace_back(0, 2, 1);
+        haloIndices->emplace_back(0, 3, 2);
+
+        CustomDrawableLayerHost::Interface::GeometryOptions haloOptions;
+        haloOptions.texture = bloomGroundTexture;
+        interface.setGeometryOptions(haloOptions);
+        const double haloLat = latitudeFromMercatorFraction(sel.fy);
+        interface.setGeometryTweakerCallback(
+            [anchorFx = sel.fx, anchorFy = sel.fy, haloLat](
+                gfx::Drawable&,
+                const PaintParameters& params,
+                CustomDrawableLayerHost::Interface::GeometryOptions& current) {
+                const double worldSize = Projection::worldSize(params.state.getScale());
+                const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(
+                    haloLat, params.state.getZoom());
+                const double pxPerMeter = 1.0 / metersPerPixel;
+                mat4 m = matrix::identity4();
+                matrix::translate(m, m, anchorFx * worldSize, anchorFy * worldSize, 0.0);
+                matrix::scale(m, m, pxPerMeter, pxPerMeter, 1.0);
+                matrix::multiply(current.matrix, params.transformParams.nearClippedProjMatrix, m);
+
+                // Same 4 s breathing pulse as the GL/Metal composite. The disc
+                // texture is premultiplied gold; scaling all four channels by the
+                // pulse keeps it premultiplied while pulsing the halo brightness.
+                const auto now = std::chrono::steady_clock::now();
+                static const auto t0 = now;
+                const double t = std::chrono::duration<double>(now - t0).count();
+                const float pulse = kBloomIntensity +
+                                    kBloomPulseAmp * static_cast<float>(
+                                                         std::sin(t * (2.0 * M_PI / kBloomPulsePeriod)));
+                current.color = {pulse, pulse, pulse, pulse};
+            });
+        drawableIds.push_back(interface.addGeometry(haloVertices, haloIndices, /*is3D=*/true));
+    }
+#endif
+
     interface.finish();
 
+#if !MLN_RENDER_BACKEND_VULKAN
     // ── Model-selection bloom ───────────────────────────────────────
     // The composite quad lives in this layer's main group (which the Interface
     // otherwise manages for the models); clear the previous one before rebuild.
@@ -746,6 +874,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     } else {
         teardownBloom(changes);
     }
+#endif // !MLN_RENDER_BACKEND_VULKAN
 }
 
 void RenderModelLayer::teardownBloom(UniqueChangeRequestVec& changes) {
