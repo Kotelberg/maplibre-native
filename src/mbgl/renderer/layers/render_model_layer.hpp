@@ -57,6 +57,18 @@ private:
 
     // Shared soft contact-shadow texture (built lazily).
     gfx::Texture2DPtr shadowTexture;
+
+    // ── Model-selection bloom ───────────────────────────────────────
+    // Offscreen silhouette of the selected building, composited back as an
+    // outward halo (blur(mask) - mask, additive). Mirrors the heatmap layer's
+    // render-target → composite structure.
+    RenderTargetPtr bloomTarget;        // offscreen mask (half-res)
+    bool bloomTargetActive = false;     // registered with the orchestrator
+    Size bloomTargetSize{0, 0};
+    gfx::ShaderProgramBasePtr bloomShader;       // composite (ModelBloomShader)
+    gfx::ShaderProgramBasePtr silhouetteShader;  // white mask (CustomGeometryShader)
+    gfx::Texture2DPtr bloomWhiteTexture;         // 2×2 white for the silhouette
+    void teardownBloom(UniqueChangeRequestVec&);
 };
 
 } // namespace mbgl

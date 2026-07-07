@@ -43,7 +43,8 @@ enum class BuiltIn {
     SymbolIconShader,
     SymbolSDFShader,
     SymbolTextAndIconShader,
-    WideVectorShader
+    WideVectorShader,
+    ModelBloomShader
 };
 
 /// @brief Select shader source based on a program type and a desired

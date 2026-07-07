@@ -285,6 +285,18 @@ const std::vector<TextureInfo> HeatmapTextureShaderInfo::textures = {
     TextureInfo{"u_color_ramp", idHeatmapColorRampTexture},
 };
 
+using ModelBloomShaderInfo = ShaderInfo<BuiltIn::ModelBloomShader, gfx::Backend::Type::OpenGL>;
+
+const std::vector<UniformBlockInfo> ModelBloomShaderInfo::uniformBlocks = {
+    UniformBlockInfo{"ModelBloomDrawableUBO", idModelBloomDrawableUBO},
+};
+const std::vector<AttributeInfo> ModelBloomShaderInfo::attributes = {
+    AttributeInfo{"a_pos", idModelBloomPosVertexAttribute},
+};
+const std::vector<TextureInfo> ModelBloomShaderInfo::textures = {
+    TextureInfo{"u_image", idModelBloomImageTexture},
+};
+
 // Hillshade Prepare
 using HillshadePrepareShaderInfo = ShaderInfo<BuiltIn::HillshadePrepareShader, gfx::Backend::Type::OpenGL>;
 

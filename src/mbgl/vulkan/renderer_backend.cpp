@@ -14,6 +14,7 @@
 #include <mbgl/shaders/vulkan/collision.hpp>
 #include <mbgl/shaders/vulkan/color_relief.hpp>
 #include <mbgl/shaders/vulkan/custom_geometry.hpp>
+#include <mbgl/shaders/vulkan/model_bloom.hpp>
 #include <mbgl/shaders/vulkan/custom_symbol_icon.hpp>
 #include <mbgl/shaders/vulkan/debug.hpp>
 #include <mbgl/shaders/vulkan/fill.hpp>
@@ -712,6 +713,7 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
                   shaders::BuiltIn::FillExtrusionPatternInstancedShader,
                   shaders::BuiltIn::HeatmapShader,
                   shaders::BuiltIn::HeatmapTextureShader,
+                  shaders::BuiltIn::ModelBloomShader,
                   shaders::BuiltIn::HillshadeShader,
                   shaders::BuiltIn::HillshadePrepareShader,
                   shaders::BuiltIn::LineShader,
