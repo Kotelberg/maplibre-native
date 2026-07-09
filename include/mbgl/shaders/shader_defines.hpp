@@ -219,6 +219,11 @@ enum {
 };
 
 enum {
+    idModelBloomDrawableUBO = getEnumValue(drawableReservedUBOCount, drawableUBOStartId), // UBO
+    modelBloomUBOCount
+};
+
+enum {
     idCustomSymbolDrawableUBO = getEnumValue(idDrawableReservedVertexOnlyUBO, drawableUBOStartId), // UBO
     customSymbolUBOCount = getEnumValue(drawableReservedUBOCount, idCustomSymbolDrawableUBO + 1)
 };
@@ -344,6 +349,11 @@ enum {
     idGroundShadowTexture2,
     idGroundShadowTexture3,
     groundShadowTextureCount
+};
+
+enum {
+    idModelBloomImageTexture,
+    modelBloomTextureCount
 };
 
 enum {
@@ -477,6 +487,11 @@ enum {
 enum {
     idGroundShadowPosVertexAttribute,
     groundShadowVertexAttributeCount
+};
+
+enum {
+    idModelBloomPosVertexAttribute,
+    modelBloomVertexAttributeCount
 };
 
 enum {

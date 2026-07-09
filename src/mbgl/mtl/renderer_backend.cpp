@@ -23,6 +23,7 @@
 #include <mbgl/shaders/mtl/fill_extrusion.hpp>
 #include <mbgl/shaders/mtl/heatmap.hpp>
 #include <mbgl/shaders/mtl/heatmap_texture.hpp>
+#include <mbgl/shaders/mtl/model_bloom.hpp>
 #include <mbgl/shaders/mtl/shadow_depth.hpp>
 #include <mbgl/shaders/mtl/fill_extrusion_shadow.hpp>
 #include <mbgl/shaders/mtl/ground_shadow.hpp>
@@ -125,6 +126,7 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
                   shaders::BuiltIn::FillExtrusionPatternInstancedShader,
                   shaders::BuiltIn::HeatmapShader,
                   shaders::BuiltIn::HeatmapTextureShader,
+                  shaders::BuiltIn::ModelBloomShader,
                   shaders::BuiltIn::ShadowDepthShader,
 #if MLN_USE_FILL_EXTRUSION_INSTANCING
                   shaders::BuiltIn::ShadowDepthInstancedShader,

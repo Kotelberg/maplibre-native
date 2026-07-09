@@ -1,12 +1,22 @@
 #include <mbgl/renderer/layers/render_model_layer.hpp>
 
 #include <mbgl/gfx/context.hpp>
+#include <mbgl/gfx/cull_face_mode.hpp>
 #include <mbgl/gfx/drawable.hpp>
+#include <mbgl/gfx/drawable_builder.hpp>
+#include <mbgl/gfx/drawable_tweaker.hpp>
+#include <mbgl/gfx/vertex_attribute.hpp>
 #include <mbgl/renderer/building_extrusion_zoom_ramp.hpp>
 #include <mbgl/renderer/change_request.hpp>
+#include <mbgl/renderer/layer_group.hpp>
 #include <mbgl/renderer/model/placeholder_mesh.hpp>
 #include <mbgl/renderer/paint_parameters.hpp>
+#include <mbgl/renderer/render_target.hpp>
 #include <mbgl/renderer/update_parameters.hpp>
+#include <mbgl/shaders/custom_geometry_ubo.hpp>
+#include <mbgl/shaders/model_bloom_ubo.hpp>
+#include <mbgl/shaders/segment.hpp>
+#include <mbgl/shaders/shader_defines.hpp>
 #include <mbgl/style/layers/custom_drawable_layer.hpp>
 #include <mbgl/style/sources/geojson_source_impl.hpp>
 #include <mbgl/tile/geojson_tile_data.hpp>
@@ -17,8 +27,10 @@
 #include <mbgl/util/projection.hpp>
 #include <mbgl/util/tile_cover.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <unordered_set>
 
 namespace mbgl {
@@ -82,6 +94,110 @@ inline float zoomGrow(double zoom) {
 inline float zoomFade(double zoom) {
     return buildingExtrusionModelFadeFactor(zoom);
 }
+
+// ── Bloom tuning ────────────────────────────────────────────────────
+constexpr float kBloomIntensity = 0.62f;      // peak halo opacity
+constexpr float kBloomPulseAmp = 0.34f;       // slow, clearly-visible breath
+constexpr float kBloomPulsePeriod = 4.0f;     // seconds (slow)
+constexpr float kBloomRadiusTexels = 7.0f;    // blur radius (in mask texels)
+constexpr float kBloomColor[3] = {0.992f, 0.725f, 0.071f}; // #FDB912
+
+#if MLN_RENDER_BACKEND_VULKAN
+// ── Vulkan ground-halo tuning ───────────────────────────────────────
+// On the HONOR's Mali/Vulkan driver the screen-space bloom composite (a flat NDC
+// quad through the custom-drawable shaders) rasterizes ZERO fragments, while
+// world-space projected geometry through the same shaders renders fine — proven
+// exhaustively in docs/… vulkan-bloom-fix-report.md. So the Vulkan path renders
+// the selection glow as a ground-projected world-space disc at the model anchor
+// (radius ∝ footprint, same #FDB912 + 4 s breathing), which provably rasterizes.
+constexpr float kGroundHaloRadiusFactor = 2.4f; // halo half-extent = model footprint size × this
+constexpr float kGroundHaloLiftMeters = 0.05f;  // lift off the ground plane to dodge z-fighting
+
+// Premultiplied gold radial glow, feathered to 0 at the rim. Baked at full
+// intensity; the per-frame tweaker scales all four (premultiplied) channels by
+// the breathing pulse. The selected building occludes the disc centre (depth
+// test), so the visible result reads as a halo pooling around the footprint.
+std::shared_ptr<PremultipliedImage> makeGroundHaloImage() {
+    constexpr uint32_t kSize = 128;
+    auto image = std::make_shared<PremultipliedImage>(Size{kSize, kSize});
+    std::memset(image->data.get(), 0, image->bytes());
+    for (uint32_t y = 0; y < kSize; ++y) {
+        for (uint32_t x = 0; x < kSize; ++x) {
+            const double dx = (static_cast<double>(x) + 0.5) / kSize * 2.0 - 1.0;
+            const double dy = (static_cast<double>(y) + 0.5) / kSize * 2.0 - 1.0;
+            const double r = std::sqrt(dx * dx + dy * dy);
+            const double falloff = std::clamp(1.0 - r, 0.0, 1.0);
+            const double a = std::pow(falloff, 1.6) * 0.85; // peak alpha
+            auto* px = &image->data[(y * kSize + x) * 4];
+            px[0] = static_cast<uint8_t>(std::lround(kBloomColor[0] * a * 255.0));
+            px[1] = static_cast<uint8_t>(std::lround(kBloomColor[1] * a * 255.0));
+            px[2] = static_cast<uint8_t>(std::lround(kBloomColor[2] * a * 255.0));
+            px[3] = static_cast<uint8_t>(std::lround(a * 255.0));
+        }
+    }
+    return image;
+}
+#endif // MLN_RENDER_BACKEND_VULKAN
+
+struct BloomQuadVertex {
+    std::array<float, 2> pos;
+};
+
+// Maps the selected model's anchor-relative meters → clip, exactly like the
+// model's own per-frame tweaker, and paints it solid white into the offscreen
+// mask via the custom-geometry shader.
+class SilhouetteTweaker : public gfx::DrawableTweaker {
+public:
+    SilhouetteTweaker(double refFx_, double refFy_, double lat0_)
+        : refFx(refFx_),
+          refFy(refFy_),
+          lat0(lat0_) {}
+    void init(gfx::Drawable&) override {}
+    void execute(gfx::Drawable& drawable, PaintParameters& params) override {
+        const double worldSize = Projection::worldSize(params.state.getScale());
+        const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(lat0, params.state.getZoom());
+        const double pxPerMeter = 1.0 / metersPerPixel;
+        mat4 m = matrix::identity4();
+        matrix::translate(m, m, refFx * worldSize, refFy * worldSize, 0.0);
+        matrix::scale(m, m, pxPerMeter, pxPerMeter, zoomGrow(params.state.getZoom()));
+        mat4 mat;
+        matrix::multiply(mat, params.transformParams.nearClippedProjMatrix, m);
+        shaders::CustomGeometryDrawableUBO ubo{util::cast<float>(mat), Color::white()};
+        drawable.mutableUniformBuffers().createOrUpdate(
+            shaders::idCustomGeometryDrawableUBO, &ubo, params.context);
+    }
+
+private:
+    double refFx, refFy, lat0;
+};
+
+// Drives the bloom composite UBO: glow colour + breathing intensity + blur
+// step. The mask size is fixed for the drawable's lifetime.
+class BloomCompositeTweaker : public gfx::DrawableTweaker {
+public:
+    explicit BloomCompositeTweaker(Size maskSize_)
+        : maskSize(maskSize_) {}
+    void init(gfx::Drawable&) override {}
+    void execute(gfx::Drawable& drawable, PaintParameters& params) override {
+        const auto now = std::chrono::steady_clock::now();
+        static const auto t0 = now;
+        const double t = std::chrono::duration<double>(now - t0).count();
+        const float pulse = kBloomIntensity +
+                            kBloomPulseAmp * static_cast<float>(
+                                                 std::sin(t * (2.0 * M_PI / kBloomPulsePeriod)));
+        shaders::ModelBloomDrawableUBO ubo{
+            {kBloomColor[0], kBloomColor[1], kBloomColor[2], pulse},
+            {1.0f / static_cast<float>(std::max(1u, maskSize.width)),
+             1.0f / static_cast<float>(std::max(1u, maskSize.height))},
+            kBloomRadiusTexels,
+            0.0f};
+        drawable.mutableUniformBuffers().createOrUpdate(
+            shaders::idModelBloomDrawableUBO, &ubo, params.context);
+    }
+
+private:
+    Size maskSize;
+};
 
 } // namespace
 
@@ -178,6 +294,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     std::vector<PlacedFeature> features;
     std::unordered_set<std::uint64_t> seenAnchors;
     std::uint64_t placementKey = 0;
+    std::uint64_t selectionKey = 0;
     for (const auto& coverTile : cover) {
         const auto& canonical = coverTile.canonical;
         GeoJSONData::TileFeatures tileFeatures;
@@ -202,6 +319,22 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                 continue;
             }
             placementKey ^= anchorKey * 0x9E3779B97F4A7C15ull;
+            // Fold selection state into the rebuild signature. A static tap that
+            // only flips a feature's `selected` property leaves the anchor set
+            // and feature count unchanged, so without this term `changed` stays
+            // false and the bloom never (re)builds at rest — it only refreshed
+            // when camera-fly placement churn happened to retrigger a rebuild
+            // (see vulkan-bloom-fix-report.md, "Secondary bug found"). Evaluated
+            // before the feature is moved below.
+            {
+                const GeoJSONTileFeature tf(feature);
+                if (const auto sel = tf.getValue("selected")) {
+                    if ((sel->is<bool>() && sel->get<bool>()) ||
+                        (sel->is<double>() && sel->get<double>() != 0.0)) {
+                        selectionKey ^= anchorKey * 0xD1B54A32D192ED03ull;
+                    }
+                }
+            }
             features.push_back(PlacedFeature{std::move(feature), fx, fy});
         }
     }
@@ -212,7 +345,8 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     // changed (baked meshes are camera-independent; the tweaker matrix tracks
     // the camera per frame).
     const bool changed = lastImpl != baseImpl.get() || lastData != data.get() ||
-                         lastFeatureCount != features.size() || lastPlacementKey != placementKey;
+                         lastFeatureCount != features.size() || lastPlacementKey != placementKey ||
+                         lastSelectionKey != selectionKey;
     if (!changed) {
         return;
     }
@@ -220,6 +354,7 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     lastData = data.get();
     lastFeatureCount = features.size();
     lastPlacementKey = placementKey;
+    lastSelectionKey = selectionKey;
 
     CustomDrawableLayerHost::Interface interface(
         *this, layerGroup, shaders, context, state, updateParameters, renderTree, changes);
@@ -262,6 +397,8 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     };
     std::map<std::string, std::vector<Instance>> groups;
     std::vector<Instance> cubes;
+    // The selected model also renders normally; this captures it for the bloom.
+    std::optional<std::pair<std::string, Instance>> selected;
 
     const PropertyValue<float>& modelScaleProp = layerImpl.paint.template get<ModelScale>().value;
     const PropertyValue<float>& modelRotationProp = layerImpl.paint.template get<ModelRotation>().value;
@@ -278,6 +415,14 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         const std::string modelId = evaluateFor(modelIdProp, tileFeature, std::string{});
         if (!modelId.empty() && layerImpl.modelAssets.count(modelId)) {
             groups[modelId].push_back(instance);
+            if (!selected) {
+                if (const auto value = tileFeature.getValue("selected")) {
+                    if ((value->is<bool>() && value->get<bool>()) ||
+                        (value->is<double>() && value->get<double>() != 0.0)) {
+                        selected = std::make_pair(modelId, instance);
+                    }
+                }
+            }
         } else {
             cubes.push_back(instance);
         }
@@ -504,7 +649,245 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         drawableIds.push_back(interface.addGeometry(sharedVertices, sharedIndices, /*is3D=*/true));
     }
 
+#if MLN_RENDER_BACKEND_VULKAN
+    // ── Vulkan model-selection halo (ground-projected) ──────────────
+    // The screen-space silhouette composite (below, GL/Metal) draws ZERO
+    // fragments on this Mali/Vulkan driver — a flat NDC quad through the
+    // custom-drawable shaders never rasterizes, while world-space projected
+    // geometry through the SAME shaders does (exhaustively root-caused in
+    // vulkan-bloom-fix-report.md). So on Vulkan the glow is a ground-projected
+    // gold disc at the selected model's anchor, added through the exact
+    // interface.addGeometry(is3D) path the models + contact shadows use (which
+    // provably rasterize here). It is tracked in drawableIds, so the next
+    // rebuild (e.g. deselection — the selection gate fix above guarantees one)
+    // tears it down with the rest of the drawables; no render target, no
+    // composite, no explicit teardown. Different look from the GL/Metal
+    // screen-space halo — Sergey judges the divergence.
+    if (selected) {
+        const Instance& sel = selected->second;
+        if (!bloomGroundTexture) {
+            auto tex = context.createTexture2D();
+            tex->setSamplerConfiguration({.filter = gfx::TextureFilterType::Linear,
+                                          .wrapU = gfx::TextureWrapType::Clamp,
+                                          .wrapV = gfx::TextureWrapType::Clamp});
+            tex->setImage(makeGroundHaloImage());
+            bloomGroundTexture = std::move(tex);
+        }
+
+        const float halfExtent = sel.size * sel.footprint * kGroundHaloRadiusFactor;
+        auto haloVertices = std::make_shared<gfx::VertexVector<Vertex>>();
+        auto haloIndices = std::make_shared<gfx::IndexVector<gfx::Triangles>>();
+        haloVertices->emplace_back(Vertex{{-halfExtent, -halfExtent, kGroundHaloLiftMeters}, {0.f, 0.f}});
+        haloVertices->emplace_back(Vertex{{halfExtent, -halfExtent, kGroundHaloLiftMeters}, {1.f, 0.f}});
+        haloVertices->emplace_back(Vertex{{halfExtent, halfExtent, kGroundHaloLiftMeters}, {1.f, 1.f}});
+        haloVertices->emplace_back(Vertex{{-halfExtent, halfExtent, kGroundHaloLiftMeters}, {0.f, 1.f}});
+        // Double-sided: the world's south-positive y flips winding.
+        haloIndices->emplace_back(0, 1, 2);
+        haloIndices->emplace_back(0, 2, 3);
+        haloIndices->emplace_back(0, 2, 1);
+        haloIndices->emplace_back(0, 3, 2);
+
+        CustomDrawableLayerHost::Interface::GeometryOptions haloOptions;
+        haloOptions.texture = bloomGroundTexture;
+        interface.setGeometryOptions(haloOptions);
+        const double haloLat = latitudeFromMercatorFraction(sel.fy);
+        interface.setGeometryTweakerCallback(
+            [anchorFx = sel.fx, anchorFy = sel.fy, haloLat](
+                gfx::Drawable&,
+                const PaintParameters& params,
+                CustomDrawableLayerHost::Interface::GeometryOptions& current) {
+                const double worldSize = Projection::worldSize(params.state.getScale());
+                const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(
+                    haloLat, params.state.getZoom());
+                const double pxPerMeter = 1.0 / metersPerPixel;
+                mat4 m = matrix::identity4();
+                matrix::translate(m, m, anchorFx * worldSize, anchorFy * worldSize, 0.0);
+                matrix::scale(m, m, pxPerMeter, pxPerMeter, 1.0);
+                matrix::multiply(current.matrix, params.transformParams.nearClippedProjMatrix, m);
+
+                // Same 4 s breathing pulse as the GL/Metal composite. The disc
+                // texture is premultiplied gold; scaling all four channels by the
+                // pulse keeps it premultiplied while pulsing the halo brightness.
+                const auto now = std::chrono::steady_clock::now();
+                static const auto t0 = now;
+                const double t = std::chrono::duration<double>(now - t0).count();
+                const float pulse = kBloomIntensity +
+                                    kBloomPulseAmp * static_cast<float>(
+                                                         std::sin(t * (2.0 * M_PI / kBloomPulsePeriod)));
+                current.color = {pulse, pulse, pulse, pulse};
+            });
+        drawableIds.push_back(interface.addGeometry(haloVertices, haloIndices, /*is3D=*/true));
+    }
+#endif
+
     interface.finish();
+
+#if !MLN_RENDER_BACKEND_VULKAN
+    // ── Model-selection bloom ───────────────────────────────────────
+    // The composite quad lives in this layer's main group (which the Interface
+    // otherwise manages for the models); clear the previous one before rebuild.
+    if (auto* mainGroup = static_cast<TileLayerGroup*>(layerGroup.get())) {
+        mainGroup->removeDrawablesIf(
+            [](gfx::Drawable& d) { return d.getName() == "modelBloomComposite"; });
+    }
+
+    if (selected && meshCache.count(selected->first) && meshCache.at(selected->first).valid) {
+        const auto& baked = meshCache.at(selected->first);
+        const Instance& inst = selected->second;
+        const Size viewport = state.getSize();
+        // Half-res mask: enough detail to hug the silhouette (quarter-res
+        // dilation left a visible gap above the roofline) while staying cheap.
+        const Size maskSize{std::max(1u, viewport.width / 2u), std::max(1u, viewport.height / 2u)};
+
+        if (!bloomShader) {
+            bloomShader = context.getGenericShader(shaders, "ModelBloomShader");
+        }
+        if (!silhouetteShader) {
+            silhouetteShader = context.getGenericShader(shaders, "CustomGeometryShader");
+        }
+
+        if (bloomShader && silhouetteShader) {
+            if (!bloomWhiteTexture) {
+                auto img = std::make_shared<PremultipliedImage>(Size{2, 2});
+                img->fill(255);
+                bloomWhiteTexture = context.createTexture2D();
+                bloomWhiteTexture->setImage(std::move(img));
+            }
+
+            // (Re)create the offscreen mask on first use or viewport resize.
+            if (!bloomTarget || bloomTargetSize.width != maskSize.width ||
+                bloomTargetSize.height != maskSize.height) {
+                if (bloomTarget && bloomTargetActive) {
+                    changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(bloomTarget));
+                }
+                bloomTarget = context.createRenderTarget(maskSize, gfx::TextureChannelDataType::UnsignedByte);
+                bloomTargetSize = maskSize;
+                bloomTargetActive = false;
+                if (bloomTarget) {
+                    bloomTarget->getTexture()->setSamplerConfiguration(
+                        {.filter = gfx::TextureFilterType::Linear,
+                         .wrapU = gfx::TextureWrapType::Clamp,
+                         .wrapV = gfx::TextureWrapType::Clamp});
+                    bloomTarget->addLayerGroup(context.createTileLayerGroup(0, /*cap*/ 8, getID()),
+                                               /*replace*/ true);
+                    changes.emplace_back(std::make_unique<AddRenderTargetRequest>(bloomTarget));
+                    bloomTargetActive = true;
+                }
+            }
+
+            if (bloomTarget) {
+                auto* maskGroup = static_cast<TileLayerGroup*>(bloomTarget->getLayerGroup(0).get());
+                maskGroup->clearDrawables();
+
+                const double lat0 = latitudeFromMercatorFraction(inst.fy);
+                // Instance transform: rotate + scale only; the instance is its
+                // own anchor, so the tweaker supplies the per-frame translation.
+                mat4 f = matrix::identity4();
+                matrix::rotate_z(f, f, util::deg2rad(inst.rotationDeg));
+                matrix::scale(f, f, inst.size * inst.footprint, inst.size * inst.footprint, inst.size);
+
+                const auto silTweaker = std::make_shared<SilhouetteTweaker>(inst.fx, inst.fy, lat0);
+
+                for (const auto& part : baked.parts) {
+                    const std::size_t partVertexCount = part.vertices->elements();
+                    if (partVertexCount == 0) continue;
+                    auto verts = std::make_shared<gfx::VertexVector<Vertex>>();
+                    for (std::size_t vi = 0; vi < partVertexCount; ++vi) {
+                        const Vertex& v = part.vertices->at(vi);
+                        const vec4 p{v.position[0], v.position[1], v.position[2], 1.0};
+                        vec4 out;
+                        matrix::transformMat4(out, p, f);
+                        verts->emplace_back(Vertex{{static_cast<float>(out[0]), static_cast<float>(out[1]),
+                                                    static_cast<float>(out[2])},
+                                                   v.texcoords});
+                    }
+                    auto attrs = context.createVertexAttributeArray();
+                    if (const auto& a = attrs->set(shaders::idCustomGeometryPosVertexAttribute)) {
+                        a->setSharedRawData(verts, offsetof(Vertex, position), 0, sizeof(Vertex),
+                                            gfx::AttributeDataType::Float3);
+                    }
+                    if (const auto& a = attrs->set(shaders::idCustomGeometryTexVertexAttribute)) {
+                        a->setSharedRawData(verts, offsetof(Vertex, texcoords), 0, sizeof(Vertex),
+                                            gfx::AttributeDataType::Float2);
+                    }
+                    SegmentVector segs;
+                    segs.emplace_back(0, 0, partVertexCount, part.indices->elements());
+
+                    auto builder = context.createDrawableBuilder("modelBloomSilhouette");
+                    builder->setShader(silhouetteShader);
+                    builder->setEnableDepth(false);
+                    builder->setColorMode(gfx::ColorMode::unblended());
+                    builder->setCullFaceMode(gfx::CullFaceMode::disabled());
+                    builder->setRenderPass(RenderPass::Translucent);
+                    builder->setVertexAttributes(std::move(attrs));
+                    builder->setRawVertices({}, partVertexCount, gfx::AttributeDataType::Float3);
+                    builder->setSegments(gfx::Triangles(), part.indices, segs.data(), segs.size());
+                    builder->setTexture(bloomWhiteTexture, shaders::idCustomGeometryTexture);
+                    builder->flush(context);
+                    for (auto& d : builder->clearDrawables()) {
+                        d->setTileID({0, 0, 0});
+                        d->addTweaker(silTweaker);
+                        maskGroup->addDrawable(RenderPass::Translucent, {0, 0, 0}, std::move(d));
+                    }
+                }
+
+                // Composite quad in the main group, drawn after the models.
+                auto quad = std::make_shared<gfx::VertexVector<BloomQuadVertex>>();
+                quad->emplace_back(BloomQuadVertex{{0.f, 0.f}});
+                quad->emplace_back(BloomQuadVertex{{1.f, 0.f}});
+                quad->emplace_back(BloomQuadVertex{{0.f, 1.f}});
+                quad->emplace_back(BloomQuadVertex{{1.f, 1.f}});
+                std::vector<uint16_t> quadIdx{0, 1, 2, 1, 2, 3};
+                SegmentVector quadSegs;
+                quadSegs.emplace_back(0, 0, 4, 6);
+
+                auto qattrs = context.createVertexAttributeArray();
+                if (const auto& a = qattrs->set(shaders::idModelBloomPosVertexAttribute)) {
+                    a->setSharedRawData(quad, offsetof(BloomQuadVertex, pos), 0, sizeof(BloomQuadVertex),
+                                        gfx::AttributeDataType::Float2);
+                }
+                auto cbuilder = context.createDrawableBuilder("modelBloomComposite");
+                cbuilder->setShader(bloomShader);
+                cbuilder->setEnableDepth(false);
+                // Premultiplied alpha: the halo tints the scene toward the glow
+                // colour, which reads on a bright basemap (additive only
+                // brightens already-bright pixels toward white → invisible).
+                cbuilder->setColorMode(gfx::ColorMode::alphaBlended());
+                cbuilder->setCullFaceMode(gfx::CullFaceMode::disabled());
+                cbuilder->setRenderPass(RenderPass::Translucent);
+                cbuilder->setVertexAttributes(std::move(qattrs));
+                cbuilder->setRawVertices({}, 4, gfx::AttributeDataType::Float2);
+                cbuilder->setSegments(gfx::Triangles(), std::move(quadIdx), quadSegs.data(), quadSegs.size());
+                cbuilder->setTexture(bloomTarget->getTexture(), shaders::idModelBloomImageTexture);
+                cbuilder->flush(context);
+                const auto compTweaker = std::make_shared<BloomCompositeTweaker>(maskSize);
+                if (auto* mainGroup = static_cast<TileLayerGroup*>(layerGroup.get())) {
+                    for (auto& d : cbuilder->clearDrawables()) {
+                        d->setName("modelBloomComposite");
+                        d->setTileID({0, 0, 0});
+                        d->addTweaker(compTweaker);
+                        mainGroup->addDrawable(RenderPass::Translucent, {0, 0, 0}, std::move(d));
+                    }
+                }
+            }
+        }
+    } else {
+        teardownBloom(changes);
+    }
+#endif // !MLN_RENDER_BACKEND_VULKAN
+}
+
+void RenderModelLayer::teardownBloom(UniqueChangeRequestVec& changes) {
+    if (bloomTarget && bloomTargetActive) {
+        changes.emplace_back(std::make_unique<RemoveRenderTargetRequest>(bloomTarget));
+    }
+    bloomTarget.reset();
+    bloomTargetActive = false;
+    bloomTargetSize = Size{0, 0};
+    if (auto* mainGroup = static_cast<TileLayerGroup*>(layerGroup.get())) {
+        mainGroup->removeDrawablesIf(
+            [](gfx::Drawable& d) { return d.getName() == "modelBloomComposite"; });
+    }
 }
 
 } // namespace mbgl

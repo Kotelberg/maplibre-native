@@ -36,6 +36,7 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/common.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/collision.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/custom_geometry.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/model_bloom.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/custom_symbol_icon.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/debug.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/mtl/fill.hpp
@@ -85,6 +86,7 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/collision.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/clipping_mask.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/custom_geometry.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/model_bloom.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/custom_symbol_icon.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/debug.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/mtl/fill.cpp

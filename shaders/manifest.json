@@ -269,5 +269,12 @@
         "glsl_vert": "_empty.glsl",
         "glsl_frag": "_empty.glsl",
         "uses_ubos": true
+    },
+    {
+        "name": "ModelBloomShader",
+        "header": "model_bloom",
+        "glsl_vert": "model_bloom.vertex.glsl",
+        "glsl_frag": "model_bloom.fragment.glsl",
+        "uses_ubos": true
     }
 ]

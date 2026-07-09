@@ -42,6 +42,7 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/vulkan/collision.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/vulkan/common.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/vulkan/custom_geometry.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/vulkan/model_bloom.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/vulkan/custom_symbol_icon.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/vulkan/fill.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/vulkan/fill_extrusion.hpp
@@ -87,6 +88,7 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/clipping_mask.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/collision.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/custom_geometry.cpp
+        ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/model_bloom.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/custom_symbol_icon.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/debug.cpp
         ${PROJECT_SOURCE_DIR}/src/mbgl/shaders/vulkan/fill.cpp
