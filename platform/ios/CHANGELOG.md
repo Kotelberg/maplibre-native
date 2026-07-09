@@ -5,6 +5,7 @@ MapLibre welcomes participation and contributions from everyone. Please read [`M
 ## 6.27.0
 
 - Implement ambient cache for PMTiles sources ([#4290](https://github.com/maplibre/maplibre-native/pull/4290)).
+- Fix zoom interpolation of data-driven `fill-extrusion-base`/`fill-extrusion-height` on Metal: the vertex attributes carry an interpolable (min, max) pair but were declared as scalars, so extrusions snapped to the tile-zoom evaluation instead of interpolating (buildings popped to full height at tile-zoom boundaries instead of growing smoothly).
 
 ## 6.26.1
 
