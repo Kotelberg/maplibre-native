@@ -346,6 +346,19 @@ bool refreshShadowFrustum(ShadowFrustumState& fs,
     constexpr double kOversize = 1.5;    // cached far radius = view radius × this → ~0.5·radius of pan headroom
     constexpr double kZoomInRefit = 1.5; // re-render for SHARPNESS once the live world scale is this × the
                                          // cached scale (~0.58 zoom levels IN); zoom-OUT is caught by coverage.
+    // Building HEIGHT interpolates with zoom across the grow band (see shadowHeightFade: buildings rise
+    // from flat to full height over [14,15]). The caster depth map bakes in the height the casters were
+    // rendered at (their interpolation factor is evaluated at cachedZoom — see ShadowDepthTweaker), but
+    // the receiver renders every frame at the LIVE height. The per-frame liveCascades rescale below is a
+    // UNIFORM world-space scale: it keeps a fixed-height building aligned through a zoom, but it cannot
+    // correct a building whose height CHANGES with zoom. So while the cache is held across a zoom through
+    // the grow band, the map's (taller/shorter) cached casters no longer match the live receiver surface
+    // and the stale caster self-shadows the live roof — the shadow paints over the building as a grey wash
+    // during the gesture, resolving only when the next refit re-renders the casters at the settled height.
+    // Refit when the height-interp factor drifts past this, so the caster tracks the live building height.
+    // Outside [14,15] the factor is flat (0 or 1) → delta 0 → no extra refit → settled frames are
+    // byte-identical and the pinch-flicker cache is preserved everywhere except the active grow band.
+    constexpr float kHeightFadeRefit = 0.1f;
 
     vec3 viewCenter;
     double viewFarRadius;
@@ -362,6 +375,10 @@ bool refreshShadowFrustum(ShadowFrustumState& fs,
         // the cached center/radius (in cached px) scale to live px by ×S.
         const double S = std::exp2(zoom - fs.cachedZoom);
         if (S > kZoomInRefit) {
+            refit = true;
+        } else if (std::abs(shadowHeightFade(static_cast<float>(zoom)) -
+                            shadowHeightFade(static_cast<float>(fs.cachedZoom))) > kHeightFadeRefit) {
+            // Caster height baked at cachedZoom no longer matches the live receiver height (grow band).
             refit = true;
         } else {
             const double dist =

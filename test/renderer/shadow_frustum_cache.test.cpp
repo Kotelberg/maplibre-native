@@ -69,3 +69,69 @@ TEST(ShadowFrustumCache, SentinelCacheRefitsWithoutGarbageRescale) {
         }
     }
 }
+
+namespace {
+// Mirror of shadow_tweakers.cpp's shadowHeightFade: buildings rise from flat to full height over the
+// [14,15] grow band, and the caster/receiver interpolate their height by this factor. The sticky
+// cache's height-drift refit keys off exactly this, so the test reads the same curve.
+float heightFade(double zoom) {
+    const double t = (zoom - 14.0) / (15.0 - 14.0);
+    return static_cast<float>(t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t));
+}
+// Must match kHeightFadeRefit in refreshShadowFrustum.
+constexpr float kHeightFadeRefit = 0.1f;
+} // namespace
+
+// Regression guard for the Metal pinch-zoom "shadow paints over the building" bug. During a zoom-out
+// held on the sticky cache, the caster depth map keeps the height the casters were rendered at
+// (cachedZoom), while the fill-extrusion receiver renders every frame at the LIVE (interpolated)
+// height. The per-frame liveCascades rescale is a uniform world-space scale — it aligns a
+// fixed-height building through a zoom but cannot correct a building whose height CHANGES with zoom
+// across the [14,15] grow band. So a stale-height caster ends up self-shadowing the live roof (grey
+// wash) until the next refit. The fix refits whenever the height-interp factor drifts past
+// kHeightFadeRefit, keeping the caster height within tolerance of the live receiver height.
+TEST(ShadowFrustumCache, GrowBandZoomOutTracksLiveBuildingHeight) {
+    Transform transform;
+    transform.resize({1024, 768});
+    const vec3 sunDir{{0.4, 0.3, -0.86}};
+
+    ShadowFrustumState fs;
+    // Fit at the top of the grow band (buildings fully grown, fade == 1).
+    transform.jumpTo(CameraOptions().withCenter(LatLng{50.4501, 30.5234}).withZoom(15.0).withPitch(55.0));
+    ASSERT_TRUE(refreshShadowFrustum(fs, transform.getState(), sunDir, 1024, 1, 0.4f));
+
+    // Zoom OUT through the grow band toward flat buildings in small steps, as an active pinch would.
+    bool sawRefit = false;
+    for (double zoom = 14.95; zoom >= 14.0; zoom -= 0.05) {
+        transform.jumpTo(CameraOptions().withZoom(zoom));
+        const bool refit = refreshShadowFrustum(fs, transform.getState(), sunDir, 1024, 1, 0.4f);
+        sawRefit = sawRefit || refit;
+
+        // The caster height baked at cachedZoom must stay within the interp tolerance of the live
+        // height. Before the fix cachedZoom stuck at 15.0, so by zoom 14.0 the drift reached the full
+        // 1.0 fade — the grey-wash regime. A tiny slack absorbs float rounding on the fade curve.
+        EXPECT_LE(std::abs(heightFade(zoom) - heightFade(fs.cachedZoom)), kHeightFadeRefit + 1e-4f)
+            << "height drift too large at zoom " << zoom << " (cachedZoom " << fs.cachedZoom << ")";
+    }
+    // The mechanism must actually engage (not vacuously pass by never entering the band).
+    EXPECT_TRUE(sawRefit);
+}
+
+// A zoom held ABOVE the grow band (buildings already fully grown, fade flat at 1) must NOT trip the
+// new height-drift refit — the sticky-cache pinch-flicker optimization is preserved everywhere except
+// the active grow band. Only the first fit refits; the small in-place zoom-out reuses the cached map.
+TEST(ShadowFrustumCache, AboveGrowBandZoomOutReusesCache) {
+    Transform transform;
+    transform.resize({1024, 768});
+    const vec3 sunDir{{0.4, 0.3, -0.86}};
+
+    ShadowFrustumState fs;
+    transform.jumpTo(CameraOptions().withCenter(LatLng{50.4501, 30.5234}).withZoom(17.0).withPitch(55.0));
+    ASSERT_TRUE(refreshShadowFrustum(fs, transform.getState(), sunDir, 1024, 1, 0.4f));
+
+    // Small in-place zoom-out, both endpoints above the band → identical height fade → height trigger
+    // silent. (Coverage/zoom-in triggers are unaffected by this change.)
+    ASSERT_FLOAT_EQ(heightFade(17.0), heightFade(16.7));
+    transform.jumpTo(CameraOptions().withZoom(16.7));
+    EXPECT_FALSE(refreshShadowFrustum(fs, transform.getState(), sunDir, 1024, 1, 0.4f));
+}
