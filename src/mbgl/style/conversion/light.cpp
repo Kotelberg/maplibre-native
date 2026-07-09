@@ -99,6 +99,46 @@ std::optional<Light> Converter<Light>::operator()(const Convertible& value, Erro
         }
     }
 
+    const auto castShadows = objectMember(value, "cast-shadows");
+    if (castShadows) {
+        auto converted = convert<PropertyValue<bool>>(*castShadows, error, false, false);
+        if (converted) {
+            light.setCastShadows(*converted);
+        } else {
+            return std::nullopt;
+        }
+    }
+
+    const auto castShadowsTransition = objectMember(value, "cast-shadows-transition");
+    if (castShadowsTransition) {
+        auto transition = convert<TransitionOptions>(*castShadowsTransition, error);
+        if (transition) {
+            light.setCastShadowsTransition(*transition);
+        } else {
+            return std::nullopt;
+        }
+    }
+
+    const auto shadowIntensity = objectMember(value, "shadow-intensity");
+    if (shadowIntensity) {
+        auto converted = convert<PropertyValue<float>>(*shadowIntensity, error, false, false);
+        if (converted) {
+            light.setShadowIntensity(*converted);
+        } else {
+            return std::nullopt;
+        }
+    }
+
+    const auto shadowIntensityTransition = objectMember(value, "shadow-intensity-transition");
+    if (shadowIntensityTransition) {
+        auto transition = convert<TransitionOptions>(*shadowIntensityTransition, error);
+        if (transition) {
+            light.setShadowIntensityTransition(*transition);
+        } else {
+            return std::nullopt;
+        }
+    }
+
     return {std::move(light)};
 }
 

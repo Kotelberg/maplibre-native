@@ -133,6 +133,11 @@ public:
     RenderTargetPtr createRenderTarget(const Size size, const gfx::TextureChannelDataType type) override;
 
     Framebuffer createFramebuffer(const gfx::Texture2D& color);
+    // Color (sampled RGBA8 texture) + depth-only renderbuffer. For offscreen render targets that
+    // need a real hardware depth test alongside their sampled color output, e.g. to resolve
+    // per-texel visibility across multiple draws into the same target rather than last-write-wins.
+    Framebuffer createFramebuffer(const gfx::Texture2D& color,
+                                  const gfx::Renderbuffer<gfx::RenderbufferPixelType::Depth>& depth);
 
     gfx::VertexAttributeArrayPtr createVertexAttributeArray() const override;
 
@@ -211,6 +216,17 @@ private:
 
 public:
     std::unique_ptr<gfx::OffscreenTexture> createOffscreenTexture(Size, gfx::TextureChannelDataType) override;
+    // Depth-capable variant: attaches a real depth renderbuffer (see the two-arg
+    // createFramebuffer(color, depth) overload above) instead of a color-only target. This
+    // signature-matches gfx::Context's 4-arg virtual (added once the shadow render target needed
+    // it), so it overrides that base method — the shadow pass's depth-capable RenderTarget reaches
+    // this real GL implementation through a plain `gfx::Context&`, not just `gl::Context&`. The
+    // `stencil` parameter is accepted for call-site symmetry with other backends but unused, since
+    // a combined depth+stencil renderbuffer isn't needed by any current GL offscreen consumer.
+    std::unique_ptr<gfx::OffscreenTexture> createOffscreenTexture(Size,
+                                                                  gfx::TextureChannelDataType,
+                                                                  bool depth,
+                                                                  bool stencil) override;
 
 private:
     std::unique_ptr<gfx::RenderbufferResource> createRenderbufferResource(gfx::RenderbufferPixelType,

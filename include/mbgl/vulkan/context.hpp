@@ -71,7 +71,8 @@ public:
                                       const std::string_view vertex,
                                       const std::string_view fragment,
                                       const ProgramParameters& programParameters,
-                                      const mbgl::unordered_map<std::string, std::string>& additionalDefines);
+                                      const mbgl::unordered_map<std::string, std::string>& additionalDefines,
+                                      bool skipsClipSpaceYFlip = false);
 
     /// Called at the end of a frame.
     void performCleanup() override;
@@ -106,7 +107,7 @@ public:
 
     void setDirtyState() override {}
 
-    std::unique_ptr<gfx::OffscreenTexture> createOffscreenTexture(Size, gfx::TextureChannelDataType, bool, bool);
+    std::unique_ptr<gfx::OffscreenTexture> createOffscreenTexture(Size, gfx::TextureChannelDataType, bool, bool) override;
 
     std::unique_ptr<gfx::OffscreenTexture> createOffscreenTexture(Size, gfx::TextureChannelDataType) override;
 

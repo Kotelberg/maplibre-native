@@ -5530,6 +5530,42 @@
           "ios": "3.6.0"
         }
       }
+    },
+    "cast-shadows": {
+      "type": "boolean",
+      "property-type": "data-constant",
+      "default": false,
+      "transition": false,
+      "expression": {
+        "interpolated": false,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "doc": "Whether extruded geometries cast shadows from the light source.",
+      "example": true,
+      "sdk-support": {
+        "basic functionality": {}
+      }
+    },
+    "shadow-intensity": {
+      "type": "number",
+      "property-type": "data-constant",
+      "default": 0.32,
+      "minimum": 0,
+      "maximum": 1,
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "transition": true,
+      "doc": "Intensity of the cast shadows (on a scale from 0 to 1), where 0 is fully transparent and 1 is fully opaque.",
+      "example": 0.32,
+      "sdk-support": {
+        "basic functionality": {}
+      }
     }
   },
   "sky": {

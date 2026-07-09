@@ -145,6 +145,34 @@
         "uses_ubos": true
     },
     {
+        "name": "ShadowDepthShader",
+        "header": "shadow_depth",
+        "glsl_vert": "shadow_depth.vertex.glsl",
+        "glsl_frag": "shadow_depth.fragment.glsl",
+        "uses_ubos": true
+    },
+    {
+        "name": "ShadowDepthInstancedShader",
+        "header": "shadow_depth_instanced",
+        "glsl_vert": "_empty.glsl",
+        "glsl_frag": "_empty.glsl",
+        "uses_ubos": true
+    },
+    {
+        "name": "FillExtrusionShadowShader",
+        "header": "fill_extrusion_shadow",
+        "glsl_vert": "fill_extrusion_shadow.vertex.glsl",
+        "glsl_frag": "fill_extrusion_shadow.fragment.glsl",
+        "uses_ubos": true
+    },
+    {
+        "name": "GroundShadowShader",
+        "header": "ground_shadow",
+        "glsl_vert": "ground_shadow.vertex.glsl",
+        "glsl_frag": "ground_shadow.fragment.glsl",
+        "uses_ubos": true
+    },
+    {
         "name": "HillshadePrepareShader",
         "header": "hillshade_prepare",
         "glsl_vert": "hillshade_prepare.vertex.glsl",

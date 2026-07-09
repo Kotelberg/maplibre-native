@@ -35,6 +35,10 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/gl/fill_extrusion_instanced.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/gl/fill_extrusion_pattern.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/gl/fill_extrusion_pattern_instanced.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/gl/shadow_depth.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/gl/shadow_depth_instanced.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/gl/fill_extrusion_shadow.hpp
+        ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/gl/ground_shadow.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/gl/heatmap.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/gl/heatmap_texture.hpp
         ${PROJECT_SOURCE_DIR}/include/mbgl/shaders/gl/hillshade_prepare.hpp

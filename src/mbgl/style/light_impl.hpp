@@ -43,7 +43,20 @@ struct LightIntensity : LightProperty<float> {
     static float defaultValue() { return 0.5; }
 };
 
-using LightProperties = Properties<LightAnchor, LightPosition, LightColor, LightIntensity>;
+// Whether extruded geometries cast shadows from the light source. Disabled by default; a style
+// opts in with `"cast-shadows": true`.
+struct LightCastShadows : LightProperty<bool> {
+    static bool defaultValue() { return false; }
+};
+
+// Intensity of the cast shadows (0..1). Default matches the "subtle" darkness used elsewhere in
+// the renderer's shadow-quality defaults.
+struct LightShadowIntensity : LightProperty<float> {
+    static float defaultValue() { return 0.32f; }
+};
+
+using LightProperties =
+    Properties<LightAnchor, LightPosition, LightColor, LightIntensity, LightCastShadows, LightShadowIntensity>;
 
 class Light::Impl {
 public:

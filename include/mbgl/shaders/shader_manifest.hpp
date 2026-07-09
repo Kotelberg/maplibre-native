@@ -24,6 +24,10 @@
 #include <mbgl/shaders/gl/fill_extrusion_pattern_instanced.hpp>
 #include <mbgl/shaders/gl/heatmap.hpp>
 #include <mbgl/shaders/gl/heatmap_texture.hpp>
+#include <mbgl/shaders/gl/shadow_depth.hpp>
+#include <mbgl/shaders/gl/shadow_depth_instanced.hpp>
+#include <mbgl/shaders/gl/fill_extrusion_shadow.hpp>
+#include <mbgl/shaders/gl/ground_shadow.hpp>
 #include <mbgl/shaders/gl/hillshade_prepare.hpp>
 #include <mbgl/shaders/gl/color_relief.hpp>
 #include <mbgl/shaders/gl/hillshade.hpp>

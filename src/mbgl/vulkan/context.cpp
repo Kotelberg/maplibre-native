@@ -412,9 +412,17 @@ UniqueShaderProgram Context::createProgram(shaders::BuiltIn shaderID,
                                            const std::string_view vertex,
                                            const std::string_view fragment,
                                            const ProgramParameters& programParameters,
-                                           const mbgl::unordered_map<std::string, std::string>& additionalDefines) {
-    auto program = std::make_unique<ShaderProgram>(
-        shaderID, name, vertex, fragment, programParameters, additionalDefines, backend, *observer);
+                                           const mbgl::unordered_map<std::string, std::string>& additionalDefines,
+                                           bool skipsClipSpaceYFlip) {
+    auto program = std::make_unique<ShaderProgram>(shaderID,
+                                                   name,
+                                                   vertex,
+                                                   fragment,
+                                                   programParameters,
+                                                   additionalDefines,
+                                                   skipsClipSpaceYFlip,
+                                                   backend,
+                                                   *observer);
     return program;
 }
 

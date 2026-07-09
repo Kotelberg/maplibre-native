@@ -20,6 +20,8 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/platform/settings.test.cpp
     ${PROJECT_SOURCE_DIR}/test/plugin/plugin.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/fill_extrusion_bucket.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/renderer/depth_pack.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/renderer/shadow_frustum_cache.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/image_manager.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/pattern_atlas.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/shader_registry.test.cpp
