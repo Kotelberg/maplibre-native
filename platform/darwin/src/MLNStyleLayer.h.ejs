@@ -167,6 +167,20 @@ which it is added.
 <% } -%>
 <% } -%>
 <% } -%>
+<% if (type === 'model') { -%>
+// MARK: - Managing a Model's Assets
+
+/**
+ Maps model asset identifiers to local glTF/GLB file paths.
+
+ This is a runtime-only registry, mirroring ``MLNStyle/setImage:forName:``:
+ the style references a model only by its `model-id`, while the host
+ application registers the file each id resolves to. Assets registered here
+ are never written to or read from the style JSON.
+ */
+@property (nonatomic, copy) NSDictionary<NSString *, NSString *> *modelAssets;
+
+<% } -%>
 @end
 
 <% if (enumProperties) { -%>

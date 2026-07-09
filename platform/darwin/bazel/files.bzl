@@ -8,6 +8,7 @@ MLN_GENERATED_DARWIN_STYLE_SOURCE = [
     "src/MLNHeatmapStyleLayer.mm",
     "src/MLNHillshadeStyleLayer.mm",
     "src/MLNLineStyleLayer.mm",
+    "src/MLNModelStyleLayer.mm",
     "src/MLNRasterStyleLayer.mm",
     "src/MLNSymbolStyleLayer.mm",
 ]
@@ -23,6 +24,7 @@ MLN_GENERATED_DARWIN_STYLE_PUBLIC_HEADERS = [
     "src/MLNCircleStyleLayer.h",
     "src/MLNFillStyleLayer.h",
     "src/MLNHillshadeStyleLayer.h",
+    "src/MLNModelStyleLayer.h",
     "src/MLNRasterStyleLayer.h",
 ]
 
@@ -37,6 +39,7 @@ MLN_GENERATED_DARWIN_STYLE_HEADERS = [
     "src/MLNCircleStyleLayer_Private.h",
     "src/MLNFillStyleLayer_Private.h",
     "src/MLNHillshadeStyleLayer_Private.h",
+    "src/MLNModelStyleLayer_Private.h",
 ] + MLN_GENERATED_DARWIN_STYLE_PUBLIC_HEADERS
 
 MLN_GENERATED_DARWIN_TEST_CODE = [
@@ -50,6 +53,7 @@ MLN_GENERATED_DARWIN_TEST_CODE = [
     "test/MLNFillStyleLayerTests.mm",
     "test/MLNHillshadeStyleLayerTests.mm",
     "test/MLNLineStyleLayerTests.mm",
+    "test/MLNModelStyleLayerTests.mm",
     "test/MLNSymbolStyleLayerTests.mm",
 ]
 

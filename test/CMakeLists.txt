@@ -7,6 +7,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/api/annotations.test.cpp
     ${PROJECT_SOURCE_DIR}/test/api/api_misuse.test.cpp
     ${PROJECT_SOURCE_DIR}/test/api/custom_geometry_source.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/api/model_layer.test.cpp
     ${PROJECT_SOURCE_DIR}/test/api/query.test.cpp
     ${PROJECT_SOURCE_DIR}/test/api/recycle_map.cpp
     ${PROJECT_SOURCE_DIR}/test/geometry/dem_data.test.cpp
@@ -23,6 +24,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/renderer/depth_pack.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/shadow_frustum_cache.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/image_manager.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/renderer/model/glb_mesh_loader.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/pattern_atlas.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/shader_registry.test.cpp
     $<$<BOOL:${MLN_WITH_WEBGPU}>:${PROJECT_SOURCE_DIR}/test/renderer/wgsl_preprocessor.test.cpp>
@@ -53,6 +55,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/style/conversion/geojson_options.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/layer.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/light.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/style/conversion/model_layer.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/padding.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/property_value.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/source_options.test.cpp

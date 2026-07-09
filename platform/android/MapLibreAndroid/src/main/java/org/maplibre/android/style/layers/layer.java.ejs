@@ -31,6 +31,10 @@ import org.maplibre.android.style.types.FormattedSection;
 import org.maplibre.android.style.layers.Layer;
 import org.maplibre.android.style.layers.PropertyValue;
 <% } -%>
+<% if (type === 'model') { -%>
+import java.util.HashMap;
+import java.util.Map;
+<% } -%>
 
 /**
  * <%- doc %>
@@ -239,6 +243,44 @@ public class <%- camelize(type) %>Layer extends Layer {
   }
 <% } -%>
 <% } -%>
+<% if (type === 'model') { -%>
+
+  /**
+   * Maps model asset identifiers to local glTF/GLB file paths.
+   *
+   * <p>This is a runtime-only registry, mirroring {@code Style#addImage}: the
+   * style references a model only by its {@code model-id}, while the host
+   * application registers the file each id resolves to. Assets registered
+   * here are never written to or read from the style JSON.
+   *
+   * @return a copy of the current asset registry
+   */
+  @NonNull
+  public Map<String, String> getModelAssets() {
+    checkThread();
+    String[] flat = nativeGetModelAssets();
+    Map<String, String> assets = new HashMap<>();
+    for (int i = 0; i + 1 < flat.length; i += 2) {
+      assets.put(flat[i], flat[i + 1]);
+    }
+    return assets;
+  }
+
+  /**
+   * Replace the model asset registry. See {@link #getModelAssets()}.
+   *
+   * @param assets map of asset identifier to local glTF/GLB file path
+   */
+  public void setModelAssets(@NonNull Map<String, String> assets) {
+    checkThread();
+    String[] ids = assets.keySet().toArray(new String[0]);
+    String[] paths = new String[ids.length];
+    for (int i = 0; i < ids.length; i++) {
+      paths[i] = assets.get(ids[i]);
+    }
+    nativeSetModelAssets(ids, paths);
+  }
+<% } -%>
 
 <% for (const property of properties) { -%>
   @NonNull
@@ -254,6 +296,15 @@ public class <%- camelize(type) %>Layer extends Layer {
   private native void nativeSet<%- camelize(property.name) %>Transition(long duration, long delay);
 
 <% } -%>
+<% } -%>
+<% if (type === 'model') { -%>
+  @NonNull
+  @Keep
+  private native String[] nativeGetModelAssets();
+
+  @Keep
+  private native void nativeSetModelAssets(String[] assetIds, String[] assetPaths);
+
 <% } -%>
   @Override
   @Keep

@@ -34,5 +34,11 @@ MBGL_DEFINE_UNIFORM_SCALAR(float, weight);
 MBGL_DEFINE_UNIFORM_VECTOR(uint16_t, 4, pattern_from);
 MBGL_DEFINE_UNIFORM_VECTOR(uint16_t, 4, pattern_to);
 
+// Experimental model layer. Needed only by the data-driven paint property
+// templates, not used in shaders (the model layer evaluates on the CPU).
+MBGL_DEFINE_UNIFORM_SCALAR(float, model_scale);
+MBGL_DEFINE_UNIFORM_SCALAR(float, model_rotation);
+MBGL_DEFINE_UNIFORM_SCALAR(float, model_footprint);
+
 } // namespace uniforms
 } // namespace mbgl

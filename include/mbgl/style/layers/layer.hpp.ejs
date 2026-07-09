@@ -22,6 +22,9 @@
 #include <mbgl/style/expression/formatted.hpp>
 #include <mbgl/style/variable_anchor_offset_collection.hpp>
 <% } -%>
+<% if (type === 'model') { -%>
+#include <map>
+<% } -%>
 #include <mbgl/util/color.hpp>
 
 <% if (type === 'line' || type === 'symbol') { -%>
@@ -60,6 +63,14 @@ public:
     void set<%- camelize(property.name) %>(const <%- propertyValueType(property) %>&);
     void set<%- camelize(property.name) %>Transition(const TransitionOptions&);
     TransitionOptions get<%- camelize(property.name) %>Transition() const;
+
+<% } -%>
+<% if (type === 'model') { -%>
+    // Model asset registry (runtime SDK API; not part of the style spec). Maps a
+    // `model-id` value to a local glTF/GLB file path. Mirrors Style::addImage: the
+    // host registers assets at runtime, while the style references them only by id.
+    const std::map<std::string, std::string>& getModelAssets() const;
+    void setModelAssets(std::map<std::string, std::string>);
 
 <% } -%>
     // Private implementation

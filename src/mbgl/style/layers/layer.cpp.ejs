@@ -97,6 +97,11 @@ layerCapabilities['heatmap']        = defaults.require('Source')
                                               .finalize();
 layerCapabilities['raster']         = defaults.require('Source').set('TileKind', 'Raster').finalize();
 layerCapabilities['location-indicator']     = defaults.finalize();
+// Experimental model layer: requires a (GeoJSON) source; the render layer reads
+// the source directly, so no layout evaluation or 3D pass is required of tiles.
+layerCapabilities['model']          = defaults.require('Source')
+                                              .set('TileKind', 'Geometry')
+                                              .finalize();
 
 // Splits lines that are over 120 characters at the firts occurance of '='.
 const split120Line = line => {
@@ -216,6 +221,25 @@ void <%- camelize(type) %>Layer::set<%- camelize(property.name) %>Transition(con
 
 TransitionOptions <%- camelize(type) %>Layer::get<%- camelize(property.name) %>Transition() const {
     return impl().paint.template get<<%- camelize(property.name) %>>().options;
+}
+<% } -%>
+<% if (type === 'model') { -%>
+
+// Model asset registry (runtime SDK API; not part of the style spec). Mirrors
+// the image-registry precedent (Style::addImage): the style references models by
+// id through the `model-id` property, and the host application registers the
+// id -> local glTF/GLB path mapping at runtime. Mutating it notifies observers so
+// the render tree can pick up newly registered assets.
+const std::map<std::string, std::string>& <%- camelize(type) %>Layer::getModelAssets() const {
+    return impl().modelAssets;
+}
+
+void <%- camelize(type) %>Layer::setModelAssets(std::map<std::string, std::string> assets) {
+    if (assets == getModelAssets()) return;
+    auto impl_ = mutableImpl();
+    impl_->modelAssets = std::move(assets);
+    baseImpl = std::move(impl_);
+    observer->onLayerChanged(*this);
 }
 <% } -%>
 

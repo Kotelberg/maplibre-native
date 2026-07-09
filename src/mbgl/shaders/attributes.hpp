@@ -58,6 +58,13 @@ MBGL_DEFINE_ATTRIBUTE(float, 1, weight);
 MBGL_DEFINE_ATTRIBUTE(uint16_t, 4, pattern_to);
 MBGL_DEFINE_ATTRIBUTE(uint16_t, 4, pattern_from);
 
+// Experimental model layer. These exist only to satisfy the data-driven paint
+// property templates; the model render layer evaluates these properties on the
+// CPU per feature and never binds them as vertex attributes.
+MBGL_DEFINE_ATTRIBUTE(float, 1, model_scale);
+MBGL_DEFINE_ATTRIBUTE(float, 1, model_rotation);
+MBGL_DEFINE_ATTRIBUTE(float, 1, model_footprint);
+
 } // namespace attributes
 
 using PositionOnlyLayoutAttributes = TypeList<attributes::pos>;

@@ -9,6 +9,7 @@
 #import "MLNHeatmapStyleLayer_Private.h"
 #import "MLNHillshadeStyleLayer_Private.h"
 #import "MLNLineStyleLayer_Private.h"
+#import "MLNModelStyleLayer_Private.h"
 #import "MLNRasterStyleLayer_Private.h"
 #import "MLNSymbolStyleLayer_Private.h"
 
@@ -79,6 +80,10 @@ LayerManagerDarwin::LayerManagerDarwin() {
   addLayerTypeCoreOnly(std::make_unique<CustomDrawableLayerFactory>());
 #elif !defined(MLN_LAYER_CUSTOM_DRAWABLE_DISABLE_ALL)
   addLayerType(std::make_unique<CustomDrawableStyleLayerPeerFactory>());
+#endif
+
+#if !defined(MLN_LAYER_MODEL_DISABLE_ALL)
+  addLayerType(std::make_unique<ModelStyleLayerPeerFactory>());
 #endif
 }
 

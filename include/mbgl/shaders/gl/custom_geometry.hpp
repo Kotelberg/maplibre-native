@@ -9,8 +9,8 @@ template <>
 struct ShaderSource<BuiltIn::CustomGeometryShader, gfx::Backend::Type::OpenGL> {
     static constexpr const char* name = "CustomGeometryShader";
     static constexpr const char* vertex = R"(layout (std140) uniform CustomGeometryDrawableUBO {
-    mat4 u_matrix;
-    vec4 u_color;
+    highp mat4 u_matrix;
+    highp vec4 u_color;
 };
 
 layout(location = 0) in vec3 a_pos;
@@ -23,9 +23,11 @@ void main() {
     gl_Position = u_matrix * vec4(a_pos, 1.0);
 }
 )";
-    static constexpr const char* fragment = R"(layout (std140) uniform CustomGeometryDrawableUBO {
-    mat4 u_matrix;
-    vec4 u_color;
+    static constexpr const char* fragment = R"(precision highp float;
+
+layout (std140) uniform CustomGeometryDrawableUBO {
+    highp mat4 u_matrix;
+    highp vec4 u_color;
 };
 
 in vec2 frag_uv;
