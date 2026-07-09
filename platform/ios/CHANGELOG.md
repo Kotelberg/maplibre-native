@@ -8,6 +8,7 @@ MapLibre welcomes participation and contributions from everyone. Please read [`M
 - Implement ambient cache for PMTiles sources ([#4290](https://github.com/maplibre/maplibre-native/pull/4290)).
 - Fix missing depth/stencil render-group state for 3D drawables in layer groups without stencil tiles (previously: Metal rendered without depth, OpenGL discarded all fragments).
 - Add configurable map-surface MSAA (sample count via MLNRendererConfiguration, default 1 = off).
+- Fix zoom interpolation of data-driven `fill-extrusion-base`/`fill-extrusion-height` on Metal: the vertex attributes carry an interpolable (min, max) pair but were declared as scalars, so extrusions snapped to the tile-zoom evaluation instead of interpolating (buildings popped to full height at tile-zoom boundaries instead of growing smoothly).
 
 ## 6.26.1
 
