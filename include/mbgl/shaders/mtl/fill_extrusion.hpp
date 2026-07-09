@@ -83,10 +83,10 @@ struct VertexStage {
     float4 color [[attribute(1)]];
 #endif
 #if !defined(HAS_UNIFORM_u_base)
-    float base [[attribute(2)]];
+    float2 base [[attribute(2)]];
 #endif
 #if !defined(HAS_UNIFORM_u_height)
-    float height [[attribute(3)]];
+    float2 height [[attribute(3)]];
 #endif
 };
 
@@ -203,10 +203,10 @@ struct VertexStage {
     float4 color [[attribute(3)]];
 #endif
 #if !defined(HAS_UNIFORM_u_base)
-    float base [[attribute(4)]];
+    float2 base [[attribute(4)]];
 #endif
 #if !defined(HAS_UNIFORM_u_height)
-    float height [[attribute(5)]];
+    float2 height [[attribute(5)]];
 #endif
 };
 
@@ -342,10 +342,10 @@ struct VertexStage {
     short2 pos [[attribute(0)]];
 
 #if !defined(HAS_UNIFORM_u_base)
-    float base [[attribute(1)]];
+    float2 base [[attribute(1)]];
 #endif
 #if !defined(HAS_UNIFORM_u_height)
-    float height [[attribute(2)]];
+    float2 height [[attribute(2)]];
 #endif
 #if !defined(HAS_UNIFORM_u_pattern_from)
     ushort4 pattern_from [[attribute(3)]];
@@ -524,10 +524,10 @@ struct VertexStage {
     short2 pos [[attribute(0)]];
 
 #if !defined(HAS_UNIFORM_u_base)
-    float base [[attribute(3)]];
+    float2 base [[attribute(3)]];
 #endif
 #if !defined(HAS_UNIFORM_u_height)
-    float height [[attribute(4)]];
+    float2 height [[attribute(4)]];
 #endif
 #if !defined(HAS_UNIFORM_u_pattern_from)
     ushort4 pattern_from [[attribute(5)]];
