@@ -114,17 +114,21 @@ constexpr float kBloomColor[3] = {0.992f, 0.725f, 0.071f}; // #FDB912
 // not a box"): a gold ring pooling at the building base (the building occludes
 // the disc centre via depth, so the visible result hugs the footprint).
 //
-// Tuned 2026-07-09 to stop the old disc FLOODING the basemap: the previous
-// radius×2.4 + peak-alpha 0.85 + pulse 0.62±0.34 (peaks 0.96) washed the whole
-// lower half of the map gold at the pulse peak and read as a slab/box. It is now
-// tighter (×1.7), calmer (peak alpha 0.62, gentle breath 0.55±0.16, never floods)
-// and banding-free (256², smooth analytic falloff instead of the pow ramp on a
-// coarse 128² texture).
-constexpr float kGroundHaloRadiusFactor = 1.7f; // halo half-extent = model footprint size × this
-constexpr float kGroundHaloLiftMeters = 0.05f;  // lift off the ground plane to dodge z-fighting
-constexpr float kGroundHaloBaseIntensity = 0.55f; // breathing midpoint (was shared kBloomIntensity 0.62)
-constexpr float kGroundHaloPulseAmp = 0.16f;      // gentle breath; peaks 0.71, never floods
-constexpr float kGroundHaloPulsePeriod = 4.0f;    // seconds — in phase with the GL/Metal composite
+// Fixed 2026-07-10 (the smear finally root-caused): every prior pass tuned the
+// radius FACTOR (2.4 → 1.7) but the half-extent was sel.size × sel.footprint ×
+// factor — model-size-scaled. For the demo apartment (size 85 m, footprint 2)
+// that is 85·2·1.7 = 289 m → a 578 m gold quad whose bright far arc smears
+// across roads and the river at any real pitch (only ever "clean" in a lucky
+// near-top-down frame). The mobile app's own selection cue (GLOW_RINGS in
+// model-buildings-layer.tsx) uses FIXED metric radii 105/85/68 m regardless of
+// model size, so it stays contained. Mirror it: a FIXED 105 m outer radius,
+// rendered as three crisp concentric gold rings matching the app, breathing on
+// the app's 1.8 s cadence. Contained for any building; no size dependence.
+constexpr double kGroundHaloOuterRadiusMeters = 105.0; // == app GLOW_RINGS outer
+constexpr float kGroundHaloLiftMeters = 0.05f;         // lift to dodge z-fighting
+// Breathing to match the app: fill-opacity × (1 + 0.35·sin(t·2π/1.8s)).
+constexpr float kGroundHaloPulseAmp = 0.35f;
+constexpr float kGroundHaloPulsePeriod = 1.8f; // seconds — matches app GLOW_RINGS
 
 // Smooth Hermite fade, matching the shader smoothstep(e0, e1, x).
 inline double groundHaloSmoothstep(double e0, double e1, double x) {
@@ -132,16 +136,23 @@ inline double groundHaloSmoothstep(double e0, double e1, double x) {
     return t * t * (3.0 - 2.0 * t);
 }
 
-// Premultiplied gold radial glow, baked on a 256² texture with a smooth analytic
-// falloff (no ring banding). The profile is a soft glow that is brightest across
-// the mid-band and feathers cleanly to 0 well before the rim, so the quad's
-// square corners are fully transparent (it reads as a disc, never a box). The
-// per-frame tweaker scales all four premultiplied channels by the breathing
-// pulse; the selected building occludes the disc centre (depth test), so the
-// visible result is a soft gold halo hugging the footprint.
+// Three crisp concentric gold rings baked on a 256² texture, mirroring the
+// mobile app's selection cue (model-buildings-layer.tsx GLOW_RINGS): discs at
+// radii 105/85/68 m — expressed as fractions of the 105 m outer (1.0 / 0.810 /
+// 0.648) — over-composited gold-on-gold at fill-opacity 0.08 / 0.14 / 0.20
+// (→ composite alpha 0.08 / 0.21 / 0.37 stepping up inward). A tight ~1-texel
+// feather keeps the steps crisp like the app's hard geoJsonCircle polygons (a
+// wide feather blurs them into one blob). Everything past r=1 is transparent, so
+// the square corners never show (reads as a disc, never a box). The selected
+// building occludes the bright core (depth test), so the visible result is
+// stepped gold rings hugging the base. The per-frame tweaker scales all four
+// premultiplied channels by the breathing pulse.
+constexpr double kGroundHaloRingRadii[3] = {1.0, 85.0 / 105.0, 68.0 / 105.0};
+constexpr double kGroundHaloRingOpacity[3] = {0.08, 0.14, 0.20};
+
 std::shared_ptr<PremultipliedImage> makeGroundHaloImage() {
     constexpr uint32_t kSize = 256;
-    constexpr double kPeakAlpha = 0.62;
+    constexpr double kFeather = 0.012; // radius-fraction (~1.5 texels): crisp steps
     auto image = std::make_shared<PremultipliedImage>(Size{kSize, kSize});
     std::memset(image->data.get(), 0, image->bytes());
     for (uint32_t y = 0; y < kSize; ++y) {
@@ -149,15 +160,16 @@ std::shared_ptr<PremultipliedImage> makeGroundHaloImage() {
             const double dx = (static_cast<double>(x) + 0.5) / kSize * 2.0 - 1.0;
             const double dy = (static_cast<double>(y) + 0.5) / kSize * 2.0 - 1.0;
             const double r = std::sqrt(dx * dx + dy * dy);
-            // Soft ring profile: brightest across a plateau (r≈0.55–0.66) that
-            // lands right on the footprint edge (radius factor 1.7 → building
-            // rim ≈ r 0.59), so the peak gold hugs the building base. Inner rise
-            // (mostly occluded by the building) and a smooth outward feather to 0
-            // by r≈0.95 — a transparent margin to the rim so the quad's square
-            // corners never show a hard edge (it reads as a halo, never a box).
-            const double rise = groundHaloSmoothstep(0.28, 0.55, r);
-            const double fade = 1.0 - groundHaloSmoothstep(0.66, 0.95, r);
-            const double a = kPeakAlpha * rise * fade;
+            // Over-composite the three discs (outer → inner) so the alpha steps
+            // up toward the centre, exactly like the app's stacked fill circles.
+            double a = 0.0;
+            for (int i = 0; i < 3; ++i) {
+                const double edge = kGroundHaloRingRadii[i];
+                const double disc =
+                    kGroundHaloRingOpacity[i] *
+                    (1.0 - groundHaloSmoothstep(edge - kFeather, edge, r));
+                a = disc + a * (1.0 - disc); // Porter-Duff "over" (inner on top)
+            }
             auto* px = &image->data[(y * kSize + x) * 4];
             px[0] = static_cast<uint8_t>(std::lround(kBloomColor[0] * a * 255.0));
             px[1] = static_cast<uint8_t>(std::lround(kBloomColor[1] * a * 255.0));
@@ -704,7 +716,10 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
             bloomGroundTexture = std::move(tex);
         }
 
-        const float halfExtent = sel.size * sel.footprint * kGroundHaloRadiusFactor;
+        // FIXED metric half-extent (105 m) — NOT sel.size × footprint. See the
+        // kGroundHaloOuterRadiusMeters note: size-scaling blew this to 289 m for
+        // the demo apartment and smeared the far arc across the map.
+        const float halfExtent = static_cast<float>(kGroundHaloOuterRadiusMeters);
         auto haloVertices = std::make_shared<gfx::VertexVector<Vertex>>();
         auto haloIndices = std::make_shared<gfx::IndexVector<gfx::Triangles>>();
         haloVertices->emplace_back(Vertex{{-halfExtent, -halfExtent, kGroundHaloLiftMeters}, {0.f, 0.f}});
@@ -735,18 +750,20 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
                 matrix::scale(m, m, pxPerMeter, pxPerMeter, 1.0);
                 matrix::multiply(current.matrix, params.transformParams.nearClippedProjMatrix, m);
 
-                // Gentle 4 s breathing, in phase with the GL/Metal composite but
-                // with a calmer amplitude (peaks 0.71, never the old 0.96 that
-                // flooded the basemap). The disc texture is premultiplied gold;
-                // scaling all four channels by the pulse keeps it premultiplied
-                // while pulsing the halo brightness.
+                // 1.8 s breathing matching the app's GLOW_RINGS: opacity ×
+                // (1 + 0.35·sin). The disc texture is premultiplied gold; scaling
+                // all four channels by the pulse keeps it premultiplied while
+                // pulsing the halo brightness. Baked peak alpha 0.37 × 1.35 ≈ 0.5,
+                // no premult clipping, but clamp for safety.
                 const auto now = std::chrono::steady_clock::now();
                 static const auto t0 = now;
                 const double t = std::chrono::duration<double>(now - t0).count();
-                const float pulse = kGroundHaloBaseIntensity +
-                                    kGroundHaloPulseAmp *
-                                        static_cast<float>(
-                                            std::sin(t * (2.0 * M_PI / kGroundHaloPulsePeriod)));
+                const float pulse = std::clamp(
+                    1.0f + kGroundHaloPulseAmp *
+                               static_cast<float>(
+                                   std::sin(t * (2.0 * M_PI / kGroundHaloPulsePeriod))),
+                    0.0f,
+                    1.35f);
                 current.color = {pulse, pulse, pulse, pulse};
             });
         drawableIds.push_back(interface.addGeometry(haloVertices, haloIndices, /*is3D=*/true));
