@@ -103,82 +103,42 @@ constexpr float kBloomRadiusTexels = 7.0f;    // blur radius (in mask texels)
 constexpr float kBloomColor[3] = {0.992f, 0.725f, 0.071f}; // #FDB912
 
 #if MLN_RENDER_BACKEND_VULKAN
-// ── Vulkan ground-halo tuning ───────────────────────────────────────
-// On the HONOR's Mali/Vulkan driver the screen-space bloom composite (a flat NDC
-// quad through the custom-drawable shaders) rasterizes ZERO fragments, while
-// world-space projected geometry through the same shaders renders fine — proven
-// exhaustively in docs/… vulkan-bloom-fix-report.md (driver-level, RenderDoc
-// territory; still unresolved). So the Vulkan path renders the selection glow as
-// a ground-projected world-space disc at the model anchor, which provably
-// rasterizes. This is Sergey's blessed fallback ("a clean soft gold radial disc,
-// not a box"): a gold ring pooling at the building base (the building occludes
-// the disc centre via depth, so the visible result hugs the footprint).
-//
-// Fixed 2026-07-10 (the smear finally root-caused): every prior pass tuned the
-// radius FACTOR (2.4 → 1.7) but the half-extent was sel.size × sel.footprint ×
-// factor — model-size-scaled. For the demo apartment (size 85 m, footprint 2)
-// that is 85·2·1.7 = 289 m → a 578 m gold quad whose bright far arc smears
-// across roads and the river at any real pitch (only ever "clean" in a lucky
-// near-top-down frame). The mobile app's own selection cue (GLOW_RINGS in
-// model-buildings-layer.tsx) uses FIXED metric radii 105/85/68 m regardless of
-// model size, so it stays contained. Mirror it: a FIXED 105 m outer radius,
-// rendered as three crisp concentric gold rings matching the app, breathing on
-// the app's 1.8 s cadence. Contained for any building; no size dependence.
-constexpr double kGroundHaloOuterRadiusMeters = 105.0; // == app GLOW_RINGS outer
-constexpr float kGroundHaloLiftMeters = 0.05f;         // lift to dodge z-fighting
-// Breathing to match the app: fill-opacity × (1 + 0.35·sin(t·2π/1.8s)).
-constexpr float kGroundHaloPulseAmp = 0.35f;
-constexpr float kGroundHaloPulsePeriod = 1.8f; // seconds — matches app GLOW_RINGS
-
-// Smooth Hermite fade, matching the shader smoothstep(e0, e1, x).
-inline double groundHaloSmoothstep(double e0, double e1, double x) {
-    const double t = std::clamp((x - e0) / (e1 - e0), 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
-
-// Three crisp concentric gold rings baked on a 256² texture, mirroring the
-// mobile app's selection cue (model-buildings-layer.tsx GLOW_RINGS): discs at
-// radii 105/85/68 m — expressed as fractions of the 105 m outer (1.0 / 0.810 /
-// 0.648) — over-composited gold-on-gold at fill-opacity 0.08 / 0.14 / 0.20
-// (→ composite alpha 0.08 / 0.21 / 0.37 stepping up inward). A tight ~1-texel
-// feather keeps the steps crisp like the app's hard geoJsonCircle polygons (a
-// wide feather blurs them into one blob). Everything past r=1 is transparent, so
-// the square corners never show (reads as a disc, never a box). The selected
-// building occludes the bright core (depth test), so the visible result is
-// stepped gold rings hugging the base. The per-frame tweaker scales all four
-// premultiplied channels by the breathing pulse.
-constexpr double kGroundHaloRingRadii[3] = {1.0, 85.0 / 105.0, 68.0 / 105.0};
-constexpr double kGroundHaloRingOpacity[3] = {0.08, 0.14, 0.20};
-
-std::shared_ptr<PremultipliedImage> makeGroundHaloImage() {
-    constexpr uint32_t kSize = 256;
-    constexpr double kFeather = 0.012; // radius-fraction (~1.5 texels): crisp steps
-    auto image = std::make_shared<PremultipliedImage>(Size{kSize, kSize});
-    std::memset(image->data.get(), 0, image->bytes());
-    for (uint32_t y = 0; y < kSize; ++y) {
-        for (uint32_t x = 0; x < kSize; ++x) {
-            const double dx = (static_cast<double>(x) + 0.5) / kSize * 2.0 - 1.0;
-            const double dy = (static_cast<double>(y) + 0.5) / kSize * 2.0 - 1.0;
-            const double r = std::sqrt(dx * dx + dy * dy);
-            // Over-composite the three discs (outer → inner) so the alpha steps
-            // up toward the centre, exactly like the app's stacked fill circles.
-            double a = 0.0;
-            for (int i = 0; i < 3; ++i) {
-                const double edge = kGroundHaloRingRadii[i];
-                const double disc =
-                    kGroundHaloRingOpacity[i] *
-                    (1.0 - groundHaloSmoothstep(edge - kFeather, edge, r));
-                a = disc + a * (1.0 - disc); // Porter-Duff "over" (inner on top)
-            }
-            auto* px = &image->data[(y * kSize + x) * 4];
-            px[0] = static_cast<uint8_t>(std::lround(kBloomColor[0] * a * 255.0));
-            px[1] = static_cast<uint8_t>(std::lround(kBloomColor[1] * a * 255.0));
-            px[2] = static_cast<uint8_t>(std::lround(kBloomColor[2] * a * 255.0));
-            px[3] = static_cast<uint8_t>(std::lround(a * 255.0));
-        }
-    }
-    return image;
-}
+// ── Vulkan model-selection halo tuning ──────────────────────────────
+// The GL/Metal selection bloom composites a screen-space NDC quad, which
+// rasterizes ZERO fragments on the HONOR's Mali/Vulkan driver — root-caused
+// repeatedly (docs/… vulkan-bloom-fix-report.md; a driver anomaly below the API
+// waterline, RenderDoc territory). But WORLD-SPACE projected geometry through
+// the same custom-geometry shader rasterizes fine — the models and every other
+// 3D drawable prove it every frame. So the Vulkan halo is built from world-space
+// geometry instead of the broken screen-space quad: an enlarged "shell" of the
+// selected model, solid premultiplied gold, drawn just BEFORE the model with the
+// depth test on but depth-WRITE off. The opaque model then paints over the
+// shell's core, leaving a soft gold rim that hugs the actual geometry — the
+// geometry-hugging look the GL/Metal silhouette gives, reproduced without the
+// dead screen-space path. Nested shells (outer→inner, faint→bright) blend into a
+// soft outward glow; the tweaker breathes them on the GL/Metal 4 s cadence.
+// Double-sided (cull disabled) + drawn-before-the-model, so it needs no
+// inverted-hull cull-winding guess: the model's own depth+coverage carves the
+// rim regardless of triangle winding. The ground rings stay the app-level
+// GLOW_RINGS fill layer (model-buildings-layer.tsx), present on every backend.
+struct BloomShellLayer {
+    float scale; // uniform enlargement about the model base (1.0 = model size)
+    float alpha; // peak premultiplied-gold opacity, before breathing
+};
+constexpr BloomShellLayer kBloomShells[] = {
+    {1.045f, 0.16f}, // widest, faintest outer glow
+    {1.025f, 0.34f},
+    {1.012f, 0.60f}, // tightest, brightest rim (drawn last → on top at the edge)
+};
+constexpr float kBloomShellPulseAmp = 0.35f;   // breathing depth
+constexpr float kBloomShellPulsePeriod = 4.0f; // seconds — matches GL/Metal bloom
+// Inverted-hull cull: which faces of the enlarged shell to drop so only the
+// back shell (the rim beyond the silhouette) survives — an EDGE-only glow that
+// never coats the model faces. If a build tints the whole body gold, the guess
+// was inverted: flip the winding (Clockwise ↔ CounterClockwise).
+constexpr gfx::CullFaceMode kBloomShellCull{.enabled = true,
+                                            .side = gfx::CullFaceSideType::Front,
+                                            .winding = gfx::CullFaceWindingType::Clockwise};
 #endif // MLN_RENDER_BACKEND_VULKAN
 
 struct BloomQuadVertex {
@@ -212,6 +172,48 @@ public:
 private:
     double refFx, refFy, lat0;
 };
+
+#if MLN_RENDER_BACKEND_VULKAN
+// Per-frame driver for a Vulkan model-selection halo shell: identical world →
+// clip mapping as the model's own tweaker (SilhouetteTweaker), but paints the
+// shell in breathing premultiplied gold instead of white. One instance is shared
+// by all parts of a given shell layer.
+class ShellTweaker : public gfx::DrawableTweaker {
+public:
+    ShellTweaker(double refFx_, double refFy_, double lat0_, float baseAlpha_)
+        : refFx(refFx_),
+          refFy(refFy_),
+          lat0(lat0_),
+          baseAlpha(baseAlpha_) {}
+    void init(gfx::Drawable&) override {}
+    void execute(gfx::Drawable& drawable, PaintParameters& params) override {
+        const double worldSize = Projection::worldSize(params.state.getScale());
+        const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(lat0, params.state.getZoom());
+        const double pxPerMeter = 1.0 / metersPerPixel;
+        mat4 m = matrix::identity4();
+        matrix::translate(m, m, refFx * worldSize, refFy * worldSize, 0.0);
+        matrix::scale(m, m, pxPerMeter, pxPerMeter, zoomGrow(params.state.getZoom()));
+        mat4 mat;
+        matrix::multiply(mat, params.transformParams.nearClippedProjMatrix, m);
+
+        const auto now = std::chrono::steady_clock::now();
+        static const auto t0 = now;
+        const double t = std::chrono::duration<double>(now - t0).count();
+        const float pulse = 1.0f + kBloomShellPulseAmp * static_cast<float>(
+                                                             std::sin(t * (2.0 * M_PI / kBloomShellPulsePeriod)));
+        const float a = std::clamp(baseAlpha * pulse, 0.0f, 1.0f);
+        // Premultiplied gold (alpha-blended color mode): scale rgb by alpha.
+        const Color color{kBloomColor[0] * a, kBloomColor[1] * a, kBloomColor[2] * a, a};
+        shaders::CustomGeometryDrawableUBO ubo{util::cast<float>(mat), color};
+        drawable.mutableUniformBuffers().createOrUpdate(
+            shaders::idCustomGeometryDrawableUBO, &ubo, params.context);
+    }
+
+private:
+    double refFx, refFy, lat0;
+    float baseAlpha;
+};
+#endif // MLN_RENDER_BACKEND_VULKAN
 
 // Drives the bloom composite UBO: glow colour + breathing intensity + blur
 // step. The mask size is fixed for the drawable's lifetime.
@@ -405,6 +407,16 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         interface.removeDrawable(id);
     }
     drawableIds.clear();
+
+#if MLN_RENDER_BACKEND_VULKAN
+    // Clear the previous selection-halo shell (added directly to the main group,
+    // by name, so it is not tracked in drawableIds). Runs on every rebuild —
+    // including deselection and pan-away — so the shell never lingers.
+    if (auto* mainGroup = static_cast<TileLayerGroup*>(layerGroup.get())) {
+        mainGroup->removeDrawablesIf(
+            [](gfx::Drawable& d) { return d.getName() == "modelBloomShell"; });
+    }
+#endif
 
     if (features.empty()) {
         return;
@@ -691,86 +703,104 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
         drawableIds.push_back(interface.addGeometry(sharedVertices, sharedIndices, /*is3D=*/true));
     }
 
+    interface.finish();
+
 #if MLN_RENDER_BACKEND_VULKAN
-    // ── Vulkan model-selection halo (ground-projected) ──────────────
-    // The screen-space silhouette composite (below, GL/Metal) draws ZERO
-    // fragments on this Mali/Vulkan driver — a flat NDC quad through the
-    // custom-drawable shaders never rasterizes, while world-space projected
-    // geometry through the SAME shaders does (exhaustively root-caused in
-    // vulkan-bloom-fix-report.md). So on Vulkan the glow is a ground-projected
-    // gold disc at the selected model's anchor, added through the exact
-    // interface.addGeometry(is3D) path the models + contact shadows use (which
-    // provably rasterize here). It is tracked in drawableIds, so the next
-    // rebuild (e.g. deselection — the selection gate fix above guarantees one)
-    // tears it down with the rest of the drawables; no render target, no
-    // composite, no explicit teardown. Different look from the GL/Metal
-    // screen-space halo — Sergey judges the divergence.
-    if (selected) {
-        const Instance& sel = selected->second;
-        if (!bloomGroundTexture) {
-            auto tex = context.createTexture2D();
-            tex->setSamplerConfiguration({.filter = gfx::TextureFilterType::Linear,
-                                          .wrapU = gfx::TextureWrapType::Clamp,
-                                          .wrapV = gfx::TextureWrapType::Clamp});
-            tex->setImage(makeGroundHaloImage());
-            bloomGroundTexture = std::move(tex);
+    // ── Vulkan model-selection halo (edge-only silhouette rim) ──────────
+    // See the BloomShellLayer note above. An enlarged inverted-hull shell of the
+    // selected model, added to the main group AFTER interface.finish() so it
+    // renders AFTER the model parts. Front faces are culled (kBloomShellCull), so
+    // only the back shell survives; with the depth test on but no depth write the
+    // model occludes the shell everywhere they overlap, leaving just the sliver
+    // of shell that pokes BEYOND the model silhouette — a soft gold rim on the
+    // EDGES that never coats the faces. World-space geometry rasterizes on this
+    // Mali/Vulkan driver (the model itself does) where the screen-space composite
+    // does not. Ground rings stay the app-level GLOW_RINGS fill layer.
+    if (selected && meshCache.count(selected->first) && meshCache.at(selected->first).valid) {
+        if (!silhouetteShader) {
+            silhouetteShader = context.getGenericShader(shaders, "CustomGeometryShader");
         }
+        if (!bloomWhiteTexture) {
+            auto img = std::make_shared<PremultipliedImage>(Size(2, 2));
+            img->fill(255);
+            bloomWhiteTexture = context.createTexture2D();
+            bloomWhiteTexture->setImage(std::move(img));
+        }
+        auto* mainGroup = static_cast<TileLayerGroup*>(layerGroup.get());
+        if (silhouetteShader && bloomWhiteTexture && mainGroup) {
+            const auto& baked = meshCache.at(selected->first);
+            const Instance& inst = selected->second;
+            const double lat0 = latitudeFromMercatorFraction(inst.fy);
 
-        // FIXED metric half-extent (105 m) — NOT sel.size × footprint. See the
-        // kGroundHaloOuterRadiusMeters note: size-scaling blew this to 289 m for
-        // the demo apartment and smeared the far arc across the map.
-        const float halfExtent = static_cast<float>(kGroundHaloOuterRadiusMeters);
-        auto haloVertices = std::make_shared<gfx::VertexVector<Vertex>>();
-        auto haloIndices = std::make_shared<gfx::IndexVector<gfx::Triangles>>();
-        haloVertices->emplace_back(Vertex{{-halfExtent, -halfExtent, kGroundHaloLiftMeters}, {0.f, 0.f}});
-        haloVertices->emplace_back(Vertex{{halfExtent, -halfExtent, kGroundHaloLiftMeters}, {1.f, 0.f}});
-        haloVertices->emplace_back(Vertex{{halfExtent, halfExtent, kGroundHaloLiftMeters}, {1.f, 1.f}});
-        haloVertices->emplace_back(Vertex{{-halfExtent, halfExtent, kGroundHaloLiftMeters}, {0.f, 1.f}});
-        // Double-sided: the world's south-positive y flips winding.
-        haloIndices->emplace_back(0, 1, 2);
-        haloIndices->emplace_back(0, 2, 3);
-        haloIndices->emplace_back(0, 2, 1);
-        haloIndices->emplace_back(0, 3, 2);
+            for (const auto& shell : kBloomShells) {
+                // Per-instance transform enlarged uniformly about the model base
+                // (the mesh is base-centred in x/y, base-sitting in z), so the
+                // shell expands outward and upward by (shell.scale − 1). The
+                // tweaker supplies the per-frame anchor translation + projection.
+                mat4 f = matrix::identity4();
+                matrix::rotate_z(f, f, util::deg2rad(inst.rotationDeg));
+                const double sxy = static_cast<double>(inst.size) * inst.footprint * shell.scale;
+                const double sz = static_cast<double>(inst.size) * shell.scale;
+                matrix::scale(f, f, sxy, sxy, sz);
 
-        CustomDrawableLayerHost::Interface::GeometryOptions haloOptions;
-        haloOptions.texture = bloomGroundTexture;
-        interface.setGeometryOptions(haloOptions);
-        const double haloLat = latitudeFromMercatorFraction(sel.fy);
-        interface.setGeometryTweakerCallback(
-            [anchorFx = sel.fx, anchorFy = sel.fy, haloLat](
-                gfx::Drawable&,
-                const PaintParameters& params,
-                CustomDrawableLayerHost::Interface::GeometryOptions& current) {
-                const double worldSize = Projection::worldSize(params.state.getScale());
-                const double metersPerPixel = Projection::getMetersPerPixelAtLatitude(
-                    haloLat, params.state.getZoom());
-                const double pxPerMeter = 1.0 / metersPerPixel;
-                mat4 m = matrix::identity4();
-                matrix::translate(m, m, anchorFx * worldSize, anchorFy * worldSize, 0.0);
-                matrix::scale(m, m, pxPerMeter, pxPerMeter, 1.0);
-                matrix::multiply(current.matrix, params.transformParams.nearClippedProjMatrix, m);
+                const auto shellTweaker = std::make_shared<ShellTweaker>(inst.fx, inst.fy, lat0, shell.alpha);
 
-                // 1.8 s breathing matching the app's GLOW_RINGS: opacity ×
-                // (1 + 0.35·sin). The disc texture is premultiplied gold; scaling
-                // all four channels by the pulse keeps it premultiplied while
-                // pulsing the halo brightness. Baked peak alpha 0.37 × 1.35 ≈ 0.5,
-                // no premult clipping, but clamp for safety.
-                const auto now = std::chrono::steady_clock::now();
-                static const auto t0 = now;
-                const double t = std::chrono::duration<double>(now - t0).count();
-                const float pulse = std::clamp(
-                    1.0f + kGroundHaloPulseAmp *
-                               static_cast<float>(
-                                   std::sin(t * (2.0 * M_PI / kGroundHaloPulsePeriod))),
-                    0.0f,
-                    1.35f);
-                current.color = {pulse, pulse, pulse, pulse};
-            });
-        drawableIds.push_back(interface.addGeometry(haloVertices, haloIndices, /*is3D=*/true));
+                for (const auto& part : baked.parts) {
+                    const std::size_t partVertexCount = part.vertices->elements();
+                    if (partVertexCount == 0) continue;
+
+                    auto verts = std::make_shared<gfx::VertexVector<Vertex>>();
+                    for (std::size_t vi = 0; vi < partVertexCount; ++vi) {
+                        const Vertex& v = part.vertices->at(vi);
+                        const vec4 p{v.position[0], v.position[1], v.position[2], 1.0};
+                        vec4 out;
+                        matrix::transformMat4(out, p, f);
+                        verts->emplace_back(Vertex{{static_cast<float>(out[0]), static_cast<float>(out[1]),
+                                                    static_cast<float>(out[2])},
+                                                   v.texcoords});
+                    }
+
+                    auto attrs = context.createVertexAttributeArray();
+                    if (const auto& a = attrs->set(shaders::idCustomGeometryPosVertexAttribute)) {
+                        a->setSharedRawData(verts, offsetof(Vertex, position), 0, sizeof(Vertex),
+                                            gfx::AttributeDataType::Float3);
+                    }
+                    if (const auto& a = attrs->set(shaders::idCustomGeometryTexVertexAttribute)) {
+                        a->setSharedRawData(verts, offsetof(Vertex, texcoords), 0, sizeof(Vertex),
+                                            gfx::AttributeDataType::Float2);
+                    }
+                    SegmentVector segs;
+                    segs.emplace_back(0, 0, partVertexCount, part.indices->elements());
+
+                    auto builder = context.createDrawableBuilder("modelBloomShell");
+                    builder->setShader(silhouetteShader);
+                    builder->setEnableDepth(true);
+                    // Depth-test but NO write: the model (rendered before this)
+                    // occludes the shell over the body; only the rim beyond the
+                    // silhouette passes, and it leaves the depth buffer untouched.
+                    builder->setDepthType(gfx::DepthMaskType::ReadOnly);
+                    builder->setIs3D(true);
+                    builder->setColorMode(gfx::ColorMode::alphaBlended());
+                    // Inverted hull: cull front faces → only the back shell (the
+                    // edge rim) survives. Flip kBloomShellCull if the body fills.
+                    builder->setCullFaceMode(kBloomShellCull);
+                    builder->setRenderPass(RenderPass::Translucent);
+                    builder->setVertexAttributes(std::move(attrs));
+                    builder->setRawVertices({}, partVertexCount, gfx::AttributeDataType::Float3);
+                    builder->setSegments(gfx::Triangles(), part.indices, segs.data(), segs.size());
+                    builder->setTexture(bloomWhiteTexture, shaders::idCustomGeometryTexture);
+                    builder->flush(context);
+                    for (auto& d : builder->clearDrawables()) {
+                        d->setName("modelBloomShell");
+                        d->setTileID({0, 0, 0});
+                        d->addTweaker(shellTweaker);
+                        mainGroup->addDrawable(RenderPass::Translucent, {0, 0, 0}, std::move(d));
+                    }
+                }
+            }
+        }
     }
 #endif
-
-    interface.finish();
 
 #if !MLN_RENDER_BACKEND_VULKAN
     // ── Model-selection bloom ───────────────────────────────────────
