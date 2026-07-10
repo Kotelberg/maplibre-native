@@ -71,11 +71,8 @@ private:
     Size bloomTargetSize{0, 0};
     gfx::ShaderProgramBasePtr bloomShader;       // composite (ModelBloomShader)
     gfx::ShaderProgramBasePtr silhouetteShader;  // white mask (CustomGeometryShader)
-    gfx::Texture2DPtr bloomWhiteTexture;         // 2×2 white for the silhouette
-    // Gold radial-gradient texture for the Vulkan ground-projected halo (see the
-    // Vulkan branch in update() + vulkan-bloom-fix-report.md). Unused on GL/Metal,
-    // which composite a screen-space silhouette halo instead.
-    gfx::Texture2DPtr bloomGroundTexture;
+    gfx::Texture2DPtr bloomWhiteTexture;         // 2×2 white for the silhouette /
+                                                 // the Vulkan geometry-hugging shell
     void teardownBloom(UniqueChangeRequestVec&);
 };
 
