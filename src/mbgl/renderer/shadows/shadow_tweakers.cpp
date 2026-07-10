@@ -355,10 +355,28 @@ bool refreshShadowFrustum(ShadowFrustumState& fs,
     // the grow band, the map's (taller/shorter) cached casters no longer match the live receiver surface
     // and the stale caster self-shadows the live roof — the shadow paints over the building as a grey wash
     // during the gesture, resolving only when the next refit re-renders the casters at the settled height.
-    // Refit when the height-interp factor drifts past this, so the caster tracks the live building height.
-    // Outside [14,15] the factor is flat (0 or 1) → delta 0 → no extra refit → settled frames are
-    // byte-identical and the pinch-flicker cache is preserved everywhere except the active grow band.
-    constexpr float kHeightFadeRefit = 0.1f;
+    // Refit when the height-interp factor drifts past a threshold, so the caster tracks the live
+    // building height. Outside [14,15] the factor is flat (0 or 1) → delta 0 → no extra refit →
+    // settled frames are byte-identical and the pinch-flicker cache is preserved everywhere except
+    // the active grow band.
+    //
+    // The threshold is NOT a fixed fade fraction. The caster/receiver height mismatch a given fade
+    // drift produces is drift × the building's HEIGHT: a fixed fraction lets a TALL building drift
+    // many metres of roof height before a refit while a short building barely moves, so a high-rise
+    // shows its stale, taller cached caster self-shadowing the live roof (shadow map painted on the
+    // rooftop of higher buildings during a pinch) while short buildings stay clean — exactly the
+    // height-dependent artifact seen on device. Bound the WORST-CASE roof error instead: derive the
+    // fade tolerance from a small metric error budget on the tallest plausible caster. 200 m matches
+    // the frustum's assumed max building height (maxHeightWorld in computeWorldToLightClipCascades),
+    // so kMaxCasterRoofErrorMeters caps the tallest caster's height error and every shorter building
+    // scales below it. Inside the grow band during an active zoom this refits whenever the error
+    // budget is spent (≈ continuously, a bounded ~1-zoom-level transient) — a correct caster height
+    // matters more there than skipping the re-render, and the world-fixed texel-snapped grid keeps
+    // the in-place re-fits from flickering. A held/settled view spends no budget (drift 0) so the
+    // caster re-render cost is confined to the moving grow-band gesture.
+    constexpr float kAssumedMaxCasterHeightMeters = 200.0f; // == maxHeightWorld's assumed ceiling
+    constexpr float kMaxCasterRoofErrorMeters = 2.0f;       // tallest-caster roof budget before a refit
+    constexpr float kHeightFadeRefit = kMaxCasterRoofErrorMeters / kAssumedMaxCasterHeightMeters; // 0.01
 
     vec3 viewCenter;
     double viewFarRadius;
