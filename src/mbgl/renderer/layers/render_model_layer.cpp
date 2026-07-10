@@ -139,6 +139,14 @@ constexpr float kBloomShellPulsePeriod = 4.0f; // seconds — matches GL/Metal b
 constexpr gfx::CullFaceMode kBloomShellCull{.enabled = true,
                                             .side = gfx::CullFaceSideType::Front,
                                             .winding = gfx::CullFaceWindingType::Clockwise};
+// Disabled: on this Mali/Vulkan driver the enlarged shell rasterizes unstably
+// (the model appears to scale-pulse ~10x/sec on selection — the "map breaks on
+// selection" regression), so we emit NO engine halo on Vulkan. Selection
+// feedback is the app-level GLOW_RINGS ground disc, which is renderer-
+// independent and present on every backend. GL/Metal keep their own
+// screen-space model-bloom composite (a separate path, untouched). Flip back to
+// true only once the shell is stable on Vulkan (RenderDoc-level driver work).
+constexpr bool kVulkanSelectionHaloEnabled = false;
 #endif // MLN_RENDER_BACKEND_VULKAN
 
 struct BloomQuadVertex {
@@ -716,7 +724,8 @@ void RenderModelLayer::update(gfx::ShaderRegistry& shaders,
     // EDGES that never coats the faces. World-space geometry rasterizes on this
     // Mali/Vulkan driver (the model itself does) where the screen-space composite
     // does not. Ground rings stay the app-level GLOW_RINGS fill layer.
-    if (selected && meshCache.count(selected->first) && meshCache.at(selected->first).valid) {
+    if (kVulkanSelectionHaloEnabled && selected && meshCache.count(selected->first) &&
+        meshCache.at(selected->first).valid) {
         if (!silhouetteShader) {
             silhouetteShader = context.getGenericShader(shaders, "CustomGeometryShader");
         }
