@@ -78,8 +78,12 @@ float heightFade(double zoom) {
     const double t = (zoom - 14.0) / (15.0 - 14.0);
     return static_cast<float>(t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t));
 }
-// Must match kHeightFadeRefit in refreshShadowFrustum.
-constexpr float kHeightFadeRefit = 0.1f;
+// Must match refreshShadowFrustum's height-drift refit budget. The threshold is derived from a metric
+// roof-error budget on the tallest assumed caster, not a fixed fade fraction (see the fix comment):
+// kHeightFadeRefit == kMaxCasterRoofErrorMeters / kAssumedMaxCasterHeightMeters.
+constexpr float kAssumedMaxCasterHeightMeters = 200.0f;
+constexpr float kMaxCasterRoofErrorMeters = 2.0f;
+constexpr float kHeightFadeRefit = kMaxCasterRoofErrorMeters / kAssumedMaxCasterHeightMeters; // 0.01
 } // namespace
 
 // Regression guard for the Metal pinch-zoom "shadow paints over the building" bug. During a zoom-out
@@ -134,4 +138,42 @@ TEST(ShadowFrustumCache, AboveGrowBandZoomOutReusesCache) {
     ASSERT_FLOAT_EQ(heightFade(17.0), heightFade(16.7));
     transform.jumpTo(CameraOptions().withZoom(16.7));
     EXPECT_FALSE(refreshShadowFrustum(fs, transform.getState(), sunDir, 1024, 1, 0.4f));
+}
+
+// Regression guard for the on-device follow-up: with the height-drift refit keyed off a FIXED fade
+// fraction (0.1), a real in-place pinch through the grow band still leaves TALL buildings with the
+// shadow map painted on their roof, because the tolerated ABSOLUTE roof error is drift × height —
+// 0.1 × a 150 m high-rise ≈ 15 m of stale caster overhang, plenty to self-shadow the live roof,
+// while short buildings stay clean (the "only higher buildings" report). No pan is applied (pure
+// pinch), so the coverage/zoom-in triggers never fire — the height-drift refit is the ONLY thing
+// that can bound the error. Assert the worst-case roof error over the whole gesture stays within the
+// metric budget the refit is derived from. Under the old 0.1 threshold this bound is exceeded (~15 m);
+// under the height-error budget it holds.
+TEST(ShadowFrustumCache, GrowBandPinchKeepsTallBuildingRoofError) {
+    Transform transform;
+    transform.resize({1024, 768});
+    const vec3 sunDir{{0.4, 0.3, -0.86}};
+
+    // A Kyiv high-rise: taller than the fade fraction's blind spot, shorter than the 200 m ceiling.
+    constexpr double tallBuildingHeightMeters = 150.0;
+    // The budget bound for THIS building: drift ≤ kHeightFadeRefit ⇒ error ≤ kHeightFadeRefit × height.
+    const double roofErrorBudgetMeters = kHeightFadeRefit * tallBuildingHeightMeters; // 1.5 m
+    // The old fixed-fraction threshold would have allowed this much — the artifact this test pins.
+    ASSERT_GT(0.1f * tallBuildingHeightMeters, 10.0) << "old 0.1 threshold must permit >10 m of roof error";
+
+    ShadowFrustumState fs;
+    transform.jumpTo(CameraOptions().withCenter(LatLng{50.4501, 30.5234}).withZoom(15.0).withPitch(55.0));
+    ASSERT_TRUE(refreshShadowFrustum(fs, transform.getState(), sunDir, 1024, 1, 0.4f));
+
+    // Fine-grained in-place pinch OUT through the whole grow band (no pan → coverage trigger silent).
+    for (double zoom = 14.98; zoom >= 14.0; zoom -= 0.02) {
+        transform.jumpTo(CameraOptions().withZoom(zoom));
+        refreshShadowFrustum(fs, transform.getState(), sunDir, 1024, 1, 0.4f);
+
+        const double fadeDrift = std::abs(heightFade(zoom) - heightFade(fs.cachedZoom));
+        const double roofErrorMeters = fadeDrift * tallBuildingHeightMeters;
+        EXPECT_LE(roofErrorMeters, roofErrorBudgetMeters + 1e-3)
+            << "tall-building roof error " << roofErrorMeters << " m exceeds budget at zoom " << zoom
+            << " (cachedZoom " << fs.cachedZoom << ")";
+    }
 }
