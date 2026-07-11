@@ -574,22 +574,29 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
         .to_scale = crossfade.toScale,
         .pad2 = 0};
 
-#if !MLN_RENDER_BACKEND_VULKAN
-    // Metal/GL: the shadow props is layer-constant and reaches the receiver via a flat buffer index
-    // (Metal) or a named UBO block (GL), so upload it ONCE per layer (cheap; the shipped behavior). The
-    // walls' regular props + drawable UBO are bound PER-DRAWABLE in the visitor below — NOT at the layer
-    // level: the shadow RECEIVER's vertex buffers begin at buffer index `fillExtrusionShadowUBOCount`,
-    // which aliases idFillExtrusionPropsUBO, so the roof (drawn first) binds its pos buffer over a
-    // layer-bound props; only re-binding in the wall's own draw (after the roof) survives.
+    // Receiver PROPS: upload ONCE per layer (a LAYER-LEVEL UBO), on EVERY backend. This is the definitive
+    // cure for the transparent-roof bug. A layer-level buffer is present for EVERY receiver roof drawable
+    // in the layer group's shared binding, independent of the per-drawable visitor below — so no drawable
+    // can ever read an unbound/dummy props.
+    //
+    // WHY the per-drawable props upload was unsafe (Vulkan): the visitor early-returns for a drawable
+    // whose tweaker reference is transiently stale (checkTweakDrawable == false) or whose binders are
+    // momentarily missing — both routine while a layer group is being rebuilt/reassigned on a churned or
+    // secondary MapView surface. A drawable skipped by that early-return never had its per-drawable
+    // FillExtrusionShadowPropsUBO uploaded, yet it is still submitted to draw, so its Vulkan descriptor
+    // slot resolved to the shared dummy zero buffer (UniformDescriptorSet::update: a null slot binds the
+    // dummy). Zeroed props read opacity 0, so the roof rasterized FULLY TRANSPARENT while the walls (whose
+    // props already came from the consolidated layer path) stayed correct. Refreshing descriptors every
+    // frame (the companion markDirty fix) only reaches drawables that REACH the upload site — never the
+    // skipped ones — so it could not close this hole. Uploading props at the layer level has no
+    // per-drawable skip. Metal (flat buffer index) and GL (named UBO block) already reached this props at
+    // the layer level; only Vulkan's id moved from the drawable to the layer descriptor set (see
+    // shader_defines.hpp) so the layer-group write lands on a bound slot for every roof.
     auto& layerUniforms = layerGroup.mutableUniformBuffers();
     layerUniforms.createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
-#endif
 
 #if MLN_RENDER_BACKEND_VULKAN
-    // Vulkan: the receiver declares its shadow props at the DRAWABLE descriptor set, so it's uploaded
-    // per-drawable in the visitor (a layer-group write would land in an unbound slot — idFillExtrusion-
-    // ShadowPropsUBO is a drawable-range id — and the receiver would read all-zero -> invisible). The
-    // visible WALLS, by contrast, read the regular CONSOLIDATED FillExtrusionDrawableUBO vector (LAYER
+    // The visible instanced WALLS read the regular CONSOLIDATED FillExtrusionDrawableUBO vector (LAYER
     // set, indexed by ubo_index) + the layer FillExtrusionPropsUBO — the same model FillExtrusionLayer-
     // Tweaker uses. Per-drawable writes can't reach a LAYER-set binding on Vulkan, so rebuild the wall
     // drawable-UBO vector across the visitor and bind it + the layer props after the visitor.
@@ -702,16 +709,14 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
             .pad3 = 0};
         drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionShadowDrawableUBO, &ubo, context);
 #if MLN_RENDER_BACKEND_VULKAN
-        // Vulkan-only: props lives in the drawable descriptor set (see the comment above the visitor).
-        drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
-        // The receiver binds BOTH of the above per-drawable (drawable + props), unlike the walls, which
-        // read a consolidated layer-level vector. A receiver drawable that is rebuilt every frame (a
-        // data-driven recolor — e.g. the highlighted/selected building) gets a fresh, pooled descriptor
-        // set each frame; the per-frame descriptor cache only re-encodes the CURRENT frame index and
-        // recycled sets retain prior writes, so the OTHER frame index can stay bound to a stale/dummy
-        // props buffer. That reads opacity 0 -> the roof rasterizes fully transparent while its walls
-        // (consolidated path) stay correct. Force a refresh of every frame index so the bound descriptor
-        // always reflects the buffers just uploaded above, regardless of the rebuild cadence.
+        // Companion hardening (markDirty commit): the receiver's ONLY per-drawable buffer now is the
+        // matrix drawable UBO above — props moved to the layer level (see the note above the visitor), so
+        // the transparent-roof bug is gone regardless of this call. The per-frame descriptor cache still
+        // re-encodes only the CURRENT frame index on bind and recycles pooled sets with prior writes
+        // intact, so a receiver rebuilt on nearly every frame (a data-driven recolor — e.g. the
+        // highlighted/selected building) could leave the OTHER frame index bound to a stale matrix.
+        // markDirty invalidates every frame index so the bound descriptor always reflects the matrix just
+        // uploaded, keeping the per-drawable geometry buffer as robust as the layer-level props.
         drawable.mutableUniformBuffers().markDirty();
 #endif
     });
@@ -719,9 +724,10 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
 #if MLN_RENDER_BACKEND_VULKAN
     // Bind the consolidated wall drawable-UBO vector + the layer props so the visible instanced walls
     // (plain FillExtrusionInstancedShader) render — mirroring FillExtrusionLayerTweaker, which this
-    // tweaker replaces when shadows are on. The roof receivers use the separate per-drawable shadow UBOs.
+    // tweaker replaces when shadows are on. The roof receivers read the layer shadow props (bound above)
+    // + their own per-drawable matrix UBO.
     if (!wallDrawableUBOs.empty()) {
-        auto& layerUniforms = layerGroup.mutableUniformBuffers();
+        // reuse the `layerUniforms` bound to the shadow props above (same layer-group uniform array)
         const std::size_t wallVectorSize = sizeof(FillExtrusionDrawableUBO) * wallDrawableUBOs.size();
         layerUniforms.set(idFillExtrusionDrawableUBO,
                           context.createUniformBuffer(wallDrawableUBOs.data(), wallVectorSize, false, true));

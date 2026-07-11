@@ -131,9 +131,11 @@ private:
     uint32_t cascadeIndex;
 };
 
-/// Tweaker for the shadow-receiving fill-extrusion drawables: populates
-/// FillExtrusionShadowDrawableUBO + FillExtrusionShadowPropsUBO (lighting + per-tile light
-/// matrix + shadow intensity/texel/bias).
+/// Tweaker for the shadow-receiving fill-extrusion drawables: populates the per-drawable
+/// FillExtrusionShadowDrawableUBO (per-tile light matrix + interpolation factors) and the
+/// layer-level FillExtrusionShadowPropsUBO (lighting + shadow intensity/texel/bias) — the props are
+/// uploaded once per layer so every receiver roof reads a bound buffer even when the per-drawable
+/// visitor skips a churned drawable (see the note in shadow_tweakers.cpp).
 class FillExtrusionShadowTweaker : public LayerTweaker {
 public:
     FillExtrusionShadowTweaker(std::string id_,
