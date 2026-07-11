@@ -58,6 +58,12 @@ const std::shared_ptr<gfx::UniformBuffer>& UniformBufferArray::set(const size_t 
     return uniformBufferVector[id];
 }
 
+void UniformBufferArray::markDirty() {
+    if (descriptorSet) {
+        descriptorSet->markDirty();
+    }
+}
+
 void UniformBufferArray::createOrUpdate(
     const size_t id, const void* data, std::size_t size, gfx::Context& context, bool persistent) {
     if (descriptorSet) {

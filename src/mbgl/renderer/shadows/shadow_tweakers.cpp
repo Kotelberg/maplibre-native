@@ -704,6 +704,15 @@ void FillExtrusionShadowTweaker::execute(LayerGroupBase& layerGroup, const Paint
 #if MLN_RENDER_BACKEND_VULKAN
         // Vulkan-only: props lives in the drawable descriptor set (see the comment above the visitor).
         drawable.mutableUniformBuffers().createOrUpdate(idFillExtrusionShadowPropsUBO, &propsUBO, context);
+        // The receiver binds BOTH of the above per-drawable (drawable + props), unlike the walls, which
+        // read a consolidated layer-level vector. A receiver drawable that is rebuilt every frame (a
+        // data-driven recolor — e.g. the highlighted/selected building) gets a fresh, pooled descriptor
+        // set each frame; the per-frame descriptor cache only re-encodes the CURRENT frame index and
+        // recycled sets retain prior writes, so the OTHER frame index can stay bound to a stale/dummy
+        // props buffer. That reads opacity 0 -> the roof rasterizes fully transparent while its walls
+        // (consolidated path) stay correct. Force a refresh of every frame index so the bound descriptor
+        // always reflects the buffers just uploaded above, regardless of the rebuild cadence.
+        drawable.mutableUniformBuffers().markDirty();
 #endif
     });
 
