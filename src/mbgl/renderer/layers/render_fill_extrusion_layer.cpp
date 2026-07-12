@@ -280,9 +280,22 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         }
     }
 
+    const auto hasPattern = !unevaluated.get<FillExtrusionPattern>().isUndefined();
+#if MLN_DRAWABLE_SHADOWS
+    // ShadowPass can become ready after this layer's first update. The plain
+    // and shadow receiver tweakers populate different UBO layouts, so changing
+    // only the shader leaves later rebuilt roof drawables reading invalid data.
+    // Replacing the tweaker changes its pointer identity; updateTile() below
+    // then removes and rebuilds every stale visible drawable for this mode.
+    const bool useShadowReceiver = useShadows && !hasPattern && fillExtrusionShadowGroup;
+    if (layerTweaker && receiverUsesShadows != useShadowReceiver) {
+        layerTweaker.reset();
+    }
+#endif
+
     if (!layerTweaker) {
 #if MLN_DRAWABLE_SHADOWS
-        if (useShadows) {
+        if (useShadowReceiver) {
             layerTweaker = std::make_shared<FillExtrusionShadowTweaker>(
                 getID(), evaluatedProperties, shadowMapSize(), frustumState);
         } else
@@ -290,6 +303,9 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
         {
             layerTweaker = std::make_shared<FillExtrusionLayerTweaker>(getID(), evaluatedProperties);
         }
+#if MLN_DRAWABLE_SHADOWS
+        receiverUsesShadows = useShadowReceiver;
+#endif
         layerGroup->addLayerTweaker(layerTweaker);
     }
 
@@ -299,13 +315,6 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
     if (!fillExtrusionPatternGroup) {
         fillExtrusionPatternGroup = shaders.getShaderGroup("FillExtrusionPatternShader");
     }
-#if MLN_DRAWABLE_SHADOWS
-    // Non-pattern buildings receive shadows: use the shadow-receiving shader group + texture.
-    if (useShadows && fillExtrusionShadowGroup) {
-        fillExtrusionGroup = fillExtrusionShadowGroup;
-    }
-#endif
-
     auto* tileLayerGroup = static_cast<TileLayerGroup*>(layerGroup.get());
 
     const auto& evaluated = static_cast<const FillExtrusionLayerProperties&>(*evaluatedProperties).evaluated;
@@ -338,13 +347,20 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
 #endif
 
     const auto layerPrefix = getID() + "/";
-    const auto hasPattern = !unevaluated.get<FillExtrusionPattern>().isUndefined();
     const auto opaque = evaluated.get<FillExtrusionOpacity>() >= 1;
 
     std::unique_ptr<gfx::DrawableBuilder> depthBuilder;
     std::unique_ptr<gfx::DrawableBuilder> colorBuilder;
 
+#if MLN_DRAWABLE_SHADOWS
+    // Keep fillExtrusionGroup permanently plain; selecting a local active group
+    // makes the shader reversible and keeps it aligned with the tweaker above.
+    const auto& shaderGroup = hasPattern          ? fillExtrusionPatternGroup
+                              : useShadowReceiver ? fillExtrusionShadowGroup
+                                                  : fillExtrusionGroup;
+#else
     const auto& shaderGroup = hasPattern ? fillExtrusionPatternGroup : fillExtrusionGroup;
+#endif
     if (!shaderGroup) {
         removeAllDrawables();
         return;
@@ -611,7 +627,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                     builder->addTweaker(tweaker);
                 }
 #if MLN_DRAWABLE_SHADOWS
-                if (useShadows) {
+                if (useShadowReceiver) {
                     // Bind one shadow texture per cascade; the receiver shader picks the tightest
                     // cascade that contains the fragment (idFillExtrusionShadowTexture0 + cascade).
                     // Bind ALL kMaxShadowCascades slots the shader declares (Metal needs every
@@ -639,7 +655,7 @@ void RenderFillExtrusionLayer::update(gfx::ShaderRegistry& shaders,
                     builder->addTweaker(tweaker);
                 }
 #if MLN_DRAWABLE_SHADOWS
-                if (useShadows) {
+                if (useShadowReceiver) {
                     // Bind one shadow texture per cascade; the receiver shader picks the tightest
                     // cascade that contains the fragment (idFillExtrusionShadowTexture0 + cascade).
                     // Bind ALL kMaxShadowCascades slots the shader declares (Metal needs every

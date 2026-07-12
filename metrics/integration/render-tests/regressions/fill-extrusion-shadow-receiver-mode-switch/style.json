@@ -1,0 +1,91 @@
+{
+  "version": 8,
+  "metadata": {
+    "test": {
+      "width": 256,
+      "height": 256,
+      "allowed": 0.005,
+      "description": "Verifies that a fill-extrusion switches from the plain drawable/tweaker pair to the shadow-receiver pair after cast-shadows becomes active, including a subsequent zoom-driven tile rebuild.",
+      "operations": [
+        ["wait"],
+        [
+          "setLight",
+          {
+            "cast-shadows": true,
+            "cast-shadows-transition": {
+              "duration": 300,
+              "delay": 0
+            },
+            "shadow-intensity": 0
+          }
+        ],
+        ["wait"],
+        ["sleep", 350],
+        ["wait"],
+        ["wait"],
+        ["setZoom", 18],
+        ["wait"]
+      ]
+    }
+  },
+  "light": {
+    "cast-shadows": false,
+    "shadow-intensity": 0
+  },
+  "sources": {
+    "buildings": {
+      "type": "geojson",
+      "data": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [-0.0003, -0.0003],
+                  [-0.0003, 0.0003],
+                  [0.0003, 0.0003],
+                  [0.0003, -0.0003],
+                  [-0.0003, -0.0003]
+                ]
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "center": [0, 0],
+  "pitch": 60,
+  "bearing": 25,
+  "zoom": 17,
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#11263a"
+      }
+    },
+    {
+      "id": "building",
+      "type": "fill-extrusion",
+      "source": "buildings",
+      "paint": {
+        "fill-extrusion-base": 0,
+        "fill-extrusion-color": "#ff7a3d",
+        "fill-extrusion-height": {
+          "type": "exponential",
+          "stops": [
+            [17, 10],
+            [19, 100]
+          ]
+        },
+        "fill-extrusion-opacity": 1
+      }
+    }
+  ]
+}
