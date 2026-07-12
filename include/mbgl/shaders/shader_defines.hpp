@@ -208,9 +208,23 @@ enum {
 
 enum {
     idFillExtrusionShadowDrawableUBO = getEnumValue(idDrawableReservedVertexOnlyUBO, drawableUBOStartId),
-    idFillExtrusionShadowPropsUBO = getEnumValue(drawableReservedUBOCount, idFillExtrusionShadowDrawableUBO + 1),
+    // Receiver PROPS is a LAYER-LEVEL UBO (Vulkan id in the layer range, one slot ABOVE the plain
+    // FillExtrusionPropsUBO the walls use so the two never collide in the shared layer descriptor set):
+    // it is uploaded once per layer per frame, so it is present for EVERY receiver roof drawable in the
+    // layer group's shared binding — even a drawable the per-drawable tweaker visitor skips (a
+    // transiently stale tweaker ref / missing binders during layer-group churn, see the skip note in
+    // shadow_tweakers.cpp). A per-drawable slot would be the dummy zero buffer for a skipped drawable
+    // (opacity 0 -> transparent roof). Only the Vulkan (unpacked) id moves to the layer range; the
+    // Metal/GL (packed) id is unchanged — those backends already upload props at the layer level and
+    // reach the receiver by flat buffer index (Metal) / named block (GL), so nothing shifts there.
+    idFillExtrusionShadowPropsUBO = getEnumValue(drawableReservedUBOCount, layerUBOStartId + 1),
     fillExtrusionShadowUBOCount
 };
+// Vulkan: the receiver props sits in layer UBO slot 1 (one above FillExtrusionPropsUBO), so the shared
+// layer descriptor set must be wide enough to bind it. Guaranteed today (the line layer already declares
+// two layer UBOs); this static_assert fails loudly if a future edit shrinks the layer UBO range.
+static_assert(fillExtrusionShadowUBOCount <= drawableSSBOStartId,
+              "FillExtrusionShadowPropsUBO layer slot exceeds the layer descriptor set capacity");
 
 enum {
     idGroundShadowDrawableUBO = getEnumValue(idDrawableReservedVertexOnlyUBO, drawableUBOStartId),

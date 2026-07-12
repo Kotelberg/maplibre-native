@@ -26,7 +26,12 @@ constexpr auto fillExtrusionShadowShaderPrelude =
     R"(
 
 #define idFillExtrusionShadowDrawableUBO    drawableUBOStartId
-#define idFillExtrusionShadowPropsUBO       drawableUBOStartId + 1
+// Receiver PROPS is a LAYER-set UBO (one slot above the plain FillExtrusionPropsUBO the walls bind, so
+// the two never alias in the shared layer descriptor set). Uploaded once per layer per frame, it is
+// present for every receiver roof drawable — including one the per-drawable tweaker visitor skips on a
+// churned surface (a stale tweaker ref / missing binders), which a per-drawable descriptor would leave
+// resolved to the dummy zero buffer (opacity 0 -> transparent roof). The matrix stays per-drawable.
+#define idFillExtrusionShadowPropsUBO       layerUBOStartId + 1
 
 )";
 
@@ -82,7 +87,7 @@ layout(set = DRAWABLE_UBO_SET_INDEX, binding = idFillExtrusionShadowDrawableUBO)
     int cascade_count;
 } drawable;
 
-layout(set = DRAWABLE_UBO_SET_INDEX, binding = idFillExtrusionShadowPropsUBO) uniform FillExtrusionShadowPropsUBO {
+layout(set = LAYER_SET_INDEX, binding = idFillExtrusionShadowPropsUBO) uniform FillExtrusionShadowPropsUBO {
     vec4 color;
     vec4 light_color_pad;
     vec4 light_position_base; // xyz = light dir, w = base (uniform path)
@@ -180,7 +185,7 @@ layout(location = 7) flat in int v_cascade_count;
 
 layout(location = 0) out vec4 out_color;
 
-layout(set = DRAWABLE_UBO_SET_INDEX, binding = idFillExtrusionShadowPropsUBO) uniform FillExtrusionShadowPropsUBO {
+layout(set = LAYER_SET_INDEX, binding = idFillExtrusionShadowPropsUBO) uniform FillExtrusionShadowPropsUBO {
     vec4 color;
     vec4 light_color_pad;
     vec4 light_position_base;

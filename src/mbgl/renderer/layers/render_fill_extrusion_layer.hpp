@@ -84,6 +84,10 @@ private:
     bool shadowGroundOwner = false;
     TileLayerGroupPtr groundShadowLayerGroup;
     gfx::ShaderGroupPtr fillExtrusionShadowGroup;
+    // The receiver shader and its layer tweaker have different UBO layouts.
+    // ShadowPass readiness can change after the layer's first update, so keep
+    // their mode in lockstep and rebuild stale drawables when it flips.
+    bool receiverUsesShadows = false;
     gfx::ShaderGroupPtr groundShadowGroup;
     gfx::ShaderGroupPtr shadowDepthGroup;
 #if MLN_USE_FILL_EXTRUSION_INSTANCING

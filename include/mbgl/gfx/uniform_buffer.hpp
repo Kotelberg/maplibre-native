@@ -65,6 +65,16 @@ public:
     /// Set a new uniform buffer element or replace the existing one.
     virtual const std::shared_ptr<UniformBuffer>& set(const size_t id, std::shared_ptr<UniformBuffer> uniformBuffer);
 
+    /// Force any cached GPU binding state for this array to be refreshed on the next bind.
+    ///
+    /// Backends that resolve uniform bindings by name every draw (OpenGL) or re-encode them every
+    /// frame (Metal) need do nothing. Backends that cache bindings in a per-frame descriptor set
+    /// (Vulkan) override this to invalidate every frame index, so a caller that rebuilds an element's
+    /// contents each frame (e.g. a data-driven drawable that is recreated on a selection recolor) can
+    /// guarantee the bound descriptor reflects the freshly uploaded buffers rather than a stale or
+    /// recycled binding on a frame index that has not been re-encoded yet.
+    virtual void markDirty() {}
+
     /// Create and add a new buffer or update an existing one
     void createOrUpdate(const size_t id, const std::vector<uint8_t>& data, gfx::Context&, bool persistent = false);
     virtual void createOrUpdate(
